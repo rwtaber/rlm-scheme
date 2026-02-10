@@ -194,7 +194,7 @@ USAGE_GUIDE_CORE = _load_doc("usage-guide.md")
 _TOOL_DESCRIPTIONS = {
     "get_usage_guide": _load_tool_desc("get_usage_guide"),
     "get_code_generation_api_reference": _load_tool_desc("get_code_generation_api_reference"),
-    "get_pattern_details": _load_tool_desc("get_pattern_details"),
+    "plan_strategy": _load_tool_desc("plan_strategy"),
     "execute_scheme": _load_tool_desc("execute_scheme"),
     "load_context": _load_tool_desc("load_context"),
     "get_scope_log": _load_tool_desc("get_scope_log"),
@@ -221,11 +221,79 @@ _PATTERN_FILES = {
     15: "patterns/pattern-15-stream-processing.md",
     16: "patterns/pattern-16-multi-armed-bandit.md",
 }
-PATTERN_DETAILS = {pid: _load_doc(path) for pid, path in _PATTERN_FILES.items()}
-# Pattern 16 includes the general reference sections (Parts IV & V) for backward compat
-PATTERN_DETAILS[16] += _load_doc("primitive-reference.md") + _load_doc("best-practices.md")
 
 _CODE_GEN_API_REF = _load_doc("api-reference.md")
+_PLANNER_PROMPT_TEMPLATE = _load_doc("planner-prompt.md")
+
+
+# ---------------------------------------------------------------------------
+# Pattern knowledge extraction for planner
+# ---------------------------------------------------------------------------
+
+def _extract_pattern_knowledge() -> dict[int, dict]:
+    """Extract structured knowledge from pattern documentation files."""
+    patterns = {}
+
+    for pattern_id, path in _PATTERN_FILES.items():
+        content = _load_doc(path)
+
+        # Extract title
+        title_match = re.search(r"^##\s+Pattern \d+:\s*(.+)$", content, re.MULTILINE)
+        title = title_match.group(1).strip() if title_match else f"Pattern {pattern_id}"
+
+        # Extract "When to Use" section
+        when_match = re.search(r"### When to Use.*?\n(.*?)(?=\n###|\Z)", content, re.DOTALL)
+        when_to_use = when_match.group(1).strip() if when_match else ""
+
+        # Extract quantified improvements for key metrics
+        improvements_match = re.search(r"### Quantified Improvements.*?\n(.*?)(?=\n###|\Z)", content, re.DOTALL)
+        improvements = improvements_match.group(1).strip() if improvements_match else ""
+
+        # Extract key strengths from improvements
+        strengths = []
+        if "latency" in improvements.lower() or "faster" in improvements.lower():
+            strengths.append("speed")
+        if "cost" in improvements.lower() or "cheaper" in improvements.lower():
+            strengths.append("cost")
+        if "quality" in improvements.lower():
+            strengths.append("quality")
+
+        patterns[pattern_id] = {
+            "id": pattern_id,
+            "title": title,
+            "when_to_use": when_to_use[:300] if when_to_use else "",  # First 300 chars
+            "improvements": improvements[:200] if improvements else "",  # First 200 chars
+            "strengths": strengths,
+        }
+
+    return patterns
+
+
+def _create_pattern_summary() -> str:
+    """Create condensed pattern summary for planner prompts (~1000 tokens)."""
+    knowledge = _extract_pattern_knowledge()
+    lines = ["# Available Orchestration Patterns\n"]
+
+    for pid in sorted(knowledge.keys()):
+        info = knowledge[pid]
+        lines.append(f"\n## Pattern {pid}: {info['title']}")
+
+        # Add strength tags
+        if info['strengths']:
+            strength_tags = ", ".join(f"**{s}**" for s in info['strengths'])
+            lines.append(f"Optimizes: {strength_tags}")
+
+        # Add when to use (condensed)
+        if info['when_to_use']:
+            # Extract just the checkmark items for brevity
+            use_cases = re.findall(r'✅.*?(?:\n|$)', info['when_to_use'])
+            if use_cases:
+                lines.append("Use when: " + " ".join(u.replace('✅', '').strip() for u in use_cases[:2]))
+
+    return "\n".join(lines)
+
+
+_PATTERN_SUMMARY = _create_pattern_summary()
 
 
 
@@ -1293,21 +1361,65 @@ get_code_generation_api_reference.__doc__ = _TOOL_DESCRIPTIONS["get_code_generat
 
 
 @mcp.tool()
-def get_pattern_details(pattern_ids: int | list[int]) -> str:
-    # Normalize to list
-    if isinstance(pattern_ids, int):
-        pattern_ids = [pattern_ids]
+def plan_strategy(
+    task_description: str,
+    data_characteristics: str | None = None,
+    constraints: str | None = None,
+    priority: str = "balanced",
+) -> str:
+    """Design an optimal orchestration strategy for your task.
 
-    result_parts = []
-    for pid in pattern_ids:
-        if pid in PATTERN_DETAILS:
-            result_parts.append(PATTERN_DETAILS[pid])
-        else:
-            result_parts.append(f"Error: Pattern {pid} not found. Valid pattern IDs are 1-16.")
+    Analyzes requirements and recommends pattern compositions with cost/latency/quality tradeoffs.
+    """
+    # Construct planning prompt from template
+    prompt = _PLANNER_PROMPT_TEMPLATE.format(
+        task_description=task_description,
+        data_characteristics=data_characteristics or "Not specified",
+        constraints=constraints or "None specified",
+        priority=priority,
+        pattern_summary=_PATTERN_SUMMARY,
+    )
 
-    return "\n\n---\n\n".join(result_parts)
+    # Use curie for cost-effectiveness, gpt-4 for complex tasks
+    planner_model = "curie" if priority == "cost" else "gpt-4"
 
-get_pattern_details.__doc__ = _TOOL_DESCRIPTIONS["get_pattern_details"]
+    try:
+        # Call planner model
+        backend = get_backend()
+        result = backend._call_llm(
+            instruction=prompt,
+            data="",
+            model=planner_model,
+            temperature=0.7,  # Encourage creative strategies
+            max_tokens=2000,
+        )
+
+        # Parse and validate JSON
+        parsed = json.loads(result["text"])
+
+        # Add metadata
+        parsed["_meta"] = {
+            "planner_model": planner_model,
+            "planning_cost": f"${result['prompt_tokens'] + result['completion_tokens']} tokens (~$0.01-0.10)",
+            "task_analyzed": task_description[:100] + "..." if len(task_description) > 100 else task_description,
+        }
+
+        return json.dumps(parsed, indent=2)
+
+    except json.JSONDecodeError:
+        # Fallback: return error with basic recommendation
+        return json.dumps({
+            "error": "Failed to generate structured plan",
+            "fallback_recommendation": "Start with Pattern 1 (Parallel Fan-Out) for most tasks. Call get_usage_guide() for pattern overview.",
+            "raw_output": result["text"][:500] if 'result' in locals() else "No output generated"
+        }, indent=2)
+    except Exception as e:
+        return json.dumps({
+            "error": f"Planning failed: {type(e).__name__}: {str(e)}",
+            "fallback_recommendation": "Call get_usage_guide() to see pattern overview and choose manually."
+        }, indent=2)
+
+plan_strategy.__doc__ = _TOOL_DESCRIPTIONS["plan_strategy"]
 
 
 
