@@ -4,7 +4,7 @@ An alternative scaffold for the [Recursive Language Model](https://github.com/al
 
 ## Quick Start: Choose Your Orchestration Strategy
 
-RLM-Scheme provides **6 orchestration strategies** for different problems. Choose based on your data and goals:
+RLM-Scheme provides **16 orchestration patterns** for different problems. Choose based on your data and goals:
 
 | Your Problem | Use This Strategy | Example Below |
 |--------------|-------------------|---------------|
@@ -15,7 +15,7 @@ RLM-Scheme provides **6 orchestration strategies** for different problems. Choos
 | **Many perspectives** | Strategy 5: Cumulative Fold | See [EXAMPLES.md](EXAMPLES.md) |
 | **Complex multi-phase** | Strategy 6: Meta-Orchestration | See [EXAMPLES.md](EXAMPLES.md) |
 
-Call `get_usage_guide` for templates and detailed documentation for all 6 strategies.
+Call `get_usage_guide` for the decision framework and pattern summaries, then `get_pattern_details([ids])` for full implementations.
 
 ## Example 1: Parallel Fan-Out (Strategy 1)
 
@@ -409,19 +409,19 @@ See `get_usage_guide` for:
 
 ## MCP tools
 
-Seven tools exposed to Claude Code:
+Eight tools exposed to Claude Code:
 
 | Tool | What it does |
 |------|-------------|
-| `get_usage_guide` | Returns the complete Scheme reference with examples. Call first. |
-| `execute_scheme(code, timeout?)` | Run Scheme code in the sandbox. State persists across calls. Optional timeout parameter. |
-| `load_context(data)` | Load input data as the `context` variable. |
-| `get_scope_log` | Get the audit trail of all sub-model calls as JSON array. |
-| `get_status` | Get current status: active calls (with IDs, models, depth, elapsed time), cumulative token usage, and API rate limits. |
-| `cancel_call(call_id)` | Cancel an in-flight call by ID. Cancels async futures and kills nested REPLs. |
+| `get_usage_guide` | Decision framework, model selection guide, and pattern summaries. Call first. |
+| `get_pattern_details(ids)` | Full implementations with code examples for specific patterns (1-16). |
+| `get_code_generation_api_reference` | Condensed API reference for code-generating sub-models (Pattern 2). |
+| `execute_scheme(code, timeout?)` | Run Scheme code in the sandbox. State persists across calls. |
+| `load_context(data, name?)` | Load input data as the `context` variable. Supports named slots. |
+| `get_scope_log` | Audit trail of all sub-model calls as JSON array. |
+| `get_status` | Active calls, cumulative token usage, and API rate limits in one call. |
+| `cancel_call(call_id)` | Cancel an in-flight call by ID. Use `get_status` to find IDs. |
 | `reset` | Clear all state. Call between unrelated tasks. |
-
-**Note:** `get_status` consolidates monitoring functions — it returns active calls, token usage, and rate limits in one call.
 
 ## Best Practices
 
@@ -554,22 +554,16 @@ log = get_scope_log()  # Every sub-call, every scope crossing
 
 | File | Language | Lines | Role |
 |------|----------|-------|------|
-| `racket_server.rkt` | Racket | 824 | Sandboxed Scheme REPL |
-| `mcp_server.py` | Python | 1122 | MCP server + OpenAI API bridge + call registry |
+| `mcp_server.py` | Python | 1,503 | MCP server + OpenAI API bridge + call registry |
+| `racket_server.rkt` | Racket | 1,198 | Sandboxed Scheme REPL |
 | `py_bridge.py` | Python | 125 | Isolated Python subprocess |
-| `tests/` | Python | 6 files | 211 tests |
+| `docs/` | Markdown | 20 files | Usage guide, pattern docs, API reference |
+| `tests/` | Python | 24 files | 464 tests |
 | `.mcp.json` | JSON | 12 | Claude Code config |
 
 ## Tests
 
-211 tests across 6 files. Run with `pytest tests/`.
-
-- **test_racket_server.py** (72) — core eval, scaffold protection, parameterize, escape hatches, py-bridge, py-set!, stdout capture, non-void top-level, list/string functions
-- **test_hygiene.py** (26) — adversarial tests: premature completion, namespace collision, prompt injection resistance, scope tracking
-- **test_mcp_server.py** (65) — timeout, crash recovery, process lifecycle, call registry, cancel call, stderr logging, thread safety, image resolution, token tracking, progress notifications
-- **test_callbacks.py** (14) — token tracking, multi-model dispatch, async protocol
-- **test_recursion.py** (17) — recursive flag forwarding, code extraction, nested sandbox lifecycle, depth limits
-- **test_api_params.py** (17) — temperature, max-tokens, JSON mode, image forwarding, combined parameters
+464 tests across 24 files. Run with `pytest tests/`.
 
 ## References
 
