@@ -29,10 +29,10 @@ MODEL COSTS (exploit the 50-100× difference):
 - gpt-4: $0.03-0.06/1K (synthesis, complex reasoning - expensive!)
 - code-davinci-002: $0.02-0.05/1K (code generation)
 
-Call get_usage_guide() for creative orchestration mindset, patterns, composition principles.
-Call get_pattern_details([1,4,7,8]) for specific pattern implementations.
+Call get_usage_guide() for pattern overview and primitive reference.
+Call plan_strategy(task_description) for strategy recommendations tailored to your task.
 
-State persists across execute_scheme calls until reset(). Capabilities: LLM orchestration with scope tracking, Python integration (py-exec), image processing (#:images), parallel work (map-async).
+State persists across execute_scheme calls until reset(). Capabilities: LLM orchestration with scope tracking, Python integration (py-exec, file I/O), image processing (#:images), web requests (Python urllib/requests), parallel work (map-async).
 
 Args:
     code: Scheme code to execute
