@@ -86,7 +86,7 @@ API REFERENCE:
 " api-ref "
 
 Return ONLY Scheme code, no explanations.")
-  #:model "gpt-4.1"  ;; Strong code generation model
+  #:model "code-davinci-002"  ;; Strong code generation model
   #:temperature 0.0
   #:max-tokens 2000))
 
@@ -117,7 +117,7 @@ Return ONLY Scheme code, no explanations.")
 - API calls: 1 (code gen) + P (program's sub-calls)
 
 ### Optimization Tips
-1. **Use gpt-4.1 for code generation** (best at code, better than gpt-4o)
+1. **Use code-davinci-002 for code generation** (best at code, better than gpt-4)
 2. **Include API reference** (sub-model doesn't know rlm-scheme syntax)
 3. **Validate generated code** (check for syntax errors before exec)
 4. **Use #:temperature 0.0** (deterministic code generation)

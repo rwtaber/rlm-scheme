@@ -55,7 +55,7 @@ print(json.dumps(state))
              ;; Analyze chunk, update state
              [updated-state (syntax-e (llm-query
                 #:instruction (string-append "Analyze logs. Update state:\nCURRENT: " running-state "\nNEW CHUNK: [" (py-exec "print(len(chunk))") " entries]")
-                #:model "gpt-4o-mini"
+                #:model "curie"
                 #:json #t
                 #:max-tokens 300))])
         ;; Update and continue

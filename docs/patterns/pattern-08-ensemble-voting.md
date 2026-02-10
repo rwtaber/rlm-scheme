@@ -7,7 +7,7 @@ You need high-accuracy classification (sentiment analysis, medical diagnosis, fr
 **Problem it solves:** Single model error ceiling. Models make different types of errors (uncorrelated failures).
 **Alternatives fail because:**
 - **Single model:** 82% accuracy, can't improve without better training data
-- **Better model:** Still plateaus (gpt-4o = 85%, not 95%)
+- **Better model:** Still plateaus (gpt-4 = 85%, not 95%)
 - **Prompt engineering:** Marginal gains (~3%), not 13% needed
 
 **Key insight:** If 5 models each have 82% accuracy and errors are UNCORRELATED, majority vote achieves 92-95% (empirically validated). Think medical second opinions.
@@ -52,7 +52,7 @@ reviews[:20]  # Demo with 20, scale to 1000+
 "))
 
 ;; Define ensemble (5 diverse models for decorrelation)
-(define models (list "gpt-4o-mini" "gpt-4o" "gpt-4.1" "gpt-4.1-mini" "gpt-4.1-nano"))
+(define models (list "curie" "gpt-4" "code-davinci-002" "gpt-3.5" "gpt-3.5-turbo"))
 
 ;; Classify single review with ensemble
 (define (classify-ensemble review)
@@ -110,7 +110,7 @@ print(f'Positive: {dist[\"positive\"]}, Negative: {dist[\"negative\"]}, Neutral:
 - **Complexity:** O(k × n) where k=models (5), n=items (1000)
 
 ### Optimization Tips
-1. **Use cheap models for majority:** 3 × gpt-4.1-nano + 2 × gpt-4o = 2× cost but 90% accuracy (cheaper than 5 × gpt-4o)
+1. **Use cheap models for majority:** 3 × gpt-3.5-turbo + 2 × gpt-4 = 2× cost but 90% accuracy (cheaper than 5 × gpt-4)
 2. **Early stopping:** If first 3 votes all agree, don't query remaining 2 models (save cost on obvious cases)
 3. **Temperature 0.0:** Deterministic voting (no randomness in classification)
 4. **Structured output:** Use `#:json #t` to force format: `{"sentiment": "positive", "confidence": 0.9}`
@@ -127,8 +127,8 @@ print(f'Positive: {dist[\"positive\"]}, Negative: {dist[\"negative\"]}, Neutral:
 
 ❌ Using identical models (correlated errors)
 ```scheme
-;; 5 × gpt-4o = correlated errors, all fail on same cases
-;; Fix: Diverse models (gpt-4o-mini, gpt-4o, gpt-4.1, etc.)
+;; 5 × gpt-4 = correlated errors, all fail on same cases
+;; Fix: Diverse models (curie, gpt-4, code-davinci-002, etc.)
 ```
 
 ❌ No tie-breaking strategy

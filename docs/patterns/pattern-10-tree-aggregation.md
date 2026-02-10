@@ -48,9 +48,9 @@ Level 6: 1 final synthesis
  for i in range(0, len(items), 2)]
 ")]
              ;; Choose model by level (cheap at leaves, expensive at top)
-             [model (cond [(<= level 2) "gpt-4.1-nano"]
-                          [(<= level 4) "gpt-4o-mini"]
-                          [else "gpt-4o"])]
+             [model (cond [(<= level 2) "gpt-3.5-turbo"]
+                          [(<= level 4) "curie"]
+                          [else "gpt-4"])]
              ;; Merge pairs in parallel
              [merged (map-async
                        (lambda (pair)
@@ -71,7 +71,7 @@ Level 6: 1 final synthesis
     (llm-query-async
       #:instruction "Summarize in 2-3 sentences"
       #:data abstract
-      #:model "gpt-4.1-nano"
+      #:model "gpt-3.5-turbo"
       #:max-tokens 150))
   abstracts
   #:max-concurrent 50))
@@ -83,7 +83,7 @@ Level 6: 1 final synthesis
 (define meta (syntax-e (llm-query
   #:instruction "Identify major themes, breakthroughs, trends, gaps"
   #:data final-synthesis
-  #:model "gpt-4o")))
+  #:model "gpt-4")))
 
 (finish meta)
 ```
@@ -96,7 +96,7 @@ Level 6: 1 final synthesis
 - Cost pyramid: Cheap at leaves, expensive at top
 
 ### Optimization Tips
-1. Cost pyramid: nano/mini at leaves, gpt-4o at top
+1. Cost pyramid: nano/mini at leaves, gpt-4 at top
 2. Checkpoint levels: Save state at each level for recovery
 3. Adaptive merging: If pair similar, summarize briefly; if different, preserve both
 4. Balance: Odd items handled gracefully (single-element pairs)

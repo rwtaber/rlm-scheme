@@ -42,7 +42,7 @@ Strategy 2 -> Generate -> Verify -> Valid? Yes: DONE
   (syntax-e (llm-query
     #:instruction "Verify solution correctness. Return JSON: {valid: bool, errors: [str]}"
     #:data (string-append "PROBLEM: " context "\nSOLUTION: " solution)
-    #:model "gpt-4.1-nano"
+    #:model "gpt-3.5-turbo"
     #:json #t
     #:temperature 0.0)))
 
@@ -55,7 +55,7 @@ Strategy 2 -> Generate -> Verify -> Valid? Yes: DONE
              [candidate (syntax-e (llm-query
                           #:instruction (string-append "Solve using: " strategy)
                           #:data context
-                          #:model "gpt-4o"
+                          #:model "gpt-4"
                           #:temperature 0.3))]
              ;; Verify
              [verification (verify-solution candidate)]

@@ -76,7 +76,7 @@ Focus on: key obligations, liability caps, notice requirements, ambiguities.
 Call (finish your-analysis) when done."
       #:data (py-eval "import json; json.dumps(sec)")
       #:recursive #t  ;; Specialist can spawn sub-agents
-      #:model "gpt-4o"
+      #:model "gpt-4"
       #:max-tokens 1500)))
   sections))  ;; Sequential map (not map-async) because recursive delegation needs sync
 
@@ -100,7 +100,7 @@ TASK: Contract-level insights:
 
 Focus on practical business impact."
   #:data combined
-  #:model "gpt-4o"
+  #:model "gpt-4"
   #:temperature 0.3
   #:max-tokens 1000)))
 
@@ -124,7 +124,7 @@ Focus on practical business impact."
 1. **Limit concurrency at each level** (3-5, not 10+)
    - Each sub-agent may spawn its own sub-calls
    - Too much parallelism = resource exhaustion
-2. **Use cheap models at leaves** (gpt-4o-mini), expensive at top (gpt-4o)
+2. **Use cheap models at leaves** (curie), expensive at top (gpt-4)
 3. **Provide clear delegation instructions** (when to recurse, when to analyze directly)
 4. **Max depth is 3** (depth-0=you, depth-1/2/3=sub-models)
 

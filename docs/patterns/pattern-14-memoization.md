@@ -65,9 +65,9 @@ print(key)
         result)))
 
 ;; Usage
-(define analysis1 (cached-query "Analyze complaints" context "gpt-4o"))
+(define analysis1 (cached-query "Analyze complaints" context "gpt-4"))
 ;; Second call instant
-(define analysis2 (cached-query "Analyze complaints" context "gpt-4o"))  ;; CACHE HIT
+(define analysis2 (cached-query "Analyze complaints" context "gpt-4"))  ;; CACHE HIT
 ```
 
 ### Quantified Improvements

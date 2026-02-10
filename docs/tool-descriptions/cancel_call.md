@@ -1,0 +1,1 @@
+Cancel an in-flight sub-model call by its ID. Use get_status to find call IDs. Cancels async futures and terminates nested REPLs for recursive calls. Returns immediately. Does not affect token accounting for already-completed work.

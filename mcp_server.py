@@ -34,9 +34,15 @@ from mcp.server.fastmcp import Context, FastMCP
 IS_WINDOWS = platform.system() == "Windows"
 
 _DOCS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "docs")
+_TOOL_DESC_DIR = os.path.join(_DOCS_DIR, "tool-descriptions")
 
 def _load_doc(relative_path: str) -> str:
     with open(os.path.join(_DOCS_DIR, relative_path), "r", encoding="utf-8") as f:
+        return f.read()
+
+def _load_tool_desc(tool_name: str) -> str:
+    """Load tool description from markdown file."""
+    with open(os.path.join(_TOOL_DESC_DIR, f"{tool_name}.md"), "r", encoding="utf-8") as f:
         return f.read()
 
 mcp = FastMCP("scope")
@@ -183,6 +189,19 @@ def _detect_project_python() -> str | None:
 # ---------------------------------------------------------------------------
 
 USAGE_GUIDE_CORE = _load_doc("usage-guide.md")
+
+# Load tool descriptions from markdown files
+_TOOL_DESCRIPTIONS = {
+    "get_usage_guide": _load_tool_desc("get_usage_guide"),
+    "get_code_generation_api_reference": _load_tool_desc("get_code_generation_api_reference"),
+    "get_pattern_details": _load_tool_desc("get_pattern_details"),
+    "execute_scheme": _load_tool_desc("execute_scheme"),
+    "load_context": _load_tool_desc("load_context"),
+    "get_scope_log": _load_tool_desc("get_scope_log"),
+    "reset": _load_tool_desc("reset"),
+    "get_status": _load_tool_desc("get_status"),
+    "cancel_call": _load_tool_desc("cancel_call"),
+}
 
 _PATTERN_FILES = {
     1: "patterns/pattern-01-parallel-fan-out.md",
@@ -1261,66 +1280,24 @@ STDOUT_LIMIT = 2000
 
 @mcp.tool()
 def get_usage_guide() -> str:
-    """Get essential guide with quick reference, decision framework, model selection guide, and pattern summaries. For detailed pattern implementations with complete code examples, call get_pattern_details() with specific pattern numbers. This guide helps you choose which patterns to use; get_pattern_details() gives you the full implementation details."""
     return USAGE_GUIDE_CORE
+
+get_usage_guide.__doc__ = _TOOL_DESCRIPTIONS["get_usage_guide"]
 
 
 @mcp.tool()
 def get_code_generation_api_reference() -> str:
-    """Get condensed API reference for code-generating sub-models.
-
-    When using Pattern 2 (Code Generation), sub-models don't automatically know
-    the rlm-scheme API. Call this tool and include its output in your unsafe-raw-query
-    #:data parameter so the sub-model generates correct syntax.
-
-    This returns a minimal reference (~200 lines) optimized for inclusion in prompts.
-    For the full guide with strategies and examples, use get_usage_guide instead."""
-
     return _CODE_GEN_API_REF
+
+get_code_generation_api_reference.__doc__ = _TOOL_DESCRIPTIONS["get_code_generation_api_reference"]
 
 
 @mcp.tool()
 def get_pattern_details(pattern_ids: int | list[int]) -> str:
-    """Get detailed documentation for specific orchestration patterns with complete code examples.
-    
-    After using get_usage_guide() to choose which patterns fit your problem, call this tool
-    to get full implementation details including:
-    - Complete working code examples
-    - Quantified improvements (latency, cost, quality metrics)
-    - Optimization tips and best practices
-    - Common mistakes to avoid
-    - Pattern composition suggestions
-    - Real-world use cases
-    
-    Args:
-        pattern_ids: Single pattern number (1-16) or list of pattern numbers, e.g., [1, 4, 10]
-        
-    Available Patterns:
-        1: Parallel Fan-Out (MapReduce)
-        2: Code Generation (Meta-Programming)
-        3: Recursive Delegation (Hierarchical Decomposition)
-        4: Critique-Refine Loop
-        5: Cumulative Fold (Sequential Synthesis)
-        6: Meta-Orchestration (LLM Designs the Pipeline)
-        7: Speculative Execution (Hedging)
-        8: Ensemble Voting
-        9: Active Learning (Budget-Optimized Quality)
-        10: Tree Aggregation (Hierarchical Reduction)
-        11: Consensus Protocol (Byzantine Fault Tolerance)
-        12: Backtracking Search (Strategy Exploration)
-        13: Anytime Algorithms (Progressive Refinement)
-        14: Memoization (Content-Addressed Caching)
-        15: Stream Processing (Constant Memory)
-        16: Multi-Armed Bandit (Adaptive Model Selection)
-    
-    Example:
-        get_pattern_details(1)  # Get Pattern 1 details
-        get_pattern_details([1, 4, 10])  # Get multiple patterns
-    """
     # Normalize to list
     if isinstance(pattern_ids, int):
         pattern_ids = [pattern_ids]
-    
+
     result_parts = []
     for pid in pattern_ids:
         if pid in PATTERN_DETAILS:
@@ -1330,30 +1307,12 @@ def get_pattern_details(pattern_ids: int | list[int]) -> str:
 
     return "\n\n---\n\n".join(result_parts)
 
+get_pattern_details.__doc__ = _TOOL_DESCRIPTIONS["get_pattern_details"]
+
 
 
 @mcp.tool()
 async def execute_scheme(code: str, timeout: int | None = None, ctx: Context = None) -> str:
-    """Execute Scheme orchestration code. Use for strategy-driven LLM orchestration.
-
-    AVAILABLE PATTERNS (16 total - choose based on your constraints):
-
-    LATENCY: Parallel Fan-Out, Speculative Execution, Stream Processing
-    QUALITY: Critique-Refine, Ensemble Voting, Consensus Protocol
-    COST: Active Learning, Memoization, Multi-Armed Bandit
-    STRUCTURE: Code Generation, Meta-Orchestration, Recursive Delegation, Tree Aggregation
-    SPECIALIZED: Cumulative Fold, Backtracking Search, Anytime Algorithms
-
-    Call get_usage_guide for complete details, decision framework, and code examples for all 16 patterns.
-
-    Model selection: use gpt-4.1-nano ($0.10/1M) for fan-out and simple tasks, gpt-4o or gpt-4.1 for complex reasoning, o3-mini or o4-mini for math/logic. Always use the cheapest model that fits the task.
-
-    State persists across calls. Capabilities: orchestrate LLM sub-calls with scope tracking, run Python code for file I/O and web requests (py-exec), process images (vision models), and fan out parallel work (map-async).
-
-    Args:
-        code: Scheme code to execute
-        timeout: Optional timeout in seconds. If not specified, uses RLM_TIMEOUT_SECONDS env var (default 300).
-        ctx: MCP context for progress reporting"""
     # Resolve timeout: parameter > env var > default 300
     if timeout is None:
         timeout = int(os.environ.get("RLM_TIMEOUT_SECONDS", "300"))
@@ -1434,27 +1393,11 @@ async def execute_scheme(code: str, timeout: int | None = None, ctx: Context = N
 
     return json.dumps(result)
 
+execute_scheme.__doc__ = _TOOL_DESCRIPTIONS["execute_scheme"]
+
 
 @mcp.tool()
 def load_context(data: str, name: str | None = None) -> str:
-    """Load input data into the sandbox. Available as `context` in Scheme and Python.
-
-    Args:
-        data: Text data to load (documents, code, CSV, JSON, etc.)
-        name: Optional name for this context slot (e.g., "gwas-data", "expression").
-              Use get-context to retrieve named contexts later.
-
-    Named context slots (improvement #5) allow managing multiple datasets:
-    - load_context(gwas_csv, "gwas-data")
-    - load_context(expr_csv, "expression-data")
-    - Later in Scheme: (get-context "gwas-data") or (get-context "expression-data")
-
-    Strategy considerations after loading:
-    - Data >100KB? → Use Pattern 1 (chunk via py-exec, parallel fan-out with map-async)
-    - Unknown structure? → Use Pattern 2 (model inspects sample, generates analysis code)
-    - Hierarchical? → Use Pattern 3 (recursive delegation to specialists)
-
-    See get_usage_guide for strategy templates."""
     cmd = {"op": "load-context", "data": data}
     if name is not None:
         cmd["name"] = name
@@ -1463,24 +1406,27 @@ def load_context(data: str, name: str | None = None) -> str:
         return f"[stderr] {resp['message']}"
     return resp.get("result", "context loaded")
 
+load_context.__doc__ = _TOOL_DESCRIPTIONS["load_context"]
+
 
 @mcp.tool()
 def get_scope_log() -> str:
-    """Get the audit trail as JSON array. Each entry contains: op ('llm-query'|'syntax-e'|'datum->syntax'|'py-exec'|'py-eval'|'unsafe-*'), datum_preview (first 80 chars of data), and scope ('host'|'sandbox'|'sub-N'). Use to trace data flow and debug scope issues."""
     resp = get_backend().send({"op": "get-scope-log"})
     return resp.get("result", "[]")
+
+get_scope_log.__doc__ = _TOOL_DESCRIPTIONS["get_scope_log"]
 
 
 @mcp.tool()
 def reset() -> str:
-    """Clear all sandbox state and start fresh. Call between unrelated tasks."""
     resp = get_backend().send({"op": "reset"})
     return resp.get("result", "sandbox reset")
+
+reset.__doc__ = _TOOL_DESCRIPTIONS["reset"]
 
 
 @mcp.tool()
 def get_status() -> str:
-    """Get sandbox status: active calls, token usage, and rate limits. Non-blocking — safe to call any time."""
     backend = get_backend()
     return json.dumps({
         "active_calls": _call_registry.snapshot(),
@@ -1488,11 +1434,14 @@ def get_status() -> str:
         "rate_limits": backend.get_rate_limits(),
     }, indent=2)
 
+get_status.__doc__ = _TOOL_DESCRIPTIONS["get_status"]
+
 
 @mcp.tool()
 def cancel_call(call_id: str) -> str:
-    """Cancel an in-flight sub-model call by its ID. Use get_status to find call IDs. Cancels async futures and terminates nested REPLs for recursive calls. Returns immediately. Does not affect token accounting for already-completed work."""
     return get_backend().cancel_call(call_id)
+
+cancel_call.__doc__ = _TOOL_DESCRIPTIONS["cancel_call"]
 
 
 # ---------------------------------------------------------------------------

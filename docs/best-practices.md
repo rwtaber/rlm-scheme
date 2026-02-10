@@ -5,19 +5,19 @@
 #### Rule 1: Use Cheapest Model That Works
 ```scheme
 ;; DON'T: Expensive for simple task
-(map-async (lambda (x) (llm-query-async ... #:model "gpt-4o")) items)
+(map-async (lambda (x) (llm-query-async ... #:model "gpt-4")) items)
 
 ;; DO: Cheap for fan-out
-(map-async (lambda (x) (llm-query-async ... #:model "gpt-4.1-nano")) items)
+(map-async (lambda (x) (llm-query-async ... #:model "gpt-3.5-turbo")) items)
 ```
 
 **Cost comparison:**
-- gpt-4.1-nano: $0.10/1M tokens
-- gpt-4o-mini: $0.15/1M tokens
-- gpt-4o: $2.50/1M tokens (25x more expensive)
-- gpt-4.1: $2.00/1M tokens
+- gpt-3.5-turbo: $0.10/1M tokens
+- curie: $0.15/1M tokens
+- gpt-4: $2.50/1M tokens (25x more expensive)
+- code-davinci-002: $2.00/1M tokens
 
-**Rule of thumb:** Fan-out = nano, Synthesis = gpt-4o
+**Rule of thumb:** Fan-out = nano, Synthesis = gpt-4
 
 ---
 
@@ -37,7 +37,7 @@
 #### Rule 3: Use Active Learning (Pattern 9)
 ```scheme
 ;; DON'T: Expensive on all
-(map-async (lambda (x) (llm-query-async #:model "gpt-4o" ...)) all-items)
+(map-async (lambda (x) (llm-query-async #:model "gpt-4" ...)) all-items)
 
 ;; DO: Cheap on easy, expensive on hard
 ;; Phase 1: Cheap with confidence
@@ -51,12 +51,12 @@
 #### Rule 4: Cost Pyramid in Tree Aggregation
 ```scheme
 (define model (cond
-  [(<= level 2) "gpt-4.1-nano"]   ;; Cheap at leaves (90% of calls)
-  [(<= level 4) "gpt-4o-mini"]    ;; Mid-tier
-  [else "gpt-4o"]))               ;; Expensive at top (1 call)
+  [(<= level 2) "gpt-3.5-turbo"]   ;; Cheap at leaves (90% of calls)
+  [(<= level 4) "curie"]    ;; Mid-tier
+  [else "gpt-4"]))               ;; Expensive at top (1 call)
 ```
 
-**Impact:** 10x cheaper than gpt-4o everywhere
+**Impact:** 10x cheaper than gpt-4 everywhere
 
 ---
 
@@ -152,12 +152,12 @@
 
 #### Anti-Pattern 2: Expensive Model on Fan-Out
 ```scheme
-;; BAD: gpt-4o on all
-(map-async (lambda (x) (llm-query-async #:model "gpt-4o" ...)) 100-items)
+;; BAD: gpt-4 on all
+(map-async (lambda (x) (llm-query-async #:model "gpt-4" ...)) 100-items)
 ;; Cost: $2.50
 
 ;; GOOD: nano on fan-out
-(map-async (lambda (x) (llm-query-async #:model "gpt-4.1-nano" ...)) 100-items)
+(map-async (lambda (x) (llm-query-async #:model "gpt-3.5-turbo" ...)) 100-items)
 ;; Cost: $0.10 (25x cheaper)
 ```
 
@@ -205,13 +205,13 @@
 #### Model Costs (per 1M tokens)
 | Model | Input | Output | Use Case |
 |-------|-------|--------|----------|
-| gpt-4.1-nano | $0.10 | $0.40 | Fan-out, filtering |
-| gpt-4o-mini | $0.15 | $0.60 | Mid-tier synthesis |
-| gpt-4.1-mini | $0.30 | $1.20 | Code generation |
-| gpt-4o | $2.50 | $10.00 | Complex reasoning |
-| gpt-4.1 | $2.00 | $8.00 | Code + reasoning |
-| o3-mini | $1.10 | $4.40 | Math/logic |
-| o4-mini | $1.10 | $4.40 | Advanced reasoning |
+| gpt-3.5-turbo | $0.10 | $0.40 | Fan-out, filtering |
+| curie | $0.15 | $0.60 | Mid-tier synthesis |
+| gpt-3.5 | $0.30 | $1.20 | Code generation |
+| gpt-4 | $2.50 | $10.00 | Complex reasoning |
+| code-davinci-002 | $2.00 | $8.00 | Code + reasoning |
+| gpt-4 | $1.10 | $4.40 | Math/logic |
+| gpt-4 | $1.10 | $4.40 | Advanced reasoning |
 
 ---
 
@@ -241,7 +241,7 @@
 ### 5.6 Debugging Checklist
 
 Before deploying:
-- [ ] Using gpt-4.1-nano for fan-out? (not gpt-4o)
+- [ ] Using gpt-3.5-turbo for fan-out? (not gpt-4)
 - [ ] temperature=0.0 for caching/classification?
 - [ ] max-tokens set to cap response length?
 - [ ] Using await-all not sequential await?

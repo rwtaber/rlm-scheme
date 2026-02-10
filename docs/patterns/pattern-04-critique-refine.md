@@ -53,7 +53,7 @@ Draft (v1) → Critique (identify weaknesses) → Refine (v2) → Critique → R
 
 Return JSON: {\"issues\": [{\"type\": str, \"description\": str, \"severity\": 1-3}]}"
     #:data draft
-    #:model "gpt-4o-mini"  ;; Cheap critic
+    #:model "curie"  ;; Cheap critic
     #:json #t
     #:temperature 0.0)))
 
@@ -79,7 +79,7 @@ sum(i.get('severity', 2) for i in issues) / max(len(issues), 1)
                      critique-json
                      "\n\nORIGINAL:\n" draft
                      "\n\nAddress ALL issues. Add evidence, fix logic, add context.")
-                   #:model "gpt-4o"  ;; Expensive generator
+                   #:model "gpt-4"  ;; Expensive generator
                    #:temperature 0.4
                    #:max-tokens 2000))])
               ;; Recurse
@@ -91,7 +91,7 @@ sum(i.get('severity', 2) for i in issues) / max(len(issues), 1)
 Structure: Problem → ZK fundamentals → Healthcare use cases → Implementation → Conclusion
 Target: Technical audience. Be specific, show math."
   #:data context
-  #:model "gpt-4o"
+  #:model "gpt-4"
   #:temperature 0.6
   #:max-tokens 1500)))
 
@@ -119,7 +119,7 @@ print(f'{score}/100')
 - **Complexity:** O(k) iterations, each O(draft_length)
 
 ### Optimization Tips
-1. **Cheap critic, expensive generator:** gpt-4o-mini for critique ($0.15/1M), gpt-4o for generation ($2.50/1M). Critique is 90% of quality signal at 6% of cost.
+1. **Cheap critic, expensive generator:** curie for critique ($0.15/1M), gpt-4 for generation ($2.50/1M). Critique is 90% of quality signal at 6% of cost.
 2. **Early stopping:** Check severity after each critique. If avg < 1.5, stop (no point refining perfection).
 3. **Structured critique:** Use `#:json #t` to force specific categories. Unstructured critique is vague ("needs improvement").
 4. **Temperature tuning:** Generator 0.4-0.6 (creative), critic 0.0 (consistent standards).
@@ -128,9 +128,9 @@ print(f'{score}/100')
 ### Common Mistakes
 ❌ Using expensive model for both critic and generator
 ```scheme
-;; Wasteful: gpt-4o for critique
-(llm-query #:instruction "Critique this..." #:model "gpt-4o")
-;; Fix: gpt-4o-mini is 94% as good at critique for 6% of cost
+;; Wasteful: gpt-4 for critique
+(llm-query #:instruction "Critique this..." #:model "gpt-4")
+;; Fix: curie is 94% as good at critique for 6% of cost
 ```
 
 ❌ No stopping criteria (always runs max iterations)
@@ -156,6 +156,50 @@ print(f'{score}/100')
 2. **Code Generation:** Generate code → lint/test (critique) → fix bugs (refine)
 3. **Legal:** Contract drafting with compliance review loop
 4. **Research:** Grant proposals with adversarial peer review
+
+### Beyond Refinement: Use Critique for Strategy Comparison
+
+**The critique primitive is more powerful than just refinement loops.** Use it to compare different approaches:
+
+#### Example: Choosing Between Two Methods
+```scheme
+;; Generate solutions using two different strategies
+(define method-a (syntax-e (llm-query
+  #:instruction "Solve using dynamic programming"
+  #:data problem-description
+  #:model "gpt-4")))
+
+(define method-b (syntax-e (llm-query
+  #:instruction "Solve using greedy algorithm"
+  #:data problem-description
+  #:model "gpt-4")))
+
+;; Use critique to compare them
+(define comparison (syntax-e (llm-query
+  #:instruction "Compare these two algorithmic approaches on:
+1. Correctness (does it handle all edge cases?)
+2. Efficiency (time/space complexity)
+3. Clarity (maintainability)
+Return JSON: {\"winner\": \"a\"|\"b\", \"reasoning\": str, \"scores\": {...}}"
+  #:data (string-append "METHOD A:\n" method-a "\n\nMETHOD B:\n" method-b)
+  #:json #t
+  #:model "gpt-4")))
+
+;; Parse winner
+(py-set! "cmp" comparison)
+(define winner (py-eval "json.loads(cmp)['winner']"))
+
+(finish (if (string=? winner "a") method-a method-b))
+```
+
+**Key insight:** Critique isn't just for iterative refinement — it's a **general-purpose comparison operator** for evaluating alternative strategies.
+
+**More creative uses:**
+- **A/B testing patterns**: Compare fan-out vs tree-aggregation on sample data
+- **Adaptive routing**: Critique sample output to decide which model to use for remaining data
+- **Search validation**: Critique each backtracking branch to prune bad paths early
+
+See `get_creative_orchestration_guide()` for more examples.
 
 ---
 

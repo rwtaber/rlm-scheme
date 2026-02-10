@@ -43,7 +43,7 @@ After 100 trials: Converges to optimal model
 (define bandit-state (py-exec "
 import json
 state = {m: {'successes': 0, 'trials': 0}
-         for m in ['gpt-4o-mini', 'gpt-4o', 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4.1-nano']}
+         for m in ['curie', 'gpt-4', 'code-davinci-002', 'gpt-3.5', 'gpt-3.5-turbo']}
 print(json.dumps(state))
 "))
 

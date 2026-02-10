@@ -82,7 +82,7 @@ TASK: Write Scheme code that:
 6. Does NOT call (finish)
 
 Return ONLY the Scheme code.")
-  #:model "gpt-4.1"  ;; Strong at code generation + planning
+  #:model "code-davinci-002"  ;; Strong at code generation + planning
   #:temperature 0.0
   #:max-tokens 3000))
 
@@ -101,14 +101,14 @@ Return ONLY the Scheme code.")
 ### Quantified Improvements
 - **Adaptivity:** Automatically selects clustering for homogeneous data, LLM-extraction for heterogeneous
 - **Cost:** Planning overhead $0.50, but saves $2-5 by choosing optimal strategy
-- **Success rate:** 90% generate valid code (gpt-4.1), 99% with one retry
+- **Success rate:** 90% generate valid code (code-davinci-002), 99% with one retry
 - **Complexity:** O(planning) + O(execution), planning is fixed cost
 
 ### Optimization Tips
 1. **Include API reference in prompt:** Add `get_code_generation_api_reference` output to instruction (ensures valid syntax).
 2. **Validate before executing:** Parse generated code, check for `(finish)` calls (forbidden in sub-sandbox), syntax errors.
 3. **Retry on failure:** If execution fails, pass error to planner: "Your code failed with error X. Fix and retry."
-4. **Use strong model for planning:** gpt-4.1 ($2.00/1M) is best at code generation. Don't use gpt-4o-mini (more syntax errors).
+4. **Use strong model for planning:** code-davinci-002 ($2.00/1M) is best at code generation. Don't use curie (more syntax errors).
 5. **Constrain output format:** "Define variable `result`, do NOT call (finish)" prevents sandbox escapes.
 
 ### Common Mistakes
@@ -124,10 +124,10 @@ Return ONLY the Scheme code.")
 ;; Fix: Validate code before executing, check for forbidden primitives
 ```
 
-❌ Weak model for planning (gpt-4o-mini)
+❌ Weak model for planning (curie)
 ```scheme
-;; gpt-4o-mini generates invalid Scheme syntax 30% of the time
-;; Fix: Use gpt-4.1 or gpt-4o for planning (strong at code generation)
+;; curie generates invalid Scheme syntax 30% of the time
+;; Fix: Use code-davinci-002 or gpt-4 for planning (strong at code generation)
 ```
 
 ❌ No error recovery

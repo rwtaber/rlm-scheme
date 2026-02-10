@@ -1,0 +1,1 @@
+Get the audit trail as JSON array. Each entry contains: op ('llm-query'|'syntax-e'|'datum->syntax'|'py-exec'|'py-eval'|'unsafe-*'), datum_preview (first 80 chars of data), and scope ('host'|'sandbox'|'sub-N'). Use to trace data flow and debug scope issues.

@@ -44,7 +44,7 @@ If no supermajority: NO CONSENSUS (safe failure)
       #:instruction (string-append "You are " agent-id ". Diagnose patient.
 Return JSON: {primary: str, confidence: int, reasoning: str}")
       #:data context
-      #:model "gpt-4o"
+      #:model "gpt-4"
       #:json #t
       #:temperature 0.3))
   (list "Agent-1" "Agent-2" "Agent-3" "Agent-4" "Agent-5")
@@ -66,7 +66,7 @@ import json
 PROPOSALS: " combined "
 Return JSON: {vote: int (1-5), reasoning: str}")
       #:data context
-      #:model "gpt-4o"
+      #:model "gpt-4"
       #:json #t
       #:temperature 0.2))
   (list "Agent-1" "Agent-2" "Agent-3" "Agent-4" "Agent-5")
@@ -95,7 +95,7 @@ else:
 - Cost: 10x (5 models, 2 rounds)
 
 ### Optimization Tips
-1. Different models for diversity (gpt-4o, claude, gemini)
+1. Different models for diversity (gpt-4, claude, gemini)
 2. Temperature 0.2-0.3 (some variation, not too much)
 3. Abort early if Round 1 all agree (save Round 2 cost)
 4. Tie-breaking: If 2-2-1 split, escalate to human

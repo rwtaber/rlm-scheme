@@ -10,13 +10,13 @@ CORE LLM FUNCTIONS:
 
 (llm-query #:instruction "task description"
            #:data "context or data"
-           #:model "gpt-4o-mini"
+           #:model "curie"
            #:temperature 0.0
            #:max-tokens 500
            #:json #t)
   → Returns syntax object. MUST unwrap with (syntax-e result).
   → When using #:json #t, the #:instruction MUST contain the word 'json'.
-  → Models: "gpt-4.1-nano", "gpt-4o-mini", "gpt-4.1-mini", "gpt-4o", "gpt-4.1", "o3-mini", "o4-mini"
+  → Models: "gpt-3.5-turbo", "curie", "gpt-3.5", "gpt-4", "code-davinci-002", "gpt-4", "gpt-4"
   → Temperature: 0.0 (deterministic) to 1.0 (creative). Not supported by o-series.
   → JSON mode: #:json #t guarantees valid JSON response.
 
@@ -30,8 +30,8 @@ CORE LLM FUNCTIONS:
   → Returns list of raw LLM output strings (no syntax-e needed).
   → ⚠️ Results are raw strings from the LLM, NOT parsed JSON. Even with #:json #t,
   →   each result is a JSON string you must parse yourself (e.g., via py-exec + json.loads).
-  → Always use cheap models (gpt-4.1-nano or gpt-4o-mini) for fan-out.
-  → Example: (map-async (lambda (chunk) (llm-query-async #:instruction "summarize" #:data chunk #:model "gpt-4.1-nano")) chunks)
+  → Always use cheap models (gpt-3.5-turbo or curie) for fan-out.
+  → Example: (map-async (lambda (chunk) (llm-query-async #:instruction "summarize" #:data chunk #:model "gpt-3.5-turbo")) chunks)
 
 PYTHON BRIDGE (for computation and I/O):
 
@@ -96,7 +96,7 @@ Pattern 1: Parallel fan-out
 ```scheme
 (define results (map-async
   (lambda (item)
-    (llm-query-async #:instruction "process this" #:data item #:model "gpt-4.1-nano"))
+    (llm-query-async #:instruction "process this" #:data item #:model "gpt-3.5-turbo"))
   items
   #:max-concurrent 10))
 (finish results)
@@ -105,14 +105,14 @@ Pattern 1: Parallel fan-out
 Pattern 2: Extract with Python, analyze with LLM
 ```scheme
 (define data (py-exec "import json; print(json.dumps(process_data()))"))
-(define analysis (syntax-e (llm-query #:instruction "analyze" #:data data #:model "gpt-4o")))
+(define analysis (syntax-e (llm-query #:instruction "analyze" #:data data #:model "gpt-4")))
 (finish analysis)
 ```
 
 Pattern 3: py-set! → py-exec → py-eval round-trip (most common data flow)
 ```scheme
 ;; 1. Get data from LLM into Scheme
-(define analysis (syntax-e (llm-query #:instruction "Extract key facts as JSON" #:data doc #:model "gpt-4o" #:json #t)))
+(define analysis (syntax-e (llm-query #:instruction "Extract key facts as JSON" #:data doc #:model "gpt-4" #:json #t)))
 ;; 2. Transfer Scheme string to Python variable (safe, no escaping needed)
 (py-set! "raw_json" analysis)
 ;; 3. Process in Python (imports, file I/O, complex logic)
@@ -140,5 +140,5 @@ IMPORTANT REMINDERS:
 - Always unwrap llm-query with (syntax-e ...) before using as string
 - map-async items get unwrapped automatically (no syntax-e needed)
 - Use (finish ...) to return your result
-- Use cheap models (gpt-4.1-nano) for parallel work
+- Use cheap models (gpt-3.5-turbo) for parallel work
 - py-set! is safer than string interpolation for passing data to Python

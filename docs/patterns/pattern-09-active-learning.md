@@ -42,7 +42,7 @@ Merge: 80% cheap + 20% expensive = 90%+ accuracy
     (llm-query-async
       #:instruction "Classify. Return JSON: {category: str, confidence: 0-1}"
       #:data doc
-      #:model "gpt-4.1-nano"
+      #:model "gpt-3.5-turbo"
       #:json #t
       #:temperature 0.0))
   documents
@@ -62,7 +62,7 @@ import json
     (llm-query-async
       #:instruction "Expert classification"
       #:data doc
-      #:model "gpt-4o"
+      #:model "gpt-4"
       #:json #t))
   uncertain-docs))
 

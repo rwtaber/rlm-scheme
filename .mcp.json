@@ -1,11 +1,12 @@
 {
   "mcpServers": {
     "rlm-scheme": {
-      "command": "/home/rwt/code/rlm-scheme/.venv/bin/python",
-      "args": ["/home/rwt/code/rlm-scheme/mcp_server.py"],
-      "cwd": "/home/rwt/code/rlm-scheme",
+      "command": "C:/code/rlm-scheme/.venv/Scripts/python.exe",
+      "args": ["C:/code/rlm-scheme/mcp_server.py"],
+      "cwd": "C:/code/rlm-scheme",
       "env": {
-        "RLM_SUB_MODEL": "gpt-4o"
+        "RLM_SUB_MODEL": "gpt-4o",
+        "PATH": "C:/Program Files/Racket;C:/Windows/system32;C:/Windows;C:/Windows/System32/Wbem"
       }
     }
   }

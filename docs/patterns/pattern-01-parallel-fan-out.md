@@ -46,14 +46,14 @@ papers = json.loads(context)  # Assume context is JSON array
 [p.get('content', '')[:15000] for p in papers[:50]]  # First 15K chars each
 "))
 
-;; Step 2: Parallel fan-out with CHEAP model (gpt-4.1-nano)
+;; Step 2: Parallel fan-out with CHEAP model (gpt-3.5-turbo)
 (display "Analyzing 50 papers in parallel...\n")
 (define analyses (map-async
   (lambda (paper)
     (llm-query-async
       #:instruction "Find all mentions of ACE2 protein. Return JSON: [{mention: string, context: string, page: int}]"
       #:data paper
-      #:model "gpt-4.1-nano"  ;; CRITICAL: Use cheapest model for fan-out
+      #:model "gpt-3.5-turbo"  ;; CRITICAL: Use cheapest model for fan-out
       #:json #t
       #:temperature 0.0
       #:max-tokens 500))
@@ -73,14 +73,14 @@ for i, analysis_str in enumerate(all_analyses):
 print(json.dumps(all_mentions, indent=2))
 "))
 
-;; Step 4: Synthesize with EXPENSIVE model (gpt-4o)
+;; Step 4: Synthesize with EXPENSIVE model (gpt-4)
 (define synthesis (syntax-e (llm-query
   #:instruction "Synthesize ACE2 protein findings across 50 papers:
 1. Most common functions (with frequency)
 2. Novel findings
 3. Research gaps"
   #:data combined-json
-  #:model "gpt-4o"  ;; Expensive model for synthesis only
+  #:model "gpt-4"  ;; Expensive model for synthesis only
   #:temperature 0.3
   #:max-tokens 800)))
 
@@ -90,12 +90,12 @@ print(json.dumps(all_mentions, indent=2))
 ```
 
 ### Quantified Improvements
-**vs Naive approach (sequential with gpt-4o):**
+**vs Naive approach (sequential with gpt-4):**
 - **Latency:** 10× faster (25min → 2.5min)
   - Naive: 50 × 30s = 25 minutes
   - Fan-out: max(50/10 batches × 30s, synthesis 10s) ≈ 2.5 minutes
 - **Cost:** 7× cheaper ($2.50 → $0.35)
-  - Naive: 50 × $0.05 (gpt-4o) = $2.50
+  - Naive: 50 × $0.05 (gpt-4) = $2.50
   - Fan-out: 50 × $0.001 (nano) + 1 × $0.10 (synthesis) = $0.35
 - **Quality:** Comparable (nano good enough for extraction)
 
@@ -105,7 +105,7 @@ print(json.dumps(all_mentions, indent=2))
 - API calls: N (fan-out) + 1 (synthesis)
 
 ### Optimization Tips
-1. **Always use gpt-4.1-nano for fan-out** (not gpt-4o) - 25× cheaper
+1. **Always use gpt-3.5-turbo for fan-out** (not gpt-4) - 25× cheaper
 2. **Batch size 10-20 optimal** (#:max-concurrent 10)
 3. **Checkpoint after batches** for fault tolerance on large workloads
 4. **Use #:max-tokens** to cap response length (save cost)
@@ -114,7 +114,7 @@ print(json.dumps(all_mentions, indent=2))
 ### Common Mistakes
 ❌ Using expensive model for fan-out
 ```scheme
-(map-async (lambda (x) (llm-query-async ... #:model "gpt-4o")) items)
+(map-async (lambda (x) (llm-query-async ... #:model "gpt-4")) items)
 ;; 50× more expensive than necessary
 ```
 
@@ -126,8 +126,8 @@ print(json.dumps(all_mentions, indent=2))
 
 ❌ Synthesizing with cheap model
 ```scheme
-(llm-query #:data combined #:model "gpt-4.1-nano" ...)
-;; Synthesis needs reasoning power (use gpt-4o)
+(llm-query #:data combined #:model "gpt-3.5-turbo" ...)
+;; Synthesis needs reasoning power (use gpt-4)
 ```
 
 ### Compose With

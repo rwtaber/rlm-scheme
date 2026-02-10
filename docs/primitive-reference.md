@@ -103,7 +103,7 @@ This section documents all 27 scaffolding primitives available in rlm-scheme, or
 (define result (syntax-e (llm-query
   #:instruction "Analyze this text"
   #:data input
-  #:model "gpt-4o"
+  #:model "gpt-4"
   #:temperature 0.0
   #:max-tokens 500)))
 ```
@@ -118,8 +118,8 @@ This section documents all 27 scaffolding primitives available in rlm-scheme, or
 **Why it exists:** Parallelism. Launch multiple calls, await later.
 **Example:**
 ```scheme
-(define handle1 (llm-query-async #:instruction "Task 1" #:model "gpt-4o"))
-(define handle2 (llm-query-async #:instruction "Task 2" #:model "gpt-4o"))
+(define handle1 (llm-query-async #:instruction "Task 1" #:model "gpt-4"))
+(define handle2 (llm-query-async #:instruction "Task 2" #:model "gpt-4"))
 (define results (await-all (list handle1 handle2)))
 ```
 **Use when:** Parallel independent calls
@@ -135,7 +135,7 @@ This section documents all 27 scaffolding primitives available in rlm-scheme, or
 ```scheme
 (define code (unsafe-raw-query
   #:instruction "Write Scheme code"
-  #:model "gpt-4.1"))
+  #:model "code-davinci-002"))
 ;; Returns raw string, not syntax object
 ```
 **Use when:** Code generation, meta-programming
@@ -150,7 +150,7 @@ This section documents all 27 scaffolding primitives available in rlm-scheme, or
 **Example:**
 ```scheme
 (define results (map-async
-  (lambda (item) (llm-query-async #:instruction "..." #:data item #:model "gpt-4o"))
+  (lambda (item) (llm-query-async #:instruction "..." #:data item #:model "gpt-4"))
   items
   #:max-concurrent 10))
 ```
@@ -224,7 +224,7 @@ This section documents all 27 scaffolding primitives available in rlm-scheme, or
   #:instruction "Analyze section. You can use map-async to delegate."
   #:data section
   #:recursive #t
-  #:model "gpt-4o")
+  #:model "gpt-4")
 ```
 **Use when:** Hierarchical problems, each level needs autonomy
 **Common mistake:** Using with async (not supported), exceeding depth limit (max 3)

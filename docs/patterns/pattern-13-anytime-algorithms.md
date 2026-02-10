@@ -38,7 +38,7 @@ Level 3: GPT-4o refines -> 95% quality, 22s total
 (define draft-nano (syntax-e (llm-query
   #:instruction "Quick analysis. 2-3 paragraphs."
   #:data context
-  #:model "gpt-4.1-nano"
+  #:model "gpt-3.5-turbo"
   #:max-tokens 500)))
 
 (checkpoint "level1" draft-nano)
@@ -48,7 +48,7 @@ Level 3: GPT-4o refines -> 95% quality, 22s total
 (define draft-mini (syntax-e (llm-query
   #:instruction (string-append "Improve this analysis:\n" draft-nano)
   #:data context
-  #:model "gpt-4o-mini"
+  #:model "curie"
   #:max-tokens 800)))
 
 (checkpoint "level2" draft-mini)
@@ -58,7 +58,7 @@ Level 3: GPT-4o refines -> 95% quality, 22s total
 (define final (syntax-e (llm-query
   #:instruction (string-append "Expert refinement:\n" draft-mini)
   #:data context
-  #:model "gpt-4o"
+  #:model "gpt-4"
   #:max-tokens 1200)))
 
 (checkpoint "level3" final)

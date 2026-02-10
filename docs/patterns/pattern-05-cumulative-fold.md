@@ -76,7 +76,7 @@ UPDATE SYNTHESIS:
 4. Track: Consensus strengths, Consensus weaknesses, Contentious points
 
 Return updated synthesis.")
-                #:model "gpt-4o"
+                #:model "gpt-4"
                 #:temperature 0.3
                 #:max-tokens 800))])
         
@@ -94,7 +94,7 @@ Return updated synthesis.")
 2. Justification (consensus points)
 3. Priority actions for authors"
   #:data final-synthesis
-  #:model "gpt-4o"
+  #:model "gpt-4"
   #:max-tokens 400)))
 
 (finish (string-append "=== SYNTHESIS ===\n" final-synthesis
@@ -112,7 +112,7 @@ Return updated synthesis.")
 1. **Checkpoint intermediate synthesis:** After every 3 reviews, `(checkpoint "fold_state_3" current-synthesis)`. Recover from failures.
 2. **Max tokens per synthesis:** Cap at 800-1000 to prevent runaway context growth. Force summarization.
 3. **Early consensus detection:** If first 5 reviews all agree, remaining 5 add diminishing value. Consider stopping early.
-4. **Use cheaper model:** If reviews are short and clear, gpt-4o-mini may suffice ($0.15/1M vs $2.50/1M).
+4. **Use cheaper model:** If reviews are short and clear, curie may suffice ($0.15/1M vs $2.50/1M).
 
 ### Common Mistakes
 ❌ Using fold when parallel would work (unnecessary slowdown)

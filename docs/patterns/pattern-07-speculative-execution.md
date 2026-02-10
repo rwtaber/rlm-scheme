@@ -28,7 +28,7 @@ You have API calls with terrible tail latency. Median latency is 2s (acceptable)
 Launch 3 parallel approaches → await-any → First result wins → Cancel remaining
          ↓              ↓              ↓
     approach-1    approach-2    approach-3
-    (gpt-4o-mini)  (gpt-4o)    (gpt-4.1-nano)
+    (curie)  (gpt-4)    (gpt-3.5-turbo)
          |             |             |
          +----- RACE (first wins) ---+
 ```
@@ -51,7 +51,7 @@ Launch 3 parallel approaches → await-any → First result wins → Cancel rema
   (llm-query-async
     #:instruction "Analyze CT scan. Extract: finding, severity (1-5), follow-up."
     #:data context
-    #:model "gpt-4o-mini"  ;; Fast, cheap
+    #:model "curie"  ;; Fast, cheap
     #:temperature 0.0
     #:max-tokens 300))
 
@@ -59,7 +59,7 @@ Launch 3 parallel approaches → await-any → First result wins → Cancel rema
   (llm-query-async
     #:instruction "Radiologist AI. Return JSON: {finding, severity, followup}"
     #:data context
-    #:model "gpt-4o"  ;; Slower, higher quality
+    #:model "gpt-4"  ;; Slower, higher quality
     #:json #t
     #:temperature 0.0
     #:max-tokens 250))
@@ -68,7 +68,7 @@ Launch 3 parallel approaches → await-any → First result wins → Cancel rema
   (llm-query-async
     #:instruction "Parse radiology report: abnormality, severity, next steps."
     #:data context
-    #:model "gpt-4.1-nano"  ;; Fastest, lower quality
+    #:model "gpt-3.5-turbo"  ;; Fastest, lower quality
     #:temperature 0.0
     #:max-tokens 200))
 
@@ -98,10 +98,10 @@ Launch 3 parallel approaches → await-any → First result wins → Cancel rema
 - **Complexity:** O(1) calls (3 parallel), O(fastest) latency
 
 ### Optimization Tips
-1. **Diverse approaches:** Use different models (gpt-4o-mini, gpt-4o, gpt-4.1-nano) - if one is overloaded, others likely not.
+1. **Diverse approaches:** Use different models (curie, gpt-4, gpt-3.5-turbo) - if one is overloaded, others likely not.
 2. **Cancel aggressively:** Call `cancel_call` on remaining handles ASAP to minimize wasted cost.
 3. **2-way hedging if budget-tight:** Use 2 approaches instead of 3 (1.5× cost, still significant P99 improvement).
-4. **Cheapest model first:** Launch gpt-4.1-nano first (cheapest), then gpt-4o-mini, then gpt-4o. If nano wins, massive savings.
+4. **Cheapest model first:** Launch gpt-3.5-turbo first (cheapest), then curie, then gpt-4. If nano wins, massive savings.
 5. **Track which wins:** Log which approach wins most often, optimize future hedging strategy.
 
 ### Common Mistakes
@@ -119,7 +119,7 @@ Launch 3 parallel approaches → await-any → First result wins → Cancel rema
 
 ❌ Using identical approaches (same model 3 times)
 ```scheme
-;; If gpt-4o is overloaded, all 3 instances will be slow
+;; If gpt-4 is overloaded, all 3 instances will be slow
 ;; Fix: Use diverse models (mini, standard, nano) to decorrelate failures
 ```
 
