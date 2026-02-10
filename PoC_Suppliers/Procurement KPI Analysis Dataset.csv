@@ -1,0 +1,778 @@
+PO_ID,Supplier,Order_Date,Delivery_Date,Item_Category,Order_Status,Quantity,Unit_Price,Negotiated_Price,Defective_Units,Compliance
+PO-00001,Alpha_Inc,2023-10-17,2023-10-25,Office Supplies,Cancelled,1176,20.13,17.81,,Yes
+PO-00002,Delta_Logistics,2022-04-25,2022-05-05,Office Supplies,Delivered,1509,39.32,37.34,235.0,Yes
+PO-00003,Gamma_Co,2022-01-26,2022-02-15,MRO,Delivered,910,95.51,92.26,41.0,Yes
+PO-00004,Beta_Supplies,2022-10-09,2022-10-28,Packaging,Delivered,1344,99.85,95.52,112.0,Yes
+PO-00005,Delta_Logistics,2022-09-08,2022-09-20,Raw Materials,Delivered,1180,64.07,60.53,171.0,No
+PO-00006,Epsilon_Group,2022-08-17,2022-08-29,MRO,Delivered,1145,69.21,63.57,39.0,Yes
+PO-00007,Gamma_Co,2022-05-23,2022-06-03,MRO,Delivered,1774,51.37,47.82,96.0,No
+PO-00008,Alpha_Inc,2022-04-15,2022-04-29,MRO,Delivered,1094,36.93,32.78,22.0,Yes
+PO-00009,Gamma_Co,2023-11-24,2023-11-28,Raw Materials,Partially Delivered,1688,43.93,39.89,89.0,Yes
+PO-00010,Gamma_Co,2023-07-13,2023-07-25,Raw Materials,Pending,171,76.87,70.2,8.0,Yes
+PO-00011,Epsilon_Group,2022-03-31,2022-04-15,Raw Materials,Delivered,5000,78.49,73.68,18.0,Yes
+PO-00012,Beta_Supplies,2023-08-28,2023-09-11,Raw Materials,Delivered,5000,88.96,86.58,115.0,Yes
+PO-00013,Beta_Supplies,2023-03-09,2023-03-26,Electronics,Pending,5000,86.74,74.86,51.0,Yes
+PO-00014,Beta_Supplies,2022-02-02,,MRO,Delivered,5000,18.3,16.88,,Yes
+PO-00015,Delta_Logistics,2022-01-31,2022-02-18,Electronics,Pending,5000,54.5,48.45,22.0,Yes
+PO-00016,Beta_Supplies,2022-04-06,2022-04-21,Packaging,Delivered,5000,15.41,15.12,,Yes
+PO-00017,Delta_Logistics,2022-08-12,2022-08-31,MRO,Delivered,1173,61.54,55.49,172.0,No
+PO-00018,Epsilon_Group,2022-08-27,2022-09-04,Raw Materials,Delivered,921,51.48,50.61,,Yes
+PO-00019,Gamma_Co,2023-06-02,2023-06-05,Raw Materials,Partially Delivered,1737,97.53,87.37,79.0,Yes
+PO-00020,Delta_Logistics,2023-09-09,2023-09-24,Raw Materials,Delivered,180,45.74,38.89,,No
+PO-00021,Epsilon_Group,2022-01-28,2022-02-12,Electronics,Cancelled,1735,20.54,19.69,49.0,Yes
+PO-00022,Delta_Logistics,2023-07-29,2023-08-11,Raw Materials,Delivered,1382,24.93,23.75,,Yes
+PO-00023,Epsilon_Group,2022-07-23,2022-08-08,MRO,Delivered,819,80.89,77.03,29.0,Yes
+PO-00024,Beta_Supplies,2023-10-28,2023-11-03,Office Supplies,Partially Delivered,393,72.53,66.31,42.0,No
+PO-00025,Beta_Supplies,2023-12-20,2024-01-01,MRO,Delivered,1565,21.3,20.09,161.0,Yes
+PO-00026,Epsilon_Group,2023-07-13,2023-07-24,Packaging,Delivered,1487,19.15,17.24,,Yes
+PO-00027,Alpha_Inc,2023-03-06,2023-03-26,MRO,Delivered,855,78.2,67.16,17.0,Yes
+PO-00028,Epsilon_Group,2022-08-14,2022-08-23,Raw Materials,Delivered,435,17.13,15.84,8.0,Yes
+PO-00029,Delta_Logistics,2023-04-05,2023-04-22,MRO,Delivered,1265,90.26,79.47,187.0,Yes
+PO-00030,Epsilon_Group,2023-08-27,,MRO,Delivered,1005,80.55,73.31,30.0,Yes
+PO-00031,Gamma_Co,2022-10-12,2022-10-26,Electronics,Delivered,326,18.1,15.92,,No
+PO-00032,Alpha_Inc,2022-01-07,2022-01-15,Office Supplies,Delivered,1234,17.64,15.66,26.0,Yes
+PO-00033,Epsilon_Group,2022-06-13,2022-06-29,MRO,Delivered,509,101.27,97.82,19.0,Yes
+PO-00034,Alpha_Inc,2023-12-16,2023-12-17,Packaging,Delivered,1387,48.71,43.71,27.0,Yes
+PO-00035,Alpha_Inc,2023-03-09,2023-03-17,MRO,Delivered,71,46.39,43.18,0.0,Yes
+PO-00036,Epsilon_Group,2022-12-15,2022-12-23,Office Supplies,Delivered,302,87.73,81.52,9.0,Yes
+PO-00037,Epsilon_Group,2022-10-12,2022-10-31,Office Supplies,Pending,797,99.54,91.37,18.0,Yes
+PO-00038,Beta_Supplies,2022-06-09,2022-06-27,Office Supplies,Pending,906,101.21,90.9,94.0,Yes
+PO-00039,Epsilon_Group,2022-08-09,2022-08-23,Office Supplies,Delivered,1634,80.53,76.15,50.0,Yes
+PO-00040,Epsilon_Group,2022-12-11,,Office Supplies,Delivered,524,46.28,39.65,14.0,Yes
+PO-00041,Beta_Supplies,2022-04-15,2022-04-27,Electronics,Delivered,1132,17.78,15.36,96.0,Yes
+PO-00042,Beta_Supplies,2022-04-05,2022-04-14,Office Supplies,Delivered,560,81.14,77.87,34.0,No
+PO-00043,Gamma_Co,2023-01-25,2023-02-02,Electronics,Delivered,1755,63.87,58.4,85.0,Yes
+PO-00044,Epsilon_Group,2022-04-10,2022-04-17,MRO,Delivered,1549,48.9,42.42,48.0,Yes
+PO-00045,Delta_Logistics,2023-01-03,2023-01-21,MRO,Delivered,749,97.07,94.16,123.0,Yes
+PO-00046,Alpha_Inc,2022-12-19,,Electronics,Delivered,1025,21.11,19.25,15.0,Yes
+PO-00047,Beta_Supplies,2023-09-11,2023-09-18,Raw Materials,Delivered,1856,59.77,50.81,191.0,Yes
+PO-00048,Epsilon_Group,2022-09-28,2022-10-14,Office Supplies,Delivered,239,11.46,11.28,4.0,Yes
+PO-00049,Delta_Logistics,2022-02-14,2022-03-05,Office Supplies,Pending,1007,52.44,46.06,167.0,Yes
+PO-00050,Alpha_Inc,2023-04-16,,MRO,Pending,736,16.2,15.33,18.0,Yes
+PO-00051,Epsilon_Group,2023-07-04,2023-07-14,Electronics,Delivered,1007,22.56,19.59,,Yes
+PO-00052,Delta_Logistics,2022-05-08,,Office Supplies,Delivered,612,20.99,19.75,102.0,Yes
+PO-00053,Alpha_Inc,2023-01-23,2023-02-02,MRO,Pending,1949,72.53,63.26,48.0,No
+PO-00054,Delta_Logistics,2022-03-22,2022-03-28,Office Supplies,Cancelled,1640,77.92,76.41,262.0,No
+PO-00055,Beta_Supplies,2023-07-20,2023-08-07,Electronics,Delivered,1317,68.13,60.52,136.0,Yes
+PO-00056,Epsilon_Group,2022-10-28,2022-10-30,Raw Materials,Delivered,881,100.94,95.05,30.0,Yes
+PO-00057,Delta_Logistics,2023-10-06,,Packaging,Delivered,1578,48.33,42.77,206.0,Yes
+PO-00058,Delta_Logistics,2023-09-26,2023-10-01,MRO,Delivered,1204,39.29,35.44,,Yes
+PO-00059,Epsilon_Group,2023-01-06,2023-01-22,MRO,Pending,1558,93.46,91.27,39.0,Yes
+PO-00060,Alpha_Inc,2023-08-15,2023-08-16,Packaging,Delivered,1892,32.99,28.81,35.0,Yes
+PO-00061,Epsilon_Group,2022-07-16,2022-08-01,Packaging,Delivered,696,99.59,90.18,25.0,Yes
+PO-00062,Delta_Logistics,2023-12-23,2024-01-03,MRO,Partially Delivered,70,12.37,11.04,10.0,Yes
+PO-00063,Gamma_Co,2022-03-13,2022-03-15,Raw Materials,Delivered,890,98.26,93.14,49.0,Yes
+PO-00064,Alpha_Inc,2022-02-16,2022-03-04,MRO,Delivered,216,13.95,12.31,5.0,Yes
+PO-00065,Delta_Logistics,2023-11-09,2023-11-12,Packaging,Delivered,1347,100.13,94.3,200.0,Yes
+PO-00066,Gamma_Co,2022-08-22,2022-08-25,Office Supplies,Partially Delivered,437,59.51,56.45,25.0,No
+PO-00067,Alpha_Inc,2022-10-24,2022-10-26,Electronics,Delivered,650,103.84,88.28,12.0,Yes
+PO-00068,Beta_Supplies,2022-03-23,2022-04-11,Office Supplies,Delivered,365,16.81,15.41,38.0,Yes
+PO-00069,Epsilon_Group,2022-08-27,,Raw Materials,Cancelled,63,61.94,53.8,,Yes
+PO-00070,Alpha_Inc,2022-04-14,2022-04-22,MRO,Delivered,291,98.7,87.02,9.0,Yes
+PO-00071,Alpha_Inc,2023-01-25,2023-02-08,MRO,Cancelled,826,60.5,57.18,18.0,Yes
+PO-00072,Delta_Logistics,2022-10-12,2022-11-01,Electronics,Pending,1419,69.64,59.28,194.0,Yes
+PO-00073,Gamma_Co,2023-04-10,2023-04-27,Office Supplies,Delivered,614,78.06,73.95,40.0,Yes
+PO-00074,Alpha_Inc,2023-10-13,2023-10-28,Electronics,Delivered,947,56.25,54.25,19.0,Yes
+PO-00075,Epsilon_Group,2023-01-09,2023-01-28,Raw Materials,Delivered,1413,70.47,69.65,,Yes
+PO-00076,Alpha_Inc,2022-06-16,,Office Supplies,Partially Delivered,141,64.15,58.32,,Yes
+PO-00077,Alpha_Inc,2023-01-15,2023-02-04,Office Supplies,Delivered,1440,96.57,83.87,36.0,Yes
+PO-00078,Delta_Logistics,2022-12-30,2023-01-03,Raw Materials,Delivered,1005,14.87,12.79,,No
+PO-00079,Alpha_Inc,2022-08-03,,MRO,Delivered,1528,36.52,33.0,31.0,No
+PO-00080,Gamma_Co,2023-11-18,2023-11-25,MRO,Delivered,1501,106.05,100.99,77.0,No
+PO-00081,Delta_Logistics,2022-10-01,2022-10-04,Packaging,Delivered,558,94.18,81.4,,No
+PO-00082,Beta_Supplies,2023-12-20,2023-12-26,MRO,Delivered,825,56.88,50.84,,Yes
+PO-00083,Beta_Supplies,2023-12-01,2023-12-07,Electronics,Cancelled,84,73.38,71.42,9.0,Yes
+PO-00084,Delta_Logistics,2023-10-26,2023-11-10,Raw Materials,Delivered,255,38.64,33.59,27.0,No
+PO-00085,Gamma_Co,2022-03-15,2022-03-31,MRO,Delivered,1154,27.2,26.07,58.0,Yes
+PO-00086,Delta_Logistics,2023-09-16,2023-09-24,Office Supplies,Delivered,1635,56.91,54.37,262.0,No
+PO-00087,Delta_Logistics,2023-10-13,2023-10-23,Raw Materials,Delivered,1945,46.19,40.12,278.0,No
+PO-00088,Delta_Logistics,2022-06-25,2022-07-10,MRO,Partially Delivered,1461,64.09,63.39,228.0,No
+PO-00089,Delta_Logistics,2023-07-01,2023-07-09,Electronics,Delivered,1075,18.53,16.12,147.0,Yes
+PO-00090,Alpha_Inc,2022-09-08,,Packaging,Delivered,1071,101.6,93.91,25.0,Yes
+PO-00091,Epsilon_Group,2022-06-17,2022-07-06,Packaging,Pending,1463,101.23,86.17,43.0,Yes
+PO-00092,Beta_Supplies,2023-04-19,2023-04-26,Raw Materials,Delivered,615,78.3,73.68,69.0,Yes
+PO-00093,Gamma_Co,2023-01-24,2023-02-11,Electronics,Delivered,1179,61.74,56.28,,Yes
+PO-00094,Alpha_Inc,2022-10-04,2022-10-09,Electronics,Partially Delivered,1845,39.56,37.63,45.0,Yes
+PO-00095,Beta_Supplies,2023-10-18,,Electronics,Cancelled,1895,91.98,86.27,170.0,Yes
+PO-00096,Epsilon_Group,2023-12-06,2023-12-09,MRO,Partially Delivered,1550,79.86,69.57,32.0,No
+PO-00097,Delta_Logistics,2023-07-25,2023-08-04,Packaging,Delivered,752,26.85,24.37,,No
+PO-00098,Epsilon_Group,2022-08-13,2022-09-01,Electronics,Delivered,451,95.2,90.07,21.0,Yes
+PO-00099,Beta_Supplies,2023-12-03,,Office Supplies,Delivered,779,93.69,90.92,66.0,Yes
+PO-00100,Beta_Supplies,2022-11-29,2022-12-14,MRO,Pending,1629,100.26,86.44,187.0,No
+PO-00101,Alpha_Inc,2022-02-27,2022-02-22,Office Supplies,Delivered,211,75.69,65.4,2.0,Yes
+PO-00102,Alpha_Inc,2022-08-23,,Office Supplies,Delivered,251,67.49,64.48,2.0,Yes
+PO-00103,Gamma_Co,2022-02-02,2022-02-18,Raw Materials,Delivered,1045,47.88,44.65,69.0,Yes
+PO-00104,Delta_Logistics,2022-11-20,2022-12-10,MRO,Delivered,319,98.64,89.15,57.0,Yes
+PO-00105,Epsilon_Group,2023-02-15,2023-03-01,Office Supplies,Partially Delivered,1936,93.66,92.24,58.0,Yes
+PO-00106,Delta_Logistics,2022-10-02,2022-10-22,MRO,Cancelled,865,14.7,13.14,135.0,No
+PO-00107,Epsilon_Group,2022-03-09,2022-03-12,Electronics,Delivered,1344,12.5,10.87,44.0,Yes
+PO-00108,Delta_Logistics,2022-08-05,2022-08-24,Raw Materials,Pending,505,45.42,40.37,62.0,Yes
+PO-00109,Beta_Supplies,2023-08-04,2023-08-05,Packaging,Delivered,1535,90.83,78.28,151.0,No
+PO-00110,Beta_Supplies,2022-11-19,,Office Supplies,Delivered,1800,103.8,96.27,166.0,Yes
+PO-00111,Delta_Logistics,2022-08-06,2022-08-15,Raw Materials,Pending,1325,24.36,22.75,206.0,Yes
+PO-00112,Gamma_Co,2023-11-03,2023-11-09,Raw Materials,Delivered,1066,70.45,65.88,56.0,No
+PO-00113,Beta_Supplies,2023-05-27,2023-06-11,Raw Materials,Delivered,1775,47.82,45.86,180.0,Yes
+PO-00114,Gamma_Co,2023-02-10,,Raw Materials,Partially Delivered,345,103.62,98.09,25.0,No
+PO-00115,Beta_Supplies,2023-10-21,2023-11-09,Electronics,Delivered,1798,94.8,91.83,,Yes
+PO-00116,Alpha_Inc,2023-04-15,2023-05-01,MRO,Delivered,769,91.86,86.55,17.0,Yes
+PO-00117,Alpha_Inc,2022-05-27,,Packaging,Delivered,1822,53.23,47.49,39.0,Yes
+PO-00118,Delta_Logistics,2022-09-29,2022-10-13,Packaging,Delivered,387,49.23,45.41,61.0,Yes
+PO-00119,Epsilon_Group,2022-05-23,2022-05-27,MRO,Delivered,928,35.3,32.52,26.0,Yes
+PO-00120,Alpha_Inc,2022-09-10,2022-09-21,Packaging,Partially Delivered,1126,15.68,14.97,27.0,Yes
+PO-00121,Beta_Supplies,2023-07-29,2023-08-14,Raw Materials,Cancelled,841,95.73,85.33,81.0,Yes
+PO-00122,Beta_Supplies,2023-07-06,2023-07-19,Electronics,Delivered,1995,90.65,77.75,206.0,Yes
+PO-00123,Alpha_Inc,2022-09-27,2022-10-15,Raw Materials,Delivered,266,103.97,101.44,6.0,Yes
+PO-00124,Alpha_Inc,2023-08-22,2023-08-25,Raw Materials,Cancelled,813,109.17,107.39,14.0,Yes
+PO-00125,Epsilon_Group,2023-03-15,2023-03-26,Electronics,Delivered,237,64.19,59.01,7.0,Yes
+PO-00126,Alpha_Inc,2023-08-21,2023-09-03,Office Supplies,Cancelled,429,86.73,75.09,9.0,Yes
+PO-00127,Delta_Logistics,2023-02-13,2023-02-14,Packaging,Delivered,542,101.21,93.11,78.0,No
+PO-00128,Epsilon_Group,2023-01-06,2023-01-24,Electronics,Delivered,1114,91.66,85.53,35.0,Yes
+PO-00129,Alpha_Inc,2022-08-13,2022-08-15,MRO,Delivered,1230,33.39,30.85,26.0,Yes
+PO-00130,Beta_Supplies,2022-05-22,2022-06-03,MRO,Delivered,64,51.56,50.88,5.0,Yes
+PO-00131,Alpha_Inc,2023-06-06,2023-06-22,MRO,Delivered,1886,23.46,23.18,,Yes
+PO-00132,Delta_Logistics,2023-05-21,2023-05-23,Office Supplies,Delivered,114,103.53,101.54,14.0,Yes
+PO-00133,Delta_Logistics,2022-04-04,2022-04-22,Electronics,Cancelled,1930,65.52,56.9,282.0,Yes
+PO-00134,Beta_Supplies,2022-02-18,2022-02-28,Office Supplies,Pending,1912,30.73,29.82,191.0,Yes
+PO-00135,Epsilon_Group,2022-04-23,2022-05-09,MRO,Delivered,570,71.51,66.47,,Yes
+PO-00136,Beta_Supplies,2022-06-06,2022-06-26,Raw Materials,Delivered,1417,67.27,60.62,,Yes
+PO-00137,Alpha_Inc,2023-10-05,2023-10-11,Raw Materials,Delivered,1202,46.67,44.13,21.0,No
+PO-00138,Beta_Supplies,2022-06-13,2022-06-14,Office Supplies,Delivered,697,20.73,19.83,78.0,No
+PO-00139,Epsilon_Group,2023-11-28,2023-12-01,MRO,Delivered,1545,78.19,76.91,42.0,Yes
+PO-00140,Gamma_Co,2023-03-09,2023-03-13,MRO,Partially Delivered,1136,60.81,58.25,62.0,Yes
+PO-00141,Beta_Supplies,2023-09-03,2023-09-07,MRO,Delivered,1212,87.46,74.55,118.0,No
+PO-00142,Epsilon_Group,2022-03-07,2022-03-12,MRO,Delivered,1572,57.38,49.32,40.0,Yes
+PO-00143,Gamma_Co,2023-01-30,2023-02-09,Electronics,Delivered,642,91.9,81.49,26.0,Yes
+PO-00144,Epsilon_Group,2023-01-26,2023-02-04,Office Supplies,Delivered,441,63.25,54.12,16.0,Yes
+PO-00145,Epsilon_Group,2023-09-03,2023-09-19,Office Supplies,Delivered,1748,66.53,57.11,,Yes
+PO-00146,Gamma_Co,2023-04-25,,Electronics,Pending,468,95.57,91.8,24.0,Yes
+PO-00147,Beta_Supplies,2023-06-26,2023-07-14,Raw Materials,Delivered,338,50.25,46.28,49.0,No
+PO-00148,Gamma_Co,2022-09-15,2022-09-22,Office Supplies,Delivered,428,22.94,21.52,26.0,Yes
+PO-00149,Beta_Supplies,2023-07-21,,Packaging,Delivered,1846,13.72,12.62,216.0,Yes
+PO-00150,Epsilon_Group,2022-01-12,2022-01-17,Office Supplies,Delivered,1563,77.96,70.8,41.0,Yes
+PO-00151,Beta_Supplies,2023-11-28,2023-12-07,Office Supplies,Delivered,280,73.07,69.29,30.0,Yes
+PO-00152,Delta_Logistics,2022-04-28,2022-05-12,Raw Materials,Delivered,1067,74.47,64.16,,No
+PO-00153,Gamma_Co,2023-11-30,2023-12-17,Electronics,Pending,90,32.38,29.96,7.0,Yes
+PO-00154,Gamma_Co,2023-07-04,2023-07-05,Raw Materials,Delivered,1101,24.28,22.73,59.0,No
+PO-00155,Alpha_Inc,2022-10-01,2022-10-11,Raw Materials,Delivered,184,11.82,10.51,4.0,Yes
+PO-00156,Epsilon_Group,2023-10-19,2023-11-07,Electronics,Delivered,250,45.92,41.02,3.0,Yes
+PO-00157,Epsilon_Group,2022-12-15,,Packaging,Cancelled,1913,66.56,61.34,61.0,Yes
+PO-00158,Beta_Supplies,2022-04-25,2022-04-30,Electronics,Delivered,829,45.98,40.39,,Yes
+PO-00159,Delta_Logistics,2022-10-28,2022-11-13,Raw Materials,Delivered,979,51.59,49.69,148.0,Yes
+PO-00160,Epsilon_Group,2023-03-22,2023-04-09,Electronics,Partially Delivered,1106,97.77,90.45,31.0,Yes
+PO-00161,Delta_Logistics,2022-06-11,2022-06-24,Office Supplies,Pending,1121,42.38,38.34,152.0,Yes
+PO-00162,Alpha_Inc,2023-04-10,2023-04-21,Office Supplies,Delivered,552,60.48,56.78,10.0,Yes
+PO-00163,Gamma_Co,2022-01-04,2022-01-12,Packaging,Delivered,456,80.53,77.86,26.0,Yes
+PO-00164,Delta_Logistics,2022-09-27,2022-10-05,Packaging,Delivered,1647,47.52,44.92,,Yes
+PO-00165,Epsilon_Group,2023-05-28,2023-06-11,Electronics,Pending,1801,71.27,61.24,43.0,Yes
+PO-00166,Gamma_Co,2022-07-02,2022-07-18,Electronics,Delivered,854,90.24,85.53,,Yes
+PO-00167,Delta_Logistics,2023-06-04,2023-06-17,Electronics,Delivered,148,103.57,98.62,23.0,No
+PO-00168,Delta_Logistics,2022-04-19,2022-04-24,MRO,Delivered,733,23.59,22.85,92.0,Yes
+PO-00169,Beta_Supplies,2023-10-03,2023-10-05,Raw Materials,Delivered,1945,103.2,88.56,,Yes
+PO-00170,Gamma_Co,2022-11-02,2022-11-21,Raw Materials,Delivered,775,57.0,49.14,48.0,Yes
+PO-00171,Delta_Logistics,2023-10-17,2023-10-21,Packaging,Delivered,1620,36.73,33.45,235.0,No
+PO-00172,Beta_Supplies,2023-06-04,2023-06-19,Office Supplies,Delivered,1010,55.68,50.86,,Yes
+PO-00173,Epsilon_Group,2023-09-16,2023-10-01,Office Supplies,Delivered,1812,108.02,101.02,51.0,Yes
+PO-00174,Delta_Logistics,2022-07-23,2022-07-28,Office Supplies,Delivered,662,55.97,50.0,100.0,Yes
+PO-00175,Beta_Supplies,2022-06-06,2022-06-11,Office Supplies,Pending,1535,40.58,38.71,165.0,Yes
+PO-00176,Beta_Supplies,2023-01-18,2023-01-27,Raw Materials,Delivered,692,71.03,67.74,70.0,Yes
+PO-00177,Gamma_Co,2022-06-15,2022-06-28,MRO,Delivered,1842,32.4,28.08,96.0,Yes
+PO-00178,Beta_Supplies,2023-07-07,2023-07-18,Office Supplies,Cancelled,1078,18.34,17.41,102.0,Yes
+PO-00179,Delta_Logistics,2023-06-28,2023-07-16,Packaging,Delivered,1291,23.44,22.23,,Yes
+PO-00180,Alpha_Inc,2022-01-01,2022-01-12,Electronics,Delivered,552,21.52,18.79,13.0,Yes
+PO-00181,Epsilon_Group,2023-09-06,2023-09-22,Electronics,Delivered,816,26.04,25.61,28.0,Yes
+PO-00182,Delta_Logistics,2022-11-28,2022-11-30,Packaging,Delivered,447,23.62,21.81,50.0,Yes
+PO-00183,Delta_Logistics,2023-05-16,2023-05-24,Packaging,Partially Delivered,920,73.09,70.14,,Yes
+PO-00184,Epsilon_Group,2022-01-20,2022-01-30,Packaging,Partially Delivered,844,26.37,25.08,38.0,Yes
+PO-00185,Epsilon_Group,2022-04-25,,MRO,Delivered,442,41.73,36.45,15.0,Yes
+PO-00186,Beta_Supplies,2023-01-07,2023-01-21,Electronics,Cancelled,256,96.15,83.44,26.0,Yes
+PO-00187,Delta_Logistics,2022-11-11,,MRO,Partially Delivered,1088,55.29,53.04,161.0,No
+PO-00188,Beta_Supplies,2022-09-03,2022-09-07,Office Supplies,Delivered,1931,72.88,64.69,187.0,Yes
+PO-00189,Gamma_Co,2022-03-01,2022-03-11,Electronics,Delivered,1627,25.76,25.09,74.0,Yes
+PO-00190,Beta_Supplies,2022-09-04,,Packaging,Delivered,941,28.4,27.21,,No
+PO-00191,Gamma_Co,2023-08-04,2023-08-06,MRO,Delivered,1534,14.98,12.79,,Yes
+PO-00192,Alpha_Inc,2022-03-22,2022-04-03,Raw Materials,Delivered,1764,25.46,24.52,46.0,Yes
+PO-00193,Delta_Logistics,2022-03-29,2022-04-06,Electronics,Delivered,1648,35.42,31.46,,No
+PO-00194,Gamma_Co,2023-05-13,2023-06-01,Packaging,Delivered,913,28.01,24.06,53.0,Yes
+PO-00195,Alpha_Inc,2022-03-12,2022-03-18,Packaging,Cancelled,792,18.16,17.25,17.0,Yes
+PO-00196,Epsilon_Group,2023-06-30,2023-07-03,Office Supplies,Partially Delivered,1314,22.63,21.06,44.0,Yes
+PO-00197,Beta_Supplies,2022-05-09,2022-05-22,MRO,Delivered,613,52.5,45.19,70.0,Yes
+PO-00198,Alpha_Inc,2022-05-12,2022-05-20,Office Supplies,Delivered,1070,29.14,26.63,24.0,Yes
+PO-00199,Gamma_Co,2023-11-07,2023-11-26,Raw Materials,Partially Delivered,145,47.49,42.76,6.0,Yes
+PO-00200,Delta_Logistics,2023-05-02,2023-05-17,Raw Materials,Delivered,1973,59.73,54.95,291.0,Yes
+PO-00201,Epsilon_Group,2023-07-17,2023-08-01,Office Supplies,Delivered,1807,78.63,73.08,100.0,Yes
+PO-00202,Epsilon_Group,2022-06-19,2022-06-20,Electronics,Delivered,534,13.88,12.51,100.0,Yes
+PO-00203,Alpha_Inc,2022-09-29,2022-10-14,Electronics,Delivered,1480,85.22,75.48,100.0,Yes
+PO-00204,Alpha_Inc,2023-06-25,,Office Supplies,Delivered,280,72.16,62.38,100.0,Yes
+PO-00205,Beta_Supplies,2023-09-14,2023-09-20,Office Supplies,Cancelled,798,19.09,17.76,100.0,Yes
+PO-00206,Epsilon_Group,2023-03-10,2023-03-22,Electronics,Delivered,1728,94.83,90.2,100.0,Yes
+PO-00207,Epsilon_Group,2022-08-05,,MRO,Delivered,1244,96.13,84.78,43.0,Yes
+PO-00208,Beta_Supplies,2023-07-07,2023-07-21,Office Supplies,Delivered,590,16.89,15.56,46.0,No
+PO-00209,Delta_Logistics,2023-12-08,2023-12-23,Packaging,Delivered,1109,38.93,33.33,152.0,Yes
+PO-00210,Beta_Supplies,2022-07-25,2022-08-01,MRO,Delivered,574,85.03,82.55,54.0,Yes
+PO-00211,Gamma_Co,2024-01-01,,Office Supplies,Delivered,1233,86.62,76.59,65.0,Yes
+PO-00212,Gamma_Co,2022-11-16,2022-11-20,Packaging,Delivered,1912,27.94,25.59,83.0,No
+PO-00213,Alpha_Inc,2023-02-13,2023-03-04,Packaging,Delivered,1772,30.72,27.76,46.0,No
+PO-00214,Beta_Supplies,2023-11-19,2023-11-29,Office Supplies,Delivered,1316,48.11,41.9,135.0,Yes
+PO-00215,Beta_Supplies,2023-10-28,,Office Supplies,Delivered,1159,59.24,58.08,,Yes
+PO-00216,Alpha_Inc,2023-01-18,2023-01-31,Office Supplies,Delivered,1869,69.58,67.5,31.0,Yes
+PO-00217,Delta_Logistics,2023-03-25,2023-04-13,Packaging,Delivered,627,46.23,42.87,,Yes
+PO-00218,Beta_Supplies,2023-06-14,2023-06-16,Raw Materials,Pending,731,56.02,54.78,70.0,No
+PO-00219,Epsilon_Group,2023-04-08,,Office Supplies,Cancelled,606,83.07,79.22,16.0,Yes
+PO-00220,Beta_Supplies,2022-05-04,2022-05-14,Office Supplies,Delivered,1647,13.57,12.33,157.0,Yes
+PO-00221,Delta_Logistics,2022-09-11,2022-09-19,MRO,Delivered,1062,34.03,30.46,,Yes
+PO-00222,Beta_Supplies,2022-08-19,2022-08-31,Office Supplies,Delivered,695,76.8,69.76,,No
+PO-00223,Epsilon_Group,2022-03-07,2022-03-14,MRO,Delivered,845,91.47,86.97,,Yes
+PO-00224,Gamma_Co,2022-12-13,2022-12-18,MRO,Delivered,1101,59.13,52.51,54.0,Yes
+PO-00225,Gamma_Co,2022-01-22,2022-01-24,Raw Materials,Delivered,1693,57.89,49.84,88.0,Yes
+PO-00226,Delta_Logistics,2023-08-26,2023-09-10,Office Supplies,Cancelled,1629,21.51,19.41,250.0,No
+PO-00227,Delta_Logistics,2023-07-22,2023-08-03,Raw Materials,Delivered,1413,54.79,50.42,,Yes
+PO-00228,Epsilon_Group,2022-08-24,2022-08-27,Packaging,Delivered,1871,59.96,58.54,47.0,Yes
+PO-00229,Gamma_Co,2023-08-26,,Raw Materials,Delivered,1404,34.85,30.5,78.0,Yes
+PO-00230,Gamma_Co,2022-08-14,2022-08-28,Electronics,Delivered,1713,35.43,34.11,74.0,Yes
+PO-00231,Gamma_Co,2022-01-08,2022-01-13,Electronics,Delivered,1579,43.96,43.41,74.0,Yes
+PO-00232,Gamma_Co,2022-03-14,2022-03-26,Electronics,Delivered,1421,11.92,11.72,76.0,Yes
+PO-00233,Epsilon_Group,2023-12-26,2024-01-04,MRO,Delivered,1546,43.47,37.37,53.0,Yes
+PO-00234,Delta_Logistics,2023-10-09,2023-10-18,Electronics,Delivered,1304,32.08,29.36,,Yes
+PO-00235,Delta_Logistics,2022-03-02,,Raw Materials,Delivered,239,39.87,35.47,32.0,Yes
+PO-00236,Alpha_Inc,2022-08-23,,Office Supplies,Delivered,1298,21.51,20.83,,Yes
+PO-00237,Delta_Logistics,2022-03-11,,MRO,Delivered,1458,91.05,81.56,220.0,Yes
+PO-00238,Gamma_Co,2022-02-02,2022-02-13,MRO,Delivered,1450,63.74,59.11,71.0,Yes
+PO-00239,Beta_Supplies,2022-12-05,2022-12-20,Electronics,Delivered,1356,75.03,63.86,131.0,Yes
+PO-00240,Gamma_Co,2022-03-14,,Packaging,Delivered,682,81.84,71.86,40.0,Yes
+PO-00241,Gamma_Co,2023-06-11,2023-06-19,Packaging,Delivered,677,59.52,55.29,39.0,Yes
+PO-00242,Delta_Logistics,2022-09-01,2022-09-14,Office Supplies,Delivered,1022,18.54,16.55,150.0,Yes
+PO-00243,Alpha_Inc,2022-10-13,,Raw Materials,Delivered,1818,60.96,57.13,41.0,Yes
+PO-00244,Epsilon_Group,2023-11-17,2023-11-29,Electronics,Delivered,1332,69.73,63.8,41.0,Yes
+PO-00245,Beta_Supplies,2023-05-13,2023-05-26,Raw Materials,Delivered,1432,83.26,77.67,174.0,Yes
+PO-00246,Beta_Supplies,2022-08-08,2022-08-26,Packaging,Pending,759,50.56,46.47,63.0,No
+PO-00247,Alpha_Inc,2023-07-07,2023-07-19,Packaging,Delivered,1529,23.42,22.44,30.0,Yes
+PO-00248,Gamma_Co,2022-05-16,2022-05-25,Electronics,Delivered,1484,36.25,31.8,61.0,Yes
+PO-00249,Epsilon_Group,2023-08-08,2023-08-20,Packaging,Delivered,698,46.73,45.61,15.0,Yes
+PO-00250,Epsilon_Group,2023-08-14,2023-08-22,Packaging,Pending,367,74.61,71.36,13.0,Yes
+PO-00251,Epsilon_Group,2023-04-30,2023-05-20,Office Supplies,Partially Delivered,1750,65.97,58.34,50.0,Yes
+PO-00252,Delta_Logistics,2022-09-06,2022-09-24,Office Supplies,Partially Delivered,1298,43.73,37.21,,No
+PO-00253,Gamma_Co,2023-04-30,2023-05-20,Packaging,Delivered,1892,106.2,96.37,93.0,Yes
+PO-00254,Beta_Supplies,2023-02-21,2023-02-24,Electronics,Delivered,1307,68.71,60.64,141.0,Yes
+PO-00255,Beta_Supplies,2022-07-14,2022-07-29,Electronics,Delivered,733,32.29,29.01,78.0,Yes
+PO-00256,Gamma_Co,2022-04-07,,Packaging,Delivered,713,19.45,18.82,31.0,Yes
+PO-00257,Beta_Supplies,2022-04-10,2022-04-24,Packaging,Delivered,1900,24.11,23.45,188.0,Yes
+PO-00258,Delta_Logistics,2023-11-06,2023-11-08,MRO,Cancelled,1447,35.67,35.07,224.0,No
+PO-00259,Epsilon_Group,2023-03-18,,Office Supplies,Delivered,1745,26.17,22.25,55.0,Yes
+PO-00260,Beta_Supplies,2022-12-29,2023-01-14,Office Supplies,Delivered,1681,28.26,26.62,143.0,Yes
+PO-00261,Delta_Logistics,2023-03-10,2023-03-18,Electronics,Delivered,1545,38.15,36.96,214.0,Yes
+PO-00262,Epsilon_Group,2023-02-25,2023-03-02,Raw Materials,Delivered,1306,27.27,25.96,39.0,Yes
+PO-00263,Gamma_Co,2023-04-24,2023-05-06,Raw Materials,Delivered,1765,97.51,84.3,65.0,Yes
+PO-00264,Gamma_Co,2022-02-25,2022-03-15,Packaging,Cancelled,1186,17.31,16.0,64.0,Yes
+PO-00265,Delta_Logistics,2023-11-21,2023-11-26,Packaging,Delivered,1903,63.5,56.09,254.0,Yes
+PO-00266,Delta_Logistics,2023-11-01,2023-11-05,MRO,Delivered,1570,52.1,47.87,,No
+PO-00267,Delta_Logistics,2023-10-24,2023-11-13,MRO,Delivered,491,108.75,93.35,,No
+PO-00268,Beta_Supplies,2022-04-11,2022-04-20,Electronics,Partially Delivered,613,20.38,20.17,58.0,Yes
+PO-00269,Gamma_Co,2022-03-04,2022-03-16,Raw Materials,Partially Delivered,1341,46.27,43.94,63.0,Yes
+PO-00270,Beta_Supplies,2023-02-17,2023-03-04,MRO,Partially Delivered,1583,103.57,89.38,164.0,Yes
+PO-00271,Beta_Supplies,2022-12-14,,Raw Materials,Cancelled,1880,92.73,90.78,173.0,Yes
+PO-00272,Epsilon_Group,2022-04-22,2022-04-26,MRO,Delivered,1459,84.79,82.72,47.0,Yes
+PO-00273,Delta_Logistics,2022-09-12,,Office Supplies,Delivered,1460,34.54,31.87,208.0,No
+PO-00274,Beta_Supplies,2022-07-16,2022-07-28,Packaging,Partially Delivered,1186,26.14,24.78,112.0,Yes
+PO-00275,Epsilon_Group,2022-07-14,2022-07-23,MRO,Pending,1686,72.28,65.21,53.0,Yes
+PO-00276,Alpha_Inc,2023-07-04,2023-07-08,MRO,Delivered,1698,102.07,100.69,28.0,Yes
+PO-00277,Epsilon_Group,2023-04-05,,Electronics,Delivered,1001,64.62,55.7,32.0,Yes
+PO-00278,Alpha_Inc,2022-05-24,2022-05-27,Office Supplies,Delivered,1154,62.67,54.11,25.0,Yes
+PO-00279,Alpha_Inc,2023-03-09,2023-03-29,Packaging,Cancelled,748,37.66,32.71,,No
+PO-00280,Alpha_Inc,2022-07-07,,Office Supplies,Delivered,162,81.63,78.76,2.0,Yes
+PO-00281,Alpha_Inc,2022-10-13,2022-10-24,Packaging,Delivered,51,28.04,24.13,0.0,Yes
+PO-00282,Delta_Logistics,2023-04-19,2023-04-24,Office Supplies,Delivered,691,42.07,39.1,106.0,Yes
+PO-00283,Beta_Supplies,2022-09-13,2022-09-20,Office Supplies,Delivered,269,50.22,45.75,32.0,No
+PO-00284,Beta_Supplies,2022-03-19,2022-04-06,Electronics,Pending,1639,56.24,55.4,147.0,Yes
+PO-00285,Alpha_Inc,2023-03-30,2023-04-06,Raw Materials,Delivered,904,34.04,30.06,26.0,Yes
+PO-00286,Beta_Supplies,2023-07-18,2023-07-26,Office Supplies,Delivered,1809,22.17,19.65,,Yes
+PO-00287,Alpha_Inc,2022-04-11,2022-04-16,Packaging,Delivered,1298,65.93,58.95,,Yes
+PO-00288,Beta_Supplies,2022-02-21,2022-03-13,Packaging,Delivered,434,36.16,34.79,41.0,Yes
+PO-00289,Epsilon_Group,2023-10-30,2023-11-04,Electronics,Delivered,1476,68.85,65.28,43.0,Yes
+PO-00290,Delta_Logistics,2023-07-08,,Raw Materials,Partially Delivered,1711,26.04,24.81,290.0,Yes
+PO-00291,Gamma_Co,2022-01-16,2022-01-22,Packaging,Delivered,1203,53.3,47.68,49.0,Yes
+PO-00292,Alpha_Inc,2022-04-06,2022-04-07,Electronics,Delivered,1126,58.8,52.22,,Yes
+PO-00293,Epsilon_Group,2022-08-31,2022-09-12,Packaging,Delivered,1757,15.18,13.06,63.0,Yes
+PO-00294,Epsilon_Group,2022-06-20,2022-06-28,MRO,Delivered,779,41.3,36.28,20.0,Yes
+PO-00295,Delta_Logistics,2023-02-21,2023-02-22,Office Supplies,Delivered,1745,23.53,22.57,282.0,No
+PO-00296,Delta_Logistics,2023-05-13,2023-05-15,Raw Materials,Delivered,1783,16.96,15.8,295.0,Yes
+PO-00297,Alpha_Inc,2023-05-08,2023-05-22,Office Supplies,Partially Delivered,1489,107.02,93.3,,Yes
+PO-00298,Alpha_Inc,2022-08-07,2022-08-10,Office Supplies,Delivered,296,40.38,35.25,,Yes
+PO-00299,Epsilon_Group,2023-02-15,2023-02-27,MRO,Delivered,885,88.28,80.8,31.0,Yes
+PO-00300,Epsilon_Group,2022-03-02,2022-03-06,Raw Materials,Pending,1512,33.25,30.15,53.0,Yes
+PO-00301,Delta_Logistics,2022-06-18,2022-06-26,Office Supplies,Delivered,252,73.12,67.64,,No
+PO-00302,Alpha_Inc,2023-01-24,,Electronics,Cancelled,1257,83.13,81.89,30.0,Yes
+PO-00303,Alpha_Inc,2022-01-03,2022-01-20,Packaging,Delivered,172,63.61,55.92,4.0,Yes
+PO-00304,Epsilon_Group,2023-02-04,2023-02-05,Packaging,Pending,450,55.85,49.88,9.0,Yes
+PO-00305,Gamma_Co,2022-09-29,2022-10-15,Electronics,Delivered,816,48.95,43.42,45.0,Yes
+PO-00306,Epsilon_Group,2023-04-11,2023-04-25,Packaging,Delivered,343,44.5,38.57,7.0,Yes
+PO-00307,Gamma_Co,2022-10-20,2022-11-05,MRO,Delivered,329,97.87,85.35,21.0,No
+PO-00308,Alpha_Inc,2023-03-10,2023-03-25,Electronics,Delivered,1910,90.69,85.8,,Yes
+PO-00309,Epsilon_Group,2023-12-15,2023-12-18,MRO,Delivered,933,107.99,104.29,29.0,Yes
+PO-00310,Delta_Logistics,2023-07-24,2023-07-29,Raw Materials,Delivered,1683,23.09,21.88,253.0,Yes
+PO-00311,Beta_Supplies,2023-11-09,2023-11-18,Packaging,Pending,247,84.11,71.97,,Yes
+PO-00312,Alpha_Inc,2023-05-14,2023-06-02,MRO,Delivered,1031,102.01,98.65,,Yes
+PO-00313,Alpha_Inc,2022-06-08,2022-06-19,Packaging,Delivered,1980,26.97,24.16,41.0,Yes
+PO-00314,Epsilon_Group,2022-07-14,2022-08-03,Raw Materials,Delivered,1584,16.46,14.2,57.0,Yes
+PO-00315,Beta_Supplies,2022-10-31,2022-11-15,Office Supplies,Delivered,801,80.15,70.91,,Yes
+PO-00316,Beta_Supplies,2022-08-11,2022-08-25,Packaging,Delivered,193,63.86,57.46,,Yes
+PO-00317,Beta_Supplies,2022-03-01,2022-03-05,Raw Materials,Delivered,658,86.62,79.85,72.0,Yes
+PO-00318,Epsilon_Group,2023-08-17,2023-09-04,Electronics,Delivered,1274,24.72,23.36,37.0,Yes
+PO-00319,Epsilon_Group,2023-07-10,2023-07-17,Packaging,Partially Delivered,1197,88.92,78.82,31.0,Yes
+PO-00320,Gamma_Co,2022-03-04,2022-03-12,Electronics,Delivered,236,28.43,28.11,11.0,Yes
+PO-00321,Gamma_Co,2022-11-18,2022-12-03,Raw Materials,Partially Delivered,1399,25.97,22.19,62.0,Yes
+PO-00322,Gamma_Co,2022-02-28,2022-03-04,Electronics,Delivered,513,24.91,22.58,29.0,Yes
+PO-00323,Delta_Logistics,2022-02-21,2022-03-04,MRO,Delivered,1422,83.73,76.47,198.0,Yes
+PO-00324,Alpha_Inc,2023-08-22,2023-09-03,Office Supplies,Delivered,1844,76.51,73.05,,Yes
+PO-00325,Gamma_Co,2023-05-04,,Electronics,Delivered,709,61.64,54.55,41.0,Yes
+PO-00326,Delta_Logistics,2023-05-30,2023-06-15,MRO,Delivered,813,45.68,41.78,,No
+PO-00327,Delta_Logistics,2023-06-28,2023-07-01,Office Supplies,Delivered,1004,96.51,92.9,146.0,No
+PO-00328,Epsilon_Group,2022-06-11,2022-06-15,Raw Materials,Delivered,452,46.45,40.39,9.0,Yes
+PO-00329,Beta_Supplies,2022-02-28,2022-03-12,Raw Materials,Pending,1419,83.91,71.46,137.0,Yes
+PO-00330,Beta_Supplies,2023-06-05,2023-06-23,Packaging,Delivered,1584,53.73,51.92,167.0,No
+PO-00331,Gamma_Co,2022-03-24,2022-04-11,MRO,Pending,196,44.36,43.81,6.0,Yes
+PO-00332,Alpha_Inc,2022-07-10,2022-07-14,Office Supplies,Delivered,1221,53.19,46.18,29.0,Yes
+PO-00333,Alpha_Inc,2022-03-12,2022-03-26,Packaging,Delivered,913,37.5,36.2,,Yes
+PO-00334,Alpha_Inc,2023-09-02,2023-09-04,Packaging,Delivered,1784,85.01,76.69,37.0,Yes
+PO-00335,Delta_Logistics,2022-03-11,,Raw Materials,Delivered,1893,55.8,52.35,,Yes
+PO-00336,Delta_Logistics,2023-11-23,2023-12-05,Electronics,Pending,538,34.3,32.25,84.0,No
+PO-00337,Delta_Logistics,2022-08-29,2022-09-15,Office Supplies,Pending,978,94.15,87.7,149.0,No
+PO-00338,Epsilon_Group,2023-02-18,2023-03-06,Raw Materials,Cancelled,1713,47.45,42.05,53.0,Yes
+PO-00339,Delta_Logistics,2022-05-03,2022-05-07,Raw Materials,Pending,600,60.1,57.92,95.0,No
+PO-00340,Alpha_Inc,2023-08-07,2023-08-25,Electronics,Pending,387,100.28,85.54,5.0,Yes
+PO-00341,Alpha_Inc,2022-09-10,2022-09-19,MRO,Pending,921,68.83,59.13,22.0,Yes
+PO-00342,Beta_Supplies,2023-08-16,2023-08-30,MRO,Delivered,690,22.47,21.94,77.0,Yes
+PO-00343,Alpha_Inc,2023-09-01,2023-09-21,Office Supplies,Cancelled,1852,104.04,94.89,36.0,Yes
+PO-00344,Delta_Logistics,2022-02-10,2022-02-28,Electronics,Delivered,522,66.83,58.01,74.0,Yes
+PO-00345,Delta_Logistics,2023-09-27,2023-10-06,Electronics,Delivered,200,44.16,43.13,21.0,Yes
+PO-00346,Gamma_Co,2022-03-25,2022-04-03,Packaging,Delivered,1488,22.76,21.99,,Yes
+PO-00347,Epsilon_Group,2023-03-06,2023-03-16,Electronics,Delivered,1371,87.16,78.13,43.0,Yes
+PO-00348,Alpha_Inc,2023-11-05,,Office Supplies,Delivered,1684,73.05,62.53,,Yes
+PO-00349,Epsilon_Group,2023-08-21,2023-08-27,Electronics,Delivered,312,63.52,58.09,,Yes
+PO-00350,Alpha_Inc,2023-08-02,2023-08-21,Packaging,Cancelled,1837,99.04,86.51,39.0,Yes
+PO-00351,Beta_Supplies,2023-06-20,2023-06-23,MRO,Delivered,193,87.86,81.74,21.0,Yes
+PO-00352,Beta_Supplies,2022-11-20,2022-11-21,Electronics,Delivered,395,24.83,23.96,31.0,Yes
+PO-00353,Epsilon_Group,2022-09-25,2022-10-12,Electronics,Cancelled,673,39.58,35.83,25.0,Yes
+PO-00354,Delta_Logistics,2022-07-29,2022-08-12,Office Supplies,Cancelled,1066,33.33,28.47,162.0,No
+PO-00355,Gamma_Co,2023-11-17,2023-11-23,Packaging,Delivered,1645,85.42,80.78,73.0,No
+PO-00356,Alpha_Inc,2022-11-18,2022-11-29,Electronics,Delivered,930,13.67,11.95,16.0,Yes
+PO-00357,Alpha_Inc,2022-09-02,2022-09-21,Office Supplies,Delivered,51,63.74,56.1,0.0,Yes
+PO-00358,Gamma_Co,2022-09-29,2022-10-01,Packaging,Delivered,946,81.77,71.65,55.0,Yes
+PO-00359,Epsilon_Group,2023-02-10,2023-03-02,Raw Materials,Partially Delivered,1377,94.69,84.2,,Yes
+PO-00360,Epsilon_Group,2022-05-15,2022-05-18,Packaging,Cancelled,303,41.6,40.51,11.0,Yes
+PO-00361,Alpha_Inc,2023-11-19,2023-12-03,Raw Materials,Delivered,1725,93.14,79.62,24.0,Yes
+PO-00362,Beta_Supplies,2023-10-23,2023-11-07,Raw Materials,Cancelled,502,22.05,20.65,50.0,No
+PO-00363,Gamma_Co,2022-11-04,2022-11-11,Packaging,Delivered,1110,90.49,80.03,61.0,Yes
+PO-00364,Alpha_Inc,2023-04-14,2023-04-18,Packaging,Delivered,1233,23.08,20.57,,Yes
+PO-00365,Beta_Supplies,2022-11-20,2022-11-24,Office Supplies,Delivered,1064,48.04,43.6,94.0,Yes
+PO-00366,Epsilon_Group,2022-03-16,2022-04-04,Packaging,Partially Delivered,58,82.57,76.55,,Yes
+PO-00367,Beta_Supplies,2022-01-10,2022-01-20,MRO,Delivered,1306,23.49,20.17,116.0,No
+PO-00368,Delta_Logistics,2023-04-15,2023-04-28,Electronics,Delivered,1172,32.93,29.28,,No
+PO-00369,Alpha_Inc,2023-09-29,,Packaging,Delivered,1732,82.5,71.71,24.0,Yes
+PO-00370,Gamma_Co,2023-07-31,2023-08-07,Raw Materials,Delivered,865,81.54,71.59,39.0,Yes
+PO-00371,Beta_Supplies,2022-04-13,2022-04-20,Raw Materials,Delivered,257,68.72,66.92,22.0,Yes
+PO-00372,Epsilon_Group,2022-03-17,2022-03-26,Packaging,Delivered,1204,73.18,67.59,31.0,Yes
+PO-00373,Beta_Supplies,2023-07-05,2023-07-09,Electronics,Partially Delivered,453,64.14,60.18,51.0,Yes
+PO-00374,Epsilon_Group,2022-08-07,2022-08-21,Electronics,Delivered,201,33.81,32.54,3.0,Yes
+PO-00375,Delta_Logistics,2023-06-03,2023-06-16,Office Supplies,Delivered,103,44.61,42.88,10.0,Yes
+PO-00376,Epsilon_Group,2022-09-29,2022-10-07,Office Supplies,Delivered,1193,27.4,27.09,,Yes
+PO-00377,Gamma_Co,2022-05-16,2022-05-28,Office Supplies,Partially Delivered,1746,93.6,89.81,85.0,Yes
+PO-00378,Delta_Logistics,2022-12-24,2022-12-26,Electronics,Delivered,1993,65.94,59.36,,Yes
+PO-00379,Beta_Supplies,2022-03-12,2022-03-27,Raw Materials,Delivered,677,46.54,43.11,,No
+PO-00380,Alpha_Inc,2022-09-08,,Office Supplies,Pending,636,53.64,49.23,18.0,Yes
+PO-00381,Epsilon_Group,2023-01-14,2023-02-02,Packaging,Delivered,1698,100.97,98.73,52.0,Yes
+PO-00382,Gamma_Co,2022-10-19,2022-11-01,Office Supplies,Delivered,1493,24.87,22.89,56.0,Yes
+PO-00383,Alpha_Inc,2022-06-11,2022-06-25,Packaging,Delivered,1495,64.33,58.18,26.0,Yes
+PO-00384,Alpha_Inc,2023-03-25,2023-04-07,Packaging,Cancelled,153,59.42,52.0,3.0,Yes
+PO-00385,Delta_Logistics,2023-07-11,2023-07-22,Raw Materials,Cancelled,1925,70.88,63.41,292.0,Yes
+PO-00386,Beta_Supplies,2023-12-22,2024-01-11,Packaging,Delivered,303,12.97,11.42,,No
+PO-00387,Alpha_Inc,2022-11-06,2022-11-18,Office Supplies,Delivered,1300,92.92,90.63,,Yes
+PO-00388,Gamma_Co,2023-09-19,2023-09-23,Raw Materials,Delivered,1185,103.28,99.05,,Yes
+PO-00389,Epsilon_Group,2023-11-01,2023-11-20,Raw Materials,Delivered,559,67.56,57.98,15.0,Yes
+PO-00390,Epsilon_Group,2023-06-26,2023-06-29,Electronics,Pending,1546,78.88,78.0,38.0,Yes
+PO-00391,Epsilon_Group,2022-01-09,2022-01-19,Packaging,Delivered,148,93.02,85.96,4.0,Yes
+PO-00392,Delta_Logistics,2023-11-15,2023-11-23,Office Supplies,Delivered,202,81.75,78.26,37.0,No
+PO-00393,Gamma_Co,2023-07-22,2023-07-28,Packaging,Delivered,1934,25.86,25.6,78.0,Yes
+PO-00394,Alpha_Inc,2022-11-03,2022-11-07,Office Supplies,Delivered,963,64.96,64.07,20.0,Yes
+PO-00395,Gamma_Co,2023-11-11,2023-11-18,MRO,Delivered,1969,71.71,61.96,,Yes
+PO-00396,Delta_Logistics,2022-04-17,,Electronics,Delivered,927,48.89,46.05,138.0,Yes
+PO-00397,Delta_Logistics,2022-05-18,2022-05-23,Raw Materials,Cancelled,387,77.81,69.04,67.0,Yes
+PO-00398,Beta_Supplies,2022-09-28,2022-10-03,Electronics,Delivered,1779,97.86,94.36,176.0,Yes
+PO-00399,Gamma_Co,2022-04-29,2022-05-05,MRO,Pending,871,94.7,92.66,46.0,Yes
+PO-00400,Epsilon_Group,2022-04-20,2022-04-23,Electronics,Delivered,1236,51.33,44.03,25.0,Yes
+PO-00401,Delta_Logistics,2023-07-21,2023-08-06,Electronics,Delivered,1793,22.01,21.78,285.0,Yes
+PO-00402,Delta_Logistics,2022-06-09,2022-06-28,MRO,Delivered,1006,101.1,89.04,139.0,Yes
+PO-00403,Beta_Supplies,2022-10-06,2022-10-21,Electronics,Cancelled,1754,89.35,86.54,161.0,No
+PO-00404,Epsilon_Group,2022-10-16,2022-11-04,Electronics,Delivered,210,22.17,21.32,10.0,Yes
+PO-00405,Delta_Logistics,2023-09-12,2023-10-02,MRO,Delivered,1653,102.16,91.91,217.0,Yes
+PO-00406,Alpha_Inc,2022-08-04,2022-08-15,MRO,Partially Delivered,850,91.38,88.41,24.0,Yes
+PO-00407,Epsilon_Group,2022-12-18,2022-12-21,Raw Materials,Delivered,447,59.81,57.92,13.0,Yes
+PO-00408,Gamma_Co,2022-07-28,2022-08-07,Office Supplies,Delivered,1350,65.11,56.95,71.0,Yes
+PO-00409,Beta_Supplies,2023-12-05,2023-12-24,Office Supplies,Delivered,865,51.19,47.76,83.0,Yes
+PO-00410,Alpha_Inc,2023-10-12,2023-10-29,MRO,Delivered,1989,16.5,15.89,57.0,Yes
+PO-00411,Alpha_Inc,2022-09-28,2022-10-13,Office Supplies,Delivered,1577,41.77,39.58,32.0,Yes
+PO-00412,Gamma_Co,2023-06-02,2023-06-04,Packaging,Pending,1969,89.25,87.28,108.0,No
+PO-00413,Beta_Supplies,2023-05-16,2023-05-26,Packaging,Partially Delivered,1465,11.25,9.61,151.0,Yes
+PO-00414,Delta_Logistics,2022-09-15,2022-09-18,Packaging,Pending,1208,41.62,39.46,,Yes
+PO-00415,Beta_Supplies,2022-02-22,2022-03-11,Raw Materials,Delivered,1268,46.06,45.26,123.0,Yes
+PO-00416,Delta_Logistics,2022-04-05,2022-04-24,Office Supplies,Delivered,450,59.24,55.03,68.0,No
+PO-00417,Gamma_Co,2023-10-12,2023-10-14,Electronics,Partially Delivered,689,102.53,95.23,38.0,Yes
+PO-00418,Gamma_Co,2023-03-10,2023-03-29,MRO,Delivered,1106,44.05,38.6,51.0,Yes
+PO-00419,Alpha_Inc,2022-10-11,2022-10-22,Office Supplies,Delivered,737,43.08,42.58,21.0,Yes
+PO-00420,Alpha_Inc,2022-02-15,2022-03-04,Raw Materials,Delivered,509,76.76,74.72,7.0,No
+PO-00421,Alpha_Inc,2022-01-04,2022-01-06,Electronics,Delivered,1004,50.7,46.59,27.0,Yes
+PO-00422,Gamma_Co,2022-12-08,2022-12-19,MRO,Pending,1956,31.88,28.48,86.0,Yes
+PO-00423,Delta_Logistics,2022-05-14,,Electronics,Delivered,519,51.73,47.52,81.0,No
+PO-00424,Gamma_Co,2023-10-15,2023-10-21,MRO,Partially Delivered,1448,25.06,21.62,84.0,Yes
+PO-00425,Gamma_Co,2022-09-26,2022-10-11,Packaging,Delivered,1095,26.91,23.75,53.0,Yes
+PO-00426,Alpha_Inc,2022-06-15,,MRO,Delivered,799,56.22,49.51,18.0,Yes
+PO-00427,Beta_Supplies,2023-03-29,2023-04-18,MRO,Partially Delivered,1743,51.04,47.15,160.0,Yes
+PO-00428,Alpha_Inc,2023-07-19,2023-07-31,Raw Materials,Delivered,87,100.65,85.56,1.0,Yes
+PO-00429,Beta_Supplies,2023-12-24,,Raw Materials,Delivered,279,47.52,46.5,28.0,No
+PO-00430,Delta_Logistics,2023-03-14,2023-03-25,Raw Materials,Delivered,1438,66.61,58.5,237.0,Yes
+PO-00431,Delta_Logistics,2023-07-29,2023-07-31,Office Supplies,Partially Delivered,612,72.93,63.32,99.0,Yes
+PO-00432,Epsilon_Group,2022-01-10,2022-01-21,Packaging,Pending,487,11.18,10.63,15.0,Yes
+PO-00433,Epsilon_Group,2022-04-25,2022-04-29,Packaging,Partially Delivered,1849,70.76,69.25,51.0,Yes
+PO-00434,Epsilon_Group,2022-03-19,2022-04-01,MRO,Partially Delivered,1356,26.28,25.44,47.0,Yes
+PO-00435,Delta_Logistics,2023-12-09,2023-12-29,Raw Materials,Delivered,76,107.59,96.33,10.0,Yes
+PO-00436,Alpha_Inc,2022-06-02,2022-06-13,Packaging,Partially Delivered,275,23.96,20.44,,Yes
+PO-00437,Alpha_Inc,2023-07-13,2023-07-18,Packaging,Delivered,1350,51.57,48.07,,Yes
+PO-00438,Alpha_Inc,2022-02-06,,MRO,Delivered,847,17.77,17.39,,Yes
+PO-00439,Gamma_Co,2023-01-14,2023-01-27,MRO,Delivered,1682,105.7,101.3,94.0,Yes
+PO-00440,Epsilon_Group,2023-08-20,2023-08-23,Electronics,Delivered,333,60.44,58.54,8.0,Yes
+PO-00441,Alpha_Inc,2023-07-20,2023-08-02,Electronics,Cancelled,928,69.31,67.26,20.0,Yes
+PO-00442,Epsilon_Group,2022-06-01,2022-06-12,MRO,Partially Delivered,1009,16.44,16.18,,Yes
+PO-00443,Epsilon_Group,2023-03-17,2023-04-03,Electronics,Pending,1554,82.92,74.82,44.0,Yes
+PO-00444,Gamma_Co,2022-05-11,2022-05-25,Packaging,Partially Delivered,502,29.47,28.94,27.0,Yes
+PO-00445,Delta_Logistics,2022-02-12,2022-02-13,MRO,Delivered,1069,91.28,82.64,,Yes
+PO-00446,Alpha_Inc,2022-11-12,2022-11-18,MRO,Pending,1902,29.89,25.83,41.0,Yes
+PO-00447,Gamma_Co,2023-01-09,,Raw Materials,Pending,865,28.79,25.69,47.0,Yes
+PO-00448,Delta_Logistics,2022-02-10,2022-02-26,Packaging,Partially Delivered,708,13.36,11.61,,No
+PO-00449,Delta_Logistics,2023-01-02,2023-01-07,Packaging,Delivered,1589,55.64,48.52,,Yes
+PO-00450,Alpha_Inc,2022-08-04,2022-08-14,Office Supplies,Delivered,596,62.96,61.88,9.0,Yes
+PO-00451,Epsilon_Group,2023-11-30,2023-12-04,Office Supplies,Delivered,1265,17.66,16.97,34.0,Yes
+PO-00452,Beta_Supplies,2022-09-13,2022-10-01,Raw Materials,Delivered,1122,82.99,81.7,118.0,No
+PO-00453,Epsilon_Group,2023-11-14,2023-12-01,Office Supplies,Delivered,1585,56.38,53.05,,Yes
+PO-00454,Epsilon_Group,2022-04-16,2022-04-27,Electronics,Delivered,66,58.05,50.76,,Yes
+PO-00455,Beta_Supplies,2022-12-29,2023-01-18,MRO,Delivered,1245,52.4,51.65,118.0,No
+PO-00456,Delta_Logistics,2023-07-28,2023-08-10,Electronics,Delivered,1293,50.21,47.55,,No
+PO-00457,Beta_Supplies,2023-02-21,2023-02-27,Packaging,Delivered,207,64.29,63.01,25.0,Yes
+PO-00458,Beta_Supplies,2023-09-28,2023-10-18,Office Supplies,Delivered,526,26.37,25.32,47.0,Yes
+PO-00459,Gamma_Co,2022-06-08,2022-06-14,Electronics,Delivered,1119,27.03,23.82,,Yes
+PO-00460,Gamma_Co,2022-08-31,2022-09-02,Packaging,Delivered,1446,90.63,84.51,77.0,Yes
+PO-00461,Gamma_Co,2022-06-16,2022-06-24,Office Supplies,Delivered,567,97.53,85.29,21.0,Yes
+PO-00462,Delta_Logistics,2022-07-01,,MRO,Delivered,148,44.91,40.1,,No
+PO-00463,Beta_Supplies,2023-02-27,2023-03-14,MRO,Pending,1965,36.6,34.64,195.0,Yes
+PO-00464,Alpha_Inc,2022-01-26,2022-02-03,Office Supplies,Pending,1818,67.96,58.98,,Yes
+PO-00465,Beta_Supplies,2022-07-03,2022-07-19,MRO,Delivered,1110,48.19,45.88,112.0,Yes
+PO-00466,Delta_Logistics,2022-12-07,,Raw Materials,Delivered,329,12.96,12.74,48.0,Yes
+PO-00467,Gamma_Co,2023-02-26,2023-03-17,Office Supplies,Cancelled,1422,25.62,25.18,65.0,Yes
+PO-00468,Delta_Logistics,2023-11-17,,Raw Materials,Delivered,546,82.63,74.77,76.0,No
+PO-00469,Gamma_Co,2022-09-12,2022-09-22,Office Supplies,Partially Delivered,351,72.08,71.3,20.0,Yes
+PO-00470,Delta_Logistics,2022-10-01,2022-10-18,Raw Materials,Partially Delivered,230,13.0,12.81,,No
+PO-00471,Alpha_Inc,2022-06-13,2022-06-19,MRO,Delivered,656,30.73,26.26,17.0,Yes
+PO-00472,Gamma_Co,2023-12-20,2024-01-09,MRO,Delivered,1172,34.34,32.09,69.0,Yes
+PO-00473,Gamma_Co,2022-04-21,2022-04-30,Electronics,Delivered,749,71.53,70.02,41.0,Yes
+PO-00474,Beta_Supplies,2023-01-27,2023-02-12,Packaging,Delivered,1042,12.48,12.3,88.0,Yes
+PO-00475,Delta_Logistics,2022-02-09,2022-02-27,Raw Materials,Delivered,1189,19.47,17.15,,No
+PO-00476,Epsilon_Group,2023-04-27,,Office Supplies,Delivered,240,88.14,81.9,4.0,Yes
+PO-00477,Epsilon_Group,2022-08-16,2022-09-02,MRO,Delivered,302,26.98,26.47,9.0,Yes
+PO-00478,Beta_Supplies,2022-07-24,2022-08-03,MRO,Pending,1030,70.81,61.58,,No
+PO-00479,Delta_Logistics,2023-04-17,2023-04-23,Office Supplies,Delivered,977,33.79,32.25,137.0,Yes
+PO-00480,Alpha_Inc,2022-12-25,2023-01-11,Packaging,Delivered,1234,19.99,17.66,25.0,Yes
+PO-00481,Beta_Supplies,2022-11-09,2022-11-23,Office Supplies,Delivered,1329,33.48,33.06,146.0,Yes
+PO-00482,Gamma_Co,2022-08-22,2022-08-30,Raw Materials,Delivered,1396,77.63,67.81,58.0,Yes
+PO-00483,Alpha_Inc,2022-08-17,2022-08-29,Raw Materials,Delivered,177,90.06,87.71,7.0,Yes
+PO-00484,Delta_Logistics,2022-01-25,,Electronics,Delivered,67,84.72,73.06,9.0,Yes
+PO-00485,Gamma_Co,2023-11-07,2023-11-20,Office Supplies,Delivered,1866,50.78,48.2,96.0,Yes
+PO-00486,Epsilon_Group,2022-07-17,2022-07-25,MRO,Delivered,1808,72.23,67.86,53.0,Yes
+PO-00487,Delta_Logistics,2023-02-13,2023-02-16,Electronics,Cancelled,615,30.3,29.52,96.0,Yes
+PO-00488,Gamma_Co,2022-12-03,2022-12-04,Office Supplies,Pending,619,38.38,35.02,34.0,Yes
+PO-00489,Delta_Logistics,2022-10-13,2022-10-17,Office Supplies,Delivered,1396,94.75,84.06,210.0,Yes
+PO-00490,Gamma_Co,2022-03-13,2022-03-24,MRO,Delivered,1945,11.28,9.98,94.0,Yes
+PO-00491,Delta_Logistics,2022-10-13,2022-10-18,Packaging,Delivered,735,18.49,15.89,113.0,No
+PO-00492,Epsilon_Group,2022-12-26,2023-01-11,Office Supplies,Pending,1865,30.29,26.83,56.0,Yes
+PO-00493,Beta_Supplies,2023-10-19,2023-10-24,Electronics,Cancelled,675,13.69,11.84,52.0,Yes
+PO-00494,Gamma_Co,2023-06-06,2023-06-22,MRO,Pending,1361,28.57,24.29,65.0,Yes
+PO-00495,Gamma_Co,2023-02-14,2023-02-15,Raw Materials,Delivered,903,66.53,60.15,29.0,Yes
+PO-00496,Epsilon_Group,2023-11-27,,Packaging,Cancelled,1736,53.2,50.68,48.0,Yes
+PO-00497,Beta_Supplies,2023-07-04,2023-07-11,MRO,Delivered,1011,98.47,97.06,91.0,Yes
+PO-00498,Delta_Logistics,2022-12-06,2022-12-24,Electronics,Delivered,1712,88.17,85.86,246.0,Yes
+PO-00499,Gamma_Co,2022-01-29,,Office Supplies,Delivered,204,40.76,37.46,10.0,Yes
+PO-00500,Beta_Supplies,2022-04-29,2022-05-13,Electronics,Partially Delivered,539,33.85,30.57,34.0,No
+PO-00501,Delta_Logistics,2022-09-25,2022-10-05,Office Supplies,Delivered,1459,45.94,42.56,212.0,No
+PO-00502,Gamma_Co,2022-07-02,2022-07-06,MRO,Delivered,834,65.02,56.19,,Yes
+PO-00503,Gamma_Co,2023-08-18,2023-09-01,Packaging,Partially Delivered,1177,37.37,34.27,60.0,Yes
+PO-00504,Delta_Logistics,2022-09-29,2022-10-19,MRO,Delivered,1466,68.82,66.82,211.0,Yes
+PO-00505,Epsilon_Group,2022-02-09,2022-02-13,Electronics,Delivered,1884,47.08,44.31,54.0,Yes
+PO-00506,Beta_Supplies,2022-04-22,2022-05-08,Electronics,Delivered,295,60.58,57.32,31.0,Yes
+PO-00507,Gamma_Co,2023-09-03,2023-09-04,Raw Materials,Delivered,1249,54.18,47.29,59.0,Yes
+PO-00508,Delta_Logistics,2023-03-21,2023-04-09,Raw Materials,Delivered,1112,39.06,33.6,184.0,No
+PO-00509,Gamma_Co,2022-12-20,2022-12-25,Office Supplies,Delivered,1550,100.61,97.43,66.0,Yes
+PO-00510,Delta_Logistics,2022-11-18,2022-11-19,Electronics,Delivered,1755,82.66,73.67,258.0,No
+PO-00511,Gamma_Co,2023-03-23,2023-03-31,Raw Materials,Delivered,808,24.19,21.64,39.0,Yes
+PO-00512,Alpha_Inc,2023-09-13,2023-09-19,Raw Materials,Partially Delivered,587,96.98,95.35,14.0,Yes
+PO-00513,Epsilon_Group,2023-06-08,2023-06-11,MRO,Delivered,1940,58.45,50.29,54.0,Yes
+PO-00514,Beta_Supplies,2022-04-29,2022-05-11,Office Supplies,Cancelled,1891,91.87,80.28,158.0,Yes
+PO-00515,Epsilon_Group,2023-01-30,2023-02-16,Packaging,Delivered,970,86.91,78.44,18.0,Yes
+PO-00516,Epsilon_Group,2023-08-14,2023-08-31,MRO,Delivered,457,52.85,50.34,16.0,Yes
+PO-00517,Beta_Supplies,2022-07-14,2022-07-27,Office Supplies,Cancelled,574,12.38,11.47,,No
+PO-00518,Epsilon_Group,2022-09-18,2022-09-20,Office Supplies,Delivered,877,35.55,34.69,24.0,Yes
+PO-00519,Alpha_Inc,2022-02-15,2022-02-27,MRO,Delivered,1579,59.04,50.95,29.0,Yes
+PO-00520,Delta_Logistics,2023-12-27,2023-12-28,Raw Materials,Delivered,952,74.72,69.73,,Yes
+PO-00521,Beta_Supplies,2023-03-23,2023-03-26,Raw Materials,Pending,1898,35.53,33.25,187.0,Yes
+PO-00522,Delta_Logistics,2022-01-02,2022-01-06,Packaging,Delivered,85,22.54,20.68,6.0,Yes
+PO-00523,Gamma_Co,2023-06-17,2023-06-28,Packaging,Pending,734,92.38,78.92,34.0,No
+PO-00524,Alpha_Inc,2023-07-06,2023-07-18,Office Supplies,Delivered,69,107.47,105.53,,Yes
+PO-00525,Delta_Logistics,2023-12-05,2023-12-11,Packaging,Delivered,370,63.9,55.79,59.0,Yes
+PO-00526,Delta_Logistics,2023-11-18,2023-12-03,MRO,Delivered,1849,28.25,27.53,271.0,Yes
+PO-00527,Beta_Supplies,2022-07-21,,Packaging,Delivered,561,35.54,30.99,68.0,No
+PO-00528,Gamma_Co,2023-01-08,2023-01-14,Electronics,Delivered,449,12.35,10.67,29.0,Yes
+PO-00529,Beta_Supplies,2023-03-18,2023-03-21,Office Supplies,Delivered,703,98.75,86.78,59.0,Yes
+PO-00530,Gamma_Co,2022-03-13,2022-03-28,Electronics,Delivered,1021,20.8,18.23,37.0,Yes
+PO-00531,Beta_Supplies,2023-11-12,2023-11-19,Office Supplies,Delivered,1956,68.69,65.09,,Yes
+PO-00532,Delta_Logistics,2022-12-05,2022-12-12,Office Supplies,Partially Delivered,520,36.57,34.78,67.0,No
+PO-00533,Delta_Logistics,2023-10-01,2023-10-12,MRO,Delivered,1216,66.16,63.0,179.0,No
+PO-00534,Alpha_Inc,2022-11-18,,Raw Materials,Delivered,1165,72.06,63.93,,Yes
+PO-00535,Delta_Logistics,2023-11-11,2023-11-29,Packaging,Pending,1427,93.99,83.6,213.0,Yes
+PO-00536,Epsilon_Group,2022-05-08,2022-05-10,Electronics,Delivered,883,29.15,25.75,14.0,Yes
+PO-00537,Delta_Logistics,2022-11-04,2022-11-11,Packaging,Partially Delivered,1873,11.54,9.89,284.0,No
+PO-00538,Epsilon_Group,2023-06-04,2023-06-06,Office Supplies,Delivered,776,24.22,22.53,27.0,Yes
+PO-00539,Delta_Logistics,2022-11-13,2022-11-24,Electronics,Delivered,903,95.55,92.45,149.0,No
+PO-00540,Epsilon_Group,2023-11-14,2023-11-26,Electronics,Delivered,100,98.4,85.76,3.0,Yes
+PO-00541,Epsilon_Group,2023-02-23,2023-03-08,Office Supplies,Delivered,1738,67.91,61.15,,Yes
+PO-00542,Delta_Logistics,2022-12-01,2022-12-14,Packaging,Delivered,1771,67.57,61.48,280.0,No
+PO-00543,Epsilon_Group,2023-02-17,2023-02-23,Electronics,Delivered,624,74.39,66.3,18.0,No
+PO-00544,Alpha_Inc,2023-12-15,2023-12-31,Packaging,Partially Delivered,1263,28.75,27.1,26.0,Yes
+PO-00545,Gamma_Co,2022-10-30,2022-11-16,Electronics,Cancelled,1198,96.45,90.09,,Yes
+PO-00546,Epsilon_Group,2023-07-22,2023-07-25,Raw Materials,Delivered,199,51.98,45.64,,No
+PO-00547,Epsilon_Group,2022-05-11,2022-05-14,MRO,Pending,363,45.37,38.73,,Yes
+PO-00548,Alpha_Inc,2022-07-16,2022-07-22,Office Supplies,Delivered,619,58.4,51.04,,Yes
+PO-00549,Alpha_Inc,2023-03-07,2023-03-18,MRO,Delivered,1415,15.22,13.56,30.0,Yes
+PO-00550,Beta_Supplies,2023-11-12,2023-11-23,Packaging,Delivered,354,27.71,23.87,39.0,No
+PO-00551,Gamma_Co,2023-01-24,2023-02-03,MRO,Delivered,1765,81.01,78.43,78.0,Yes
+PO-00552,Beta_Supplies,2023-11-25,2023-12-09,MRO,Delivered,731,19.37,17.3,69.0,No
+PO-00553,Epsilon_Group,2022-06-28,2022-07-13,MRO,Delivered,887,65.89,59.67,29.0,Yes
+PO-00554,Alpha_Inc,2023-09-23,2023-09-25,MRO,Delivered,1856,35.29,32.41,26.0,Yes
+PO-00555,Epsilon_Group,2023-08-06,2023-08-18,Office Supplies,Delivered,1127,49.32,46.49,30.0,Yes
+PO-00556,Delta_Logistics,2022-11-05,2022-11-19,Raw Materials,Delivered,1052,37.78,32.6,162.0,Yes
+PO-00557,Gamma_Co,2023-02-20,2023-02-22,Raw Materials,Delivered,493,44.74,41.44,24.0,No
+PO-00558,Delta_Logistics,2023-07-16,2023-07-29,MRO,Partially Delivered,662,81.44,71.33,87.0,Yes
+PO-00559,Alpha_Inc,2022-01-01,2022-01-07,Raw Materials,Delivered,1042,36.74,35.78,33.0,Yes
+PO-00560,Alpha_Inc,2022-11-08,,Raw Materials,Delivered,313,64.03,57.74,1.0,Yes
+PO-00561,Alpha_Inc,2022-10-21,2022-11-10,Office Supplies,Delivered,1126,55.22,50.38,,Yes
+PO-00562,Gamma_Co,2022-08-04,2022-08-19,MRO,Delivered,1645,72.17,64.0,79.0,Yes
+PO-00563,Beta_Supplies,2023-03-17,2023-03-20,Packaging,Delivered,1053,100.92,92.35,104.0,Yes
+PO-00564,Epsilon_Group,2023-08-17,2023-08-29,MRO,Delivered,1693,83.14,73.3,62.0,Yes
+PO-00565,Epsilon_Group,2023-09-14,2023-10-03,Raw Materials,Pending,54,32.28,28.65,3.0,Yes
+PO-00566,Epsilon_Group,2023-11-02,2023-11-07,Packaging,Delivered,1176,14.22,12.21,33.0,Yes
+PO-00567,Epsilon_Group,2022-11-26,2022-12-08,Raw Materials,Delivered,1269,35.28,33.7,35.0,Yes
+PO-00568,Epsilon_Group,2023-04-22,2023-04-25,Raw Materials,Delivered,823,68.32,64.46,19.0,Yes
+PO-00569,Beta_Supplies,2023-03-29,2023-04-15,Electronics,Delivered,926,15.65,13.49,94.0,No
+PO-00570,Delta_Logistics,2023-03-29,2023-04-09,Electronics,Cancelled,1041,58.5,52.54,170.0,No
+PO-00571,Gamma_Co,2023-11-23,2023-12-01,Electronics,Pending,933,70.72,65.47,42.0,Yes
+PO-00572,Delta_Logistics,2022-08-07,,Raw Materials,Delivered,1423,41.48,40.9,199.0,Yes
+PO-00573,Delta_Logistics,2023-06-08,2023-06-14,MRO,Delivered,96,86.13,80.32,12.0,No
+PO-00574,Epsilon_Group,2023-04-30,2023-05-13,MRO,Delivered,916,21.06,19.53,25.0,Yes
+PO-00575,Epsilon_Group,2022-06-23,,Raw Materials,Delivered,872,17.18,16.63,20.0,Yes
+PO-00576,Beta_Supplies,2023-11-06,2023-11-15,Electronics,Delivered,985,83.85,80.88,,No
+PO-00577,Gamma_Co,2022-03-28,2022-04-04,Raw Materials,Delivered,1893,55.14,50.1,98.0,Yes
+PO-00578,Alpha_Inc,2022-10-18,,MRO,Delivered,705,75.19,69.55,19.0,Yes
+PO-00579,Delta_Logistics,2023-06-12,2023-06-28,MRO,Delivered,318,53.31,51.78,,No
+PO-00580,Alpha_Inc,2023-11-11,2023-11-16,Office Supplies,Pending,419,35.72,32.74,7.0,Yes
+PO-00581,Gamma_Co,2023-10-11,2023-10-26,MRO,Delivered,685,92.51,90.05,38.0,Yes
+PO-00582,Delta_Logistics,2023-09-27,2023-10-12,Office Supplies,Partially Delivered,1179,90.14,82.63,194.0,Yes
+PO-00583,Alpha_Inc,2022-12-10,,Raw Materials,Delivered,1743,76.51,65.88,40.0,Yes
+PO-00584,Alpha_Inc,2022-04-06,2022-04-17,MRO,Delivered,1732,35.01,34.18,40.0,Yes
+PO-00585,Beta_Supplies,2022-08-29,2022-09-01,Office Supplies,Delivered,706,65.33,62.06,60.0,No
+PO-00586,Gamma_Co,2023-11-20,2023-11-30,MRO,Cancelled,169,47.16,43.4,,Yes
+PO-00587,Gamma_Co,2022-11-14,2022-11-20,Office Supplies,Pending,880,19.15,18.69,,No
+PO-00588,Gamma_Co,2022-08-19,2022-08-25,MRO,Delivered,1860,95.8,92.17,105.0,No
+PO-00589,Delta_Logistics,2022-07-23,2022-08-09,MRO,Delivered,1677,22.98,21.71,246.0,Yes
+PO-00590,Beta_Supplies,2022-05-31,2022-06-07,Packaging,Partially Delivered,1131,97.43,91.28,103.0,Yes
+PO-00591,Epsilon_Group,2022-01-26,2022-02-03,Raw Materials,Cancelled,1419,50.14,43.46,,Yes
+PO-00592,Delta_Logistics,2022-02-17,2022-02-18,Raw Materials,Pending,790,26.8,25.62,115.0,Yes
+PO-00593,Gamma_Co,2022-09-08,2022-09-27,MRO,Pending,1547,61.12,53.43,77.0,Yes
+PO-00594,Delta_Logistics,2023-05-02,2023-05-20,Office Supplies,Cancelled,166,95.65,94.48,23.0,Yes
+PO-00595,Alpha_Inc,2023-09-18,2023-09-21,Electronics,Delivered,1903,83.49,82.33,43.0,Yes
+PO-00596,Delta_Logistics,2022-03-16,2022-03-29,Office Supplies,Partially Delivered,840,83.42,80.35,153.0,Yes
+PO-00597,Delta_Logistics,2023-04-12,,MRO,Delivered,1200,74.49,64.63,161.0,Yes
+PO-00598,Gamma_Co,2023-03-01,2023-03-18,Raw Materials,Delivered,1466,77.37,70.35,72.0,Yes
+PO-00599,Alpha_Inc,2023-10-07,2023-10-21,Office Supplies,Delivered,1981,95.5,94.39,49.0,Yes
+PO-00600,Gamma_Co,2023-08-13,2023-08-16,Packaging,Delivered,1062,35.55,32.38,,Yes
+PO-00601,Alpha_Inc,2022-07-19,2022-07-30,MRO,Delivered,1714,55.67,55.09,42.0,Yes
+PO-00602,Alpha_Inc,2023-12-15,2023-12-30,Office Supplies,Delivered,1131,33.35,31.28,23.0,Yes
+PO-00603,Alpha_Inc,2023-01-29,2023-02-15,Office Supplies,Delivered,683,104.82,101.34,,Yes
+PO-00604,Gamma_Co,2023-05-22,2023-06-09,Packaging,Partially Delivered,562,102.56,90.88,38.0,Yes
+PO-00605,Alpha_Inc,2023-02-14,2023-02-20,Electronics,Delivered,1824,14.43,14.11,36.0,Yes
+PO-00606,Beta_Supplies,2022-09-07,2022-09-12,Electronics,Partially Delivered,851,76.44,74.76,91.0,Yes
+PO-00607,Beta_Supplies,2022-06-01,2022-06-03,Office Supplies,Delivered,1169,95.6,82.16,103.0,Yes
+PO-00608,Epsilon_Group,2023-11-03,2023-11-20,MRO,Delivered,1711,29.14,26.35,48.0,Yes
+PO-00609,Beta_Supplies,2023-12-06,2023-12-12,Packaging,Pending,1191,68.14,61.71,112.0,Yes
+PO-00610,Epsilon_Group,2022-01-06,2022-01-14,Electronics,Delivered,609,92.39,82.75,29.0,Yes
+PO-00611,Beta_Supplies,2022-04-20,2022-05-07,Office Supplies,Delivered,1674,13.25,11.77,181.0,Yes
+PO-00612,Gamma_Co,2023-03-12,2023-03-15,MRO,Delivered,537,77.86,71.18,20.0,Yes
+PO-00613,Epsilon_Group,2022-08-13,2022-08-31,Electronics,Delivered,1310,38.05,37.0,45.0,Yes
+PO-00614,Delta_Logistics,2022-06-30,2022-07-10,Raw Materials,Delivered,1958,95.53,91.72,308.0,Yes
+PO-00615,Delta_Logistics,2023-12-14,2023-12-17,Office Supplies,Delivered,946,108.6,101.78,146.0,Yes
+PO-00616,Beta_Supplies,2023-06-15,2023-06-21,Packaging,Partially Delivered,1345,103.06,95.14,,Yes
+PO-00617,Delta_Logistics,2023-04-21,2023-05-10,MRO,Delivered,1262,56.63,51.46,,No
+PO-00618,Beta_Supplies,2022-02-21,2022-03-13,Office Supplies,Pending,753,88.02,79.92,75.0,Yes
+PO-00619,Beta_Supplies,2023-07-25,2023-08-14,Electronics,Delivered,1520,93.75,81.63,149.0,Yes
+PO-00620,Delta_Logistics,2022-09-13,2022-10-02,Office Supplies,Delivered,630,40.27,37.54,76.0,Yes
+PO-00621,Delta_Logistics,2022-05-05,2022-05-06,Office Supplies,Delivered,839,86.29,82.51,110.0,Yes
+PO-00622,Alpha_Inc,2023-04-13,2023-05-02,Electronics,Delivered,910,14.33,14.07,27.0,Yes
+PO-00623,Epsilon_Group,2022-05-17,2022-05-24,Raw Materials,Delivered,296,64.94,63.61,,Yes
+PO-00624,Beta_Supplies,2023-04-21,2023-05-05,MRO,Delivered,1149,33.0,30.65,141.0,Yes
+PO-00625,Delta_Logistics,2023-11-15,2023-11-16,Electronics,Delivered,203,23.14,20.0,,No
+PO-00626,Epsilon_Group,2023-06-28,2023-07-16,Office Supplies,Delivered,1729,18.36,16.34,47.0,Yes
+PO-00627,Delta_Logistics,2023-07-27,2023-08-06,Office Supplies,Delivered,1508,79.21,73.27,226.0,Yes
+PO-00628,Delta_Logistics,2023-09-02,2023-09-15,Packaging,Partially Delivered,1046,44.65,40.1,165.0,No
+PO-00629,Alpha_Inc,2022-11-21,2022-11-24,Office Supplies,Delivered,1159,78.99,71.69,14.0,Yes
+PO-00630,Beta_Supplies,2023-03-30,2023-04-05,Electronics,Delivered,746,16.99,15.35,69.0,No
+PO-00631,Beta_Supplies,2023-09-20,2023-10-06,Packaging,Delivered,1358,42.21,38.75,128.0,Yes
+PO-00632,Gamma_Co,2023-06-01,2023-06-12,Office Supplies,Delivered,1293,63.53,59.42,79.0,Yes
+PO-00633,Alpha_Inc,2023-03-13,2023-03-24,Electronics,Delivered,1142,86.85,74.28,30.0,Yes
+PO-00634,Epsilon_Group,2023-07-16,2023-07-27,MRO,Delivered,1120,42.17,37.47,33.0,Yes
+PO-00635,Alpha_Inc,2023-04-02,2023-04-14,MRO,Delivered,1058,71.3,62.04,,Yes
+PO-00636,Epsilon_Group,2022-06-12,,Office Supplies,Delivered,143,91.98,86.02,5.0,Yes
+PO-00637,Beta_Supplies,2023-05-02,2023-05-14,MRO,Delivered,1823,70.66,66.92,202.0,Yes
+PO-00638,Gamma_Co,2023-04-06,2023-04-10,Office Supplies,Delivered,1007,33.29,28.48,49.0,Yes
+PO-00639,Gamma_Co,2022-09-23,2022-10-08,Packaging,Delivered,1061,12.68,12.36,56.0,No
+PO-00640,Beta_Supplies,2022-09-11,2022-09-26,MRO,Pending,502,91.84,82.33,,Yes
+PO-00641,Delta_Logistics,2023-10-15,2023-10-19,Packaging,Delivered,1277,13.17,11.63,199.0,No
+PO-00642,Alpha_Inc,2022-10-11,2022-10-24,Packaging,Delivered,961,92.72,88.49,22.0,Yes
+PO-00643,Gamma_Co,2023-06-18,2023-07-02,Packaging,Delivered,267,62.5,61.18,17.0,Yes
+PO-00644,Delta_Logistics,2023-05-12,2023-05-18,Raw Materials,Cancelled,523,102.08,99.59,,Yes
+PO-00645,Epsilon_Group,2023-10-04,2023-10-23,Electronics,Pending,481,90.49,77.17,,Yes
+PO-00646,Gamma_Co,2022-09-02,2022-09-09,Office Supplies,Delivered,390,103.81,100.12,20.0,Yes
+PO-00647,Epsilon_Group,2022-10-09,2022-10-25,Packaging,Delivered,600,43.43,38.76,22.0,Yes
+PO-00648,Delta_Logistics,2023-03-27,,Office Supplies,Delivered,1685,84.58,75.21,253.0,No
+PO-00649,Epsilon_Group,2022-03-21,2022-03-31,Packaging,Cancelled,1362,46.64,42.85,33.0,Yes
+PO-00650,Delta_Logistics,2024-01-01,2024-01-04,Electronics,Pending,1327,59.57,56.44,169.0,Yes
+PO-00651,Epsilon_Group,2022-10-20,,MRO,Delivered,1807,69.47,60.0,50.0,Yes
+PO-00652,Alpha_Inc,2022-08-29,2022-09-06,Office Supplies,Pending,406,91.73,89.13,,Yes
+PO-00653,Gamma_Co,2022-10-06,2022-10-18,Raw Materials,Partially Delivered,72,103.0,89.49,1.0,No
+PO-00654,Gamma_Co,2022-12-10,2022-12-20,Office Supplies,Delivered,1835,83.5,82.36,85.0,No
+PO-00655,Delta_Logistics,2022-11-24,2022-12-10,Electronics,Pending,571,49.98,45.58,,No
+PO-00656,Epsilon_Group,2023-07-08,2023-07-09,Packaging,Delivered,1831,52.24,50.44,60.0,Yes
+PO-00657,Beta_Supplies,2022-03-24,2022-04-07,Office Supplies,Pending,1910,77.15,68.49,170.0,Yes
+PO-00658,Gamma_Co,2022-05-22,2022-05-31,Electronics,Partially Delivered,1173,32.12,29.18,,Yes
+PO-00659,Epsilon_Group,2022-06-04,2022-06-17,Packaging,Partially Delivered,851,20.44,19.22,22.0,Yes
+PO-00660,Epsilon_Group,2022-08-25,2022-09-07,MRO,Cancelled,1253,43.38,38.01,34.0,Yes
+PO-00661,Alpha_Inc,2023-01-28,2023-02-15,Electronics,Delivered,1296,38.0,33.42,33.0,Yes
+PO-00662,Beta_Supplies,2023-12-12,2023-12-30,Raw Materials,Delivered,1979,40.88,39.46,221.0,Yes
+PO-00663,Gamma_Co,2022-06-06,2022-06-19,Office Supplies,Delivered,811,31.8,30.33,58.0,Yes
+PO-00664,Alpha_Inc,2023-12-25,2024-01-12,Electronics,Delivered,1732,15.37,14.7,38.0,Yes
+PO-00665,Beta_Supplies,2022-08-08,2022-08-28,Packaging,Delivered,491,12.01,11.67,47.0,Yes
+PO-00666,Gamma_Co,2022-03-07,2022-03-11,Packaging,Cancelled,1681,99.88,96.38,90.0,Yes
+PO-00667,Alpha_Inc,2023-03-01,2023-03-05,Raw Materials,Partially Delivered,818,51.89,47.85,12.0,Yes
+PO-00668,Beta_Supplies,2023-02-22,2023-03-05,Office Supplies,Delivered,1065,47.49,41.42,113.0,Yes
+PO-00669,Gamma_Co,2022-12-05,2022-12-17,Packaging,Delivered,1398,75.08,67.09,57.0,Yes
+PO-00670,Beta_Supplies,2023-07-10,2023-07-17,Packaging,Delivered,565,32.31,29.76,60.0,Yes
+PO-00671,Epsilon_Group,2023-04-23,2023-05-06,Packaging,Pending,1089,102.66,89.21,33.0,Yes
+PO-00672,Delta_Logistics,2023-03-02,2023-03-04,Electronics,Delivered,841,86.43,83.77,125.0,No
+PO-00673,Delta_Logistics,2022-03-05,2022-03-16,Electronics,Delivered,385,18.23,17.74,,Yes
+PO-00674,Epsilon_Group,2022-07-31,2022-08-17,Office Supplies,Delivered,1832,49.01,41.86,52.0,Yes
+PO-00675,Beta_Supplies,2023-03-07,2023-03-27,Raw Materials,Delivered,307,95.36,83.63,29.0,Yes
+PO-00676,Epsilon_Group,2023-02-03,2023-02-08,Office Supplies,Delivered,546,101.2,97.82,21.0,Yes
+PO-00677,Delta_Logistics,2023-08-22,2023-09-11,Raw Materials,Delivered,945,57.01,55.14,147.0,No
+PO-00678,Delta_Logistics,2023-12-14,2023-12-27,MRO,Pending,209,72.71,64.34,39.0,Yes
+PO-00679,Beta_Supplies,2022-01-21,,Packaging,Delivered,1548,25.03,22.87,,Yes
+PO-00680,Delta_Logistics,2023-08-13,2023-08-23,Raw Materials,Delivered,901,108.63,106.3,141.0,Yes
+PO-00681,Epsilon_Group,2023-01-25,2023-02-11,Packaging,Delivered,1737,32.7,31.02,48.0,Yes
+PO-00682,Beta_Supplies,2023-05-04,2023-05-22,Raw Materials,Delivered,1981,102.43,90.99,204.0,Yes
+PO-00683,Epsilon_Group,2022-01-07,2022-01-26,MRO,Pending,739,68.47,66.09,19.0,Yes
+PO-00684,Beta_Supplies,2022-12-27,2022-12-28,Raw Materials,Delivered,1748,68.25,62.84,171.0,Yes
+PO-00685,Delta_Logistics,2022-11-02,2022-11-06,Office Supplies,Cancelled,429,58.95,55.35,59.0,No
+PO-00686,Gamma_Co,2023-02-04,,Electronics,Delivered,1618,32.76,28.41,62.0,Yes
+PO-00687,Beta_Supplies,2023-03-06,2023-03-07,Packaging,Delivered,1006,27.7,23.66,101.0,No
+PO-00688,Beta_Supplies,2023-07-06,2023-07-15,Electronics,Partially Delivered,740,32.53,29.35,84.0,Yes
+PO-00689,Gamma_Co,2023-07-14,,Raw Materials,Delivered,1500,29.19,27.24,72.0,Yes
+PO-00690,Delta_Logistics,2023-09-10,2023-09-29,Office Supplies,Cancelled,1686,88.18,77.15,,Yes
+PO-00691,Epsilon_Group,2022-08-14,2022-08-16,Raw Materials,Cancelled,1341,42.96,41.75,39.0,Yes
+PO-00692,Alpha_Inc,2023-05-15,2023-05-21,MRO,Cancelled,1908,16.42,15.31,36.0,Yes
+PO-00693,Gamma_Co,2022-08-13,2022-09-02,MRO,Partially Delivered,1650,100.62,90.45,85.0,Yes
+PO-00694,Alpha_Inc,2022-10-07,2022-10-20,MRO,Delivered,1490,93.57,81.68,29.0,Yes
+PO-00695,Delta_Logistics,2023-03-23,2023-03-31,Raw Materials,Delivered,1241,100.04,97.56,187.0,Yes
+PO-00696,Beta_Supplies,2023-05-13,2023-05-17,MRO,Delivered,1915,107.51,102.66,184.0,Yes
+PO-00697,Beta_Supplies,2022-01-30,2022-02-14,Raw Materials,Delivered,1116,25.65,24.28,121.0,Yes
+PO-00698,Delta_Logistics,2023-02-03,2023-02-08,Raw Materials,Delivered,1629,48.63,43.28,260.0,Yes
+PO-00699,Epsilon_Group,2022-12-11,2022-12-18,Office Supplies,Delivered,334,82.54,74.63,,Yes
+PO-00700,Epsilon_Group,2023-11-16,2023-12-06,Packaging,Delivered,446,80.63,70.37,,Yes
+PO-00701,Delta_Logistics,2023-11-27,,Electronics,Delivered,61,26.47,24.62,6.0,Yes
+PO-00702,Delta_Logistics,2023-02-19,2023-02-21,Packaging,Delivered,1680,88.85,87.53,,Yes
+PO-00703,Delta_Logistics,2022-06-19,2022-07-06,Electronics,Delivered,1375,30.95,30.02,223.0,Yes
+PO-00704,Delta_Logistics,2023-04-24,2023-05-05,Electronics,Partially Delivered,1971,32.4,30.48,321.0,Yes
+PO-00705,Delta_Logistics,2022-05-11,,Raw Materials,Pending,1326,59.49,56.21,,Yes
+PO-00706,Delta_Logistics,2023-09-30,2023-10-13,MRO,Cancelled,548,69.7,61.87,90.0,Yes
+PO-00707,Beta_Supplies,2023-07-01,2023-07-07,MRO,Delivered,803,67.81,61.53,78.0,Yes
+PO-00708,Alpha_Inc,2022-01-28,2022-02-15,MRO,Delivered,84,18.23,15.55,0.0,Yes
+PO-00709,Epsilon_Group,2023-02-08,2023-02-20,Packaging,Delivered,776,94.75,90.89,19.0,Yes
+PO-00710,Alpha_Inc,2023-08-30,2023-09-08,MRO,Delivered,898,37.12,35.54,18.0,No
+PO-00711,Beta_Supplies,2023-08-01,2023-08-08,Office Supplies,Cancelled,139,23.71,20.18,14.0,Yes
+PO-00712,Gamma_Co,2023-11-10,,Raw Materials,Delivered,825,99.89,97.65,30.0,Yes
+PO-00713,Alpha_Inc,2022-01-28,2022-02-07,MRO,Delivered,654,96.01,90.31,10.0,Yes
+PO-00714,Gamma_Co,2022-03-27,2022-04-06,MRO,Delivered,1995,88.47,82.65,87.0,No
+PO-00715,Beta_Supplies,2023-10-21,2023-10-28,MRO,Delivered,1019,91.56,77.93,111.0,No
+PO-00716,Epsilon_Group,2023-03-15,2023-03-31,Packaging,Pending,1675,73.8,65.34,42.0,Yes
+PO-00717,Gamma_Co,2022-05-19,2022-05-31,Raw Materials,Pending,1071,60.77,58.5,,Yes
+PO-00718,Beta_Supplies,2023-04-18,2023-04-27,Office Supplies,Delivered,467,19.17,17.11,49.0,Yes
+PO-00719,Delta_Logistics,2022-07-06,2022-07-25,MRO,Pending,164,48.16,47.46,27.0,Yes
+PO-00720,Epsilon_Group,2022-02-21,2022-03-06,Electronics,Cancelled,666,43.76,41.13,18.0,Yes
+PO-00721,Delta_Logistics,2022-09-24,2022-10-07,Packaging,Partially Delivered,1976,34.71,31.56,286.0,No
+PO-00722,Epsilon_Group,2023-01-24,2023-01-29,MRO,Delivered,1269,79.61,71.86,47.0,Yes
+PO-00723,Epsilon_Group,2022-12-02,2022-12-12,MRO,Delivered,875,57.63,51.8,16.0,Yes
+PO-00724,Alpha_Inc,2022-08-05,,Packaging,Partially Delivered,1574,17.9,15.85,31.0,Yes
+PO-00725,Epsilon_Group,2023-04-11,2023-04-26,Office Supplies,Partially Delivered,1699,32.05,29.34,69.0,Yes
+PO-00726,Alpha_Inc,2022-12-01,2022-12-17,Electronics,Delivered,1566,75.43,71.27,27.0,Yes
+PO-00727,Gamma_Co,2022-12-12,2022-12-30,Electronics,Delivered,1148,17.78,17.16,61.0,Yes
+PO-00728,Epsilon_Group,2023-01-24,2023-02-11,Office Supplies,Delivered,462,91.81,83.14,11.0,Yes
+PO-00729,Gamma_Co,2022-10-12,2022-10-17,Packaging,Delivered,1449,57.02,49.28,71.0,Yes
+PO-00730,Epsilon_Group,2023-03-08,2023-03-27,MRO,Delivered,1493,56.98,52.51,43.0,Yes
+PO-00731,Alpha_Inc,2022-09-16,2022-09-18,Office Supplies,Delivered,778,65.85,62.08,,No
+PO-00732,Delta_Logistics,2022-03-25,2022-04-11,Packaging,Partially Delivered,1350,85.06,82.34,,No
+PO-00733,Epsilon_Group,2023-04-27,2023-05-05,Packaging,Delivered,1070,44.4,40.07,26.0,Yes
+PO-00734,Beta_Supplies,2022-01-20,2022-02-03,Packaging,Pending,810,71.02,66.8,73.0,Yes
+PO-00735,Delta_Logistics,2023-07-07,2023-07-23,Packaging,Cancelled,725,66.4,62.1,118.0,Yes
+PO-00736,Alpha_Inc,2022-02-23,2022-02-28,Electronics,Delivered,1467,34.2,30.5,25.0,Yes
+PO-00737,Beta_Supplies,2022-12-25,2023-01-12,Packaging,Delivered,1942,93.98,81.31,198.0,Yes
+PO-00738,Gamma_Co,2022-08-18,,Office Supplies,Delivered,506,84.63,72.69,20.0,Yes
+PO-00739,Alpha_Inc,2023-10-28,2023-11-13,MRO,Delivered,969,76.53,75.64,30.0,Yes
+PO-00740,Delta_Logistics,2022-03-12,2022-03-19,MRO,Delivered,241,87.42,82.15,,Yes
+PO-00741,Gamma_Co,2023-10-30,2023-11-09,Raw Materials,Delivered,788,97.3,94.44,32.0,Yes
+PO-00742,Gamma_Co,2022-02-11,2022-02-13,Office Supplies,Delivered,1762,74.12,65.71,94.0,Yes
+PO-00743,Alpha_Inc,2022-02-01,,Raw Materials,Pending,1172,85.76,81.43,25.0,Yes
+PO-00744,Delta_Logistics,2022-09-11,2022-09-30,Office Supplies,Delivered,1621,75.68,73.78,226.0,No
+PO-00745,Alpha_Inc,2022-07-24,2022-07-26,Packaging,Delivered,1027,73.35,65.42,24.0,No
+PO-00746,Beta_Supplies,2022-01-21,,Raw Materials,Delivered,1058,65.68,57.21,101.0,Yes
+PO-00747,Beta_Supplies,2023-09-29,2023-10-05,Packaging,Delivered,145,85.52,81.86,11.0,No
+PO-00748,Epsilon_Group,2022-06-06,,Office Supplies,Delivered,1737,24.88,24.28,46.0,Yes
+PO-00749,Gamma_Co,2022-09-02,2022-09-15,Electronics,Delivered,712,92.85,89.39,43.0,Yes
+PO-00750,Epsilon_Group,2022-05-10,2022-05-16,Electronics,Delivered,1263,90.24,86.84,28.0,Yes
+PO-00751,Delta_Logistics,2023-04-30,,Electronics,Delivered,1809,13.58,12.68,,No
+PO-00752,Beta_Supplies,2023-11-17,,Electronics,Cancelled,86,93.6,88.22,5.0,Yes
+PO-00753,Epsilon_Group,2022-04-28,,MRO,Delivered,1853,21.92,20.72,,Yes
+PO-00754,Beta_Supplies,2023-08-01,2023-08-02,Electronics,Delivered,1442,43.98,41.82,140.0,No
+PO-00755,Beta_Supplies,2022-08-12,2022-09-01,Office Supplies,Pending,1768,79.61,74.97,207.0,No
+PO-00756,Beta_Supplies,2023-04-22,2023-05-03,Electronics,Partially Delivered,1598,26.3,26.03,154.0,No
+PO-00757,Alpha_Inc,2023-12-18,2024-01-05,MRO,Cancelled,328,93.23,82.63,6.0,Yes
+PO-00758,Epsilon_Group,2022-09-20,2022-09-25,Packaging,Delivered,266,88.29,80.22,4.0,Yes
+PO-00759,Gamma_Co,2023-01-13,2023-01-28,Raw Materials,Delivered,916,59.01,53.37,47.0,Yes
+PO-00760,Epsilon_Group,2022-06-21,2022-06-25,Packaging,Cancelled,922,10.84,9.27,29.0,Yes
+PO-00761,Gamma_Co,2023-09-13,2023-09-28,Packaging,Delivered,1871,39.42,37.41,101.0,No
+PO-00762,Epsilon_Group,2023-09-14,2023-09-20,Raw Materials,Delivered,1346,72.08,67.04,38.0,Yes
+PO-00763,Epsilon_Group,2022-04-28,2022-05-09,Electronics,Delivered,1954,99.78,87.47,57.0,Yes
+PO-00764,Beta_Supplies,2022-06-17,2022-07-06,Electronics,Delivered,111,68.53,65.22,11.0,Yes
+PO-00765,Gamma_Co,2022-11-15,2022-11-22,Office Supplies,Pending,645,35.05,30.88,27.0,Yes
+PO-00766,Gamma_Co,2022-04-21,2022-05-04,Electronics,Cancelled,1953,68.07,62.95,87.0,Yes
+PO-00767,Gamma_Co,2023-08-16,2023-09-02,Electronics,Delivered,778,64.17,61.6,47.0,Yes
+PO-00768,Epsilon_Group,2022-01-27,2022-02-09,Office Supplies,Delivered,1415,80.19,78.34,,Yes
+PO-00769,Gamma_Co,2022-11-16,2022-11-22,Raw Materials,Delivered,446,20.61,19.46,14.0,Yes
+PO-00770,Epsilon_Group,2023-08-13,,Office Supplies,Delivered,748,85.95,79.16,32.0,Yes
+PO-00771,Alpha_Inc,2023-11-25,2023-12-03,Electronics,Pending,1092,65.17,63.11,21.0,Yes
+PO-00772,Beta_Supplies,2023-01-20,2023-02-02,Electronics,Delivered,226,102.47,99.16,28.0,Yes
+PO-00773,Delta_Logistics,2023-02-11,2023-02-20,Electronics,Delivered,1685,43.42,42.24,262.0,Yes
+PO-00774,Alpha_Inc,2022-07-23,,Office Supplies,Delivered,445,68.94,60.35,7.0,Yes
+PO-00775,Gamma_Co,2022-03-19,2022-04-07,Raw Materials,Delivered,494,94.82,81.89,29.0,Yes
+PO-00776,Beta_Supplies,2023-08-30,2023-09-11,MRO,Delivered,1306,21.05,18.27,128.0,Yes
+PO-00777,Beta_Supplies,2023-12-09,2023-12-11,Office Supplies,Delivered,1988,105.2,93.23,187.0,Yes
