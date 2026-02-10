@@ -1,0 +1,18 @@
+.env
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+
+# Proof of concept work (not for repo)
+PoC2/
+
+# Local development settings
+.claude/
+.vscode/
+
+# Test artifacts (checkpoint files created during testing)
+.rlm-scheme-checkpoints/

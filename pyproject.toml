@@ -1,0 +1,19 @@
+[project]
+name = "rlm-scheme"
+version = "0.1.0"
+description = "RLM-Scheme — A safe orchestration runtime for LLM pipelines"
+requires-python = ">=3.12"
+dependencies = [
+    "mcp[cli]>=1.2.0",
+    "openai",
+    "python-dotenv",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-xdist",
+]
+
+[tool.pytest.ini_options]
+addopts = "-n auto"

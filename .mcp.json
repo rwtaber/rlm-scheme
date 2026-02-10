@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "rlm-scheme": {
+      "command": "/home/rwt/code/rlm-scheme/.venv/bin/python",
+      "args": ["/home/rwt/code/rlm-scheme/mcp_server.py"],
+      "cwd": "/home/rwt/code/rlm-scheme",
+      "env": {
+        "RLM_SUB_MODEL": "gpt-4o"
+      }
+    }
+  }
+}

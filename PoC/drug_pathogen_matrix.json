@@ -1,0 +1,5024 @@
+{
+  "drugs": [
+    "auranofin",
+    "ebselen",
+    "niclosamide",
+    "ciclopirox",
+    "tamoxifen",
+    "polymyxin B",
+    "colistin",
+    "thioridazine",
+    "doxifluridine",
+    "curcumin",
+    "Candesartan Cilexetil",
+    "Nitazoxanide",
+    "fusidic acid",
+    "Glatiramer Acetate",
+    "silver (Ag+)",
+    "verapamil",
+    "Eltrombopag",
+    "AKBA",
+    "methylene blue",
+    "closantel",
+    "celecoxib",
+    "zidovudine",
+    "rifampicin",
+    "chlorpromazine",
+    "idarubicin",
+    "disulfiram",
+    "ceritinib",
+    "9-Aminoacridine",
+    "Oxiconazole",
+    "compound 3h",
+    "guanethidine",
+    "Caspofungin acetate",
+    "sertraline",
+    "paroxetine",
+    "MK-8245",
+    "ENOblock",
+    "mitotane",
+    "c5",
+    "5-fluorouracil",
+    "azithromycin"
+  ],
+  "pathogens": [
+    "S. aureus",
+    "S. aureus (MRSA)",
+    "A. baumannii",
+    "P. aeruginosa",
+    "K. pneumoniae",
+    "E. coli",
+    "E. faecium",
+    "E. faecium (VRE)",
+    "E. faecalis",
+    "Enterobacter spp.",
+    "M. tuberculosis",
+    "N. gonorrhoeae",
+    "S. pneumoniae",
+    "H. pylori"
+  ],
+  "matrix": {
+    "auranofin": {
+      "S. aureus": {
+        "n_findings": 4,
+        "evidence_types": [
+          "in_vitro|in_vivo",
+          "in_vitro",
+          "in_vivo"
+        ],
+        "activity_types": [
+          "direct_antibacterial",
+          "synergy",
+          "direct_antibacterial|synergy|anti_biofilm",
+          "adjuvant"
+        ],
+        "best_mic_ug_ml": 0.125,
+        "pmids": [
+          "35774400",
+          "32131427"
+        ]
+      },
+      "S. aureus (MRSA)": {
+        "n_findings": 3,
+        "evidence_types": [
+          "in_vitro",
+          "in_vivo"
+        ],
+        "activity_types": [
+          "direct_antibacterial",
+          "direct_antibacterial|anti_biofilm",
+          "anti_inflammatory"
+        ],
+        "best_mic_ug_ml": null,
+        "pmids": [
+          "34321273",
+          "30658640"
+        ]
+      },
+      "A. baumannii": {
+        "n_findings": 2,
+        "evidence_types": [
+          "in_vitro"
+        ],
+        "activity_types": [
+          "direct_antibacterial",
+          "adjuvant"
+        ],
+        "best_mic_ug_ml": null,
+        "pmids": [
+          "37178319",
+          "32810364"
+        ]
+      },
+      "P. aeruginosa": null,
+      "K. pneumoniae": null,
+      "E. coli": {
+        "n_findings": 2,
+        "evidence_types": [
+          "in_vitro|in_vivo",
+          "in_vitro"
+        ],
+        "activity_types": [
+          "direct_antibacterial",
+          "direct_antibacterial|synergy|adjuvant"
+        ],
+        "best_mic_ug_ml": null,
+        "pmids": [
+          "32995131",
+          "39338275"
+        ]
+      },
+      "E. faecium": null,
+      "E. faecium (VRE)": {
+        "n_findings": 1,
+        "evidence_types": [
+          "in_vitro|in_vivo"
+        ],
+        "activity_types": [
+          "direct_antibacterial|anti_biofilm"
+        ],
+        "best_mic_ug_ml": 1,
+        "pmids": [
+          "29085751"
+        ]
+      },
+      "E. faecalis": {
+        "n_findings": 1,
+        "evidence_types": [
+          "in_vitro|in_vivo"
+        ],
+        "activity_types": [
+          "direct_antibacterial|synergy|anti_biofilm"
+        ],
+        "best_mic_ug_ml": 1,
+        "pmids": [
+          "32131427"
+        ]
+      },
+      "Enterobacter spp.": null,
+      "M. tuberculosis": {
+        "n_findings": 2,
+        "evidence_types": [
+          "in_vivo",
+          "clinical"
+        ],
+        "activity_types": [
+          "direct_antibacterial",
+          "adjuvant"
+        ],
+        "best_mic_ug_ml": null,
+        "pmids": [
+          "33740465",
+          "37147323"
+        ]
+      },
+      "N. gonorrhoeae": {
+        "n_findings": 6,
+        "evidence_types": [
+          "in_vitro",
+          "in_vivo"
+        ],
+        "activity_types": [
+          "direct_antibacterial",
+          "synergy",
+          "efflux_inhibitor",
+          "anti_biofilm"
+        ],
+        "best_mic_ug_ml": 0.007,
+        "pmids": [
+          "36112342",
+          "35299994",
+          "32377889"
+        ]
+      },
+      "S. pneumoniae": {
+        "n_findings": 4,
+        "evidence_types": [
+          "in_vitro",
+          "in_vivo"
+        ],
+        "activity_types": [
+          "direct_antibacterial",
+          "anti_biofilm",
+          "adjuvant"
+        ],
+        "best_mic_ug_ml": 0.25,
+        "pmids": [
+          "27216055"
+        ]
+      },
+      "H. pylori": null
+    },
+    "ebselen": {
+      "S. aureus": {
+        "n_findings": 9,
+        "evidence_types": [
+          "in_vitro",
+          "in_vivo"
+        ],
+        "activity_types": [
+          "direct_antibacterial",
+          "efflux_inhibitor",
+          "anti_virulence",
+          "anti_biofilm",
+          "adjuvant"
+        ],
+        "best_mic_ug_ml": 0.125,
+        "pmids": [
+          "37240241",
+          "25897961",
+          "25515946"
+        ]
+      },
+      "S. aureus (MRSA)": null,
+      "A. baumannii": null,
+      "P. aeruginosa": {
+        "n_findings": 1,
+        "evidence_types": [
+          "in_vitro"
+        ],
+        "activity_types": [
+          "direct_antibacterial"
+        ],
+        "best_mic_ug_ml": null,
+        "pmids": [
+          "37428033"
+        ]
+      },
+      "K. pneumoniae": null,
+      "E. coli": {
+        "n_findings": 2,
+        "evidence_types": [
+          "in_vitro"
+        ],
+        "activity_types": [
+          "synergy",
+          "adjuvant"
+        ],
+        "best_mic_ug_ml": null,
+        "pmids": [
+          "36432288",
+          "28948099"
+        ]
+      },
+      "E. faecium": {
+        "n_findings": 1,
+        "evidence_types": [
+          "in_vitro"
+        ],
+        "activity_types": [
+          "direct_antibacterial"
+        ],
+        "best_mic_ug_ml": 0.25,
+        "pmids": [
+          "37240241"
+        ]
+      },
+      "E. faecium (VRE)": null,
+      "E. faecalis": null,
+      "Enterobacter spp.": null,
+      "M. tuberculosis": null,
+      "N. gonorrhoeae": null,
+      "S. pneumoniae": null,
+      "H. pylori": null
+    },
+    "niclosamide": {
+      "S. aureus": {
+        "n_findings": 5,
+        "evidence_types": [
+          "in_vitro",
+          "in_vivo"
+        ],
+        "activity_types": [
+          "direct_antibacterial",
+          "synergy",
+          "anti_biofilm",
+          "adjuvant"
+        ],
+        "best_mic_ug_ml": 0.125,
+        "pmids": [
+          "35522900",
+          "35456620"
+        ]
+      },
+      "S. aureus (MRSA)": {
+        "n_findings": 1,
+        "evidence_types": [
+          "in_vitro|in_vivo"
+        ],
+        "activity_types": [
+          "direct_antibacterial"
+        ],
+        "best_mic_ug_ml": 0.125,
+        "pmids": [
+          "25521459"
+        ]
+      },
+      "A. baumannii": {
+        "n_findings": 1,
+        "evidence_types": [
+          "in_vitro"
+        ],
+        "activity_types": [
+          "synergy"
+        ],
+        "best_mic_ug_ml": null,
+        "pmids": [
+          "30089175"
+        ]
+      },
+      "P. aeruginosa": {
+        "n_findings": 2,
+        "evidence_types": [
+          "in_vitro"
+        ],
+        "activity_types": [
+          "direct_antibacterial",
+          "synergy"
+        ],
+        "best_mic_ug_ml": null,
+        "pmids": [
+          "41159745"
+        ]
+      },
+      "K. pneumoniae": {
+        "n_findings": 1,
+        "evidence_types": [
+          "in_vitro"
+        ],
+        "activity_types": [
+          "synergy"
+        ],
+        "best_mic_ug_ml": null,
+        "pmids": [
+          "30089175"
+        ]
+      },
+      "E. coli": null,
+      "E. faecium": {
+        "n_findings": 1,
+        "evidence_types": [
+          "in_vitro"
+        ],
+        "activity_types": [
+          "direct_antibacterial"
+        ],
+        "best_mic_ug_ml": 0.25,
+        "pmids": [
+          "25521459"
+        ]
+      },
+      "E. faecium (VRE)": null,
+      "E. faecalis": null,
+      "Enterobacter spp.": null,
+      "M. tuberculosis": null,
+      "N. gonorrhoeae": null,
+      "S. pneumoniae": null,
+      "H. pylori": null
+    },
+    "ciclopirox": {
+      "S. aureus": null,
+      "S. aureus (MRSA)": null,
+      "A. baumannii": {
+        "n_findings": 2,
+        "evidence_types": [
+          "in_vitro"
+        ],
+        "activity_types": [
+          "direct_antibacterial"
+        ],
+        "best_mic_ug_ml": 5,
+        "pmids": [
+          "26222252",
+          "30675370"
+        ]
+      },
+      "P. aeruginosa": {
+        "n_findings": 2,
+        "evidence_types": [
+          "in_vitro"
+        ],
+        "activity_types": [
+          "direct_antibacterial",
+          "direct_antibacterial|anti_biofilm"
+        ],
+        "best_mic_ug_ml": 128,
+        "pmids": [
+          "26222252",
+          "35958130"
+        ]
+      },
+      "K. pneumoniae": {
+        "n_findings": 3,
+        "evidence_types": [
+          "in_vitro"
+        ],
+        "activity_types": [
+          "direct_antibacterial"
+        ],
+        "best_mic_ug_ml": 5,
+        "pmids": [
+          "26222252",
+          "31080089",
+          "30675370"
+        ]
+      },
+      "E. coli": {
+        "n_findings": 4,
+        "evidence_types": [
+          "in_vitro"
+        ],
+        "activity_types": [
+          "direct_antibacterial",
+          "efflux_inhibitor",
+          "adjuvant"
+        ],
+        "best_mic_ug_ml": 5,
+        "pmids": [
+          "26222252",
+          "30675370"
+        ]
+      },
+      "E. faecium": null,
+      "E. faecium (VRE)": null,
+      "E. faecalis": null,
+      "Enterobacter spp.": null,
+      "M. tuberculosis": null,
+      "N. gonorrhoeae": null,
+      "S. pneumoniae": null,
+      "H. pylori": null
+    },
+    "tamoxifen": {
+      "S. aureus": null,
+      "S. aureus (MRSA)": null,
+      "A. baumannii": {
+        "n_findings": 3,
+        "evidence_types": [
+          "in_vitro",
+          "in_vivo"
+        ],
+        "activity_types": [
+          "efflux_inhibitor",
+          "adjuvant|immune_modulation",
+          "adjuvant"
+        ],
+        "best_mic_ug_ml": null,
+        "pmids": [
+          "34025592",
+          "34153377"
+        ]
+      },
+      "P. aeruginosa": {
+        "n_findings": 4,
+        "evidence_types": [
+          "in_vitro",
+          "in_vivo"
+        ],
+        "activity_types": [
+          "efflux_inhibitor",
+          "adjuvant|immune_modulation",
+          "adjuvant"
+        ],
+        "best_mic_ug_ml": null,
+        "pmids": [
+          "34025592",
+          "30662875",
+          "34153377"
+        ]
+      },
+      "K. pneumoniae": null,
+      "E. coli": {
+        "n_findings": 3,
+        "evidence_types": [
+          "in_vitro",
+          "in_vivo"
+        ],
+        "activity_types": [
+          "efflux_inhibitor",
+          "adjuvant|immune_modulation",
+          "adjuvant"
+        ],
+        "best_mic_ug_ml": null,
+        "pmids": [
+          "34025592",
+          "34153377"
+        ]
+      },
+      "E. faecium": null,
+      "E. faecium (VRE)": null,
+      "E. faecalis": null,
+      "Enterobacter spp.": null,
+      "M. tuberculosis": null,
+      "N. gonorrhoeae": null,
+      "S. pneumoniae": null,
+      "H. pylori": null
+    },
+    "polymyxin B": {
+      "S. aureus": null,
+      "S. aureus (MRSA)": null,
+      "A. baumannii": {
+        "n_findings": 3,
+        "evidence_types": [
+          "in_vitro"
+        ],
+        "activity_types": [
+          "direct_antibacterial"
+        ],
+        "best_mic_ug_ml": 2,
+        "pmids": [
+          "35326755",
+          "29740519",
+          "26284040"
+        ]
+      },
+      "P. aeruginosa": {
+        "n_findings": 3,
+        "evidence_types": [
+          "in_vitro",
+          "in_vivo"
+        ],
+        "activity_types": [
+          "direct_antibacterial"
+        ],
+        "best_mic_ug_ml": 8,
+        "pmids": [
+          "34564137",
+          "29740519",
+          "30662875"
+        ]
+      },
+      "K. pneumoniae": {
+        "n_findings": 3,
+        "evidence_types": [
+          "in_vitro"
+        ],
+        "activity_types": [
+          "direct_antibacterial",
+          "synergy"
+        ],
+        "best_mic_ug_ml": null,
+        "pmids": [
+          "35498219",
+          "29740519"
+        ]
+      },
+      "E. coli": null,
+      "E. faecium": null,
+      "E. faecium (VRE)": null,
+      "E. faecalis": null,
+      "Enterobacter spp.": null,
+      "M. tuberculosis": null,
+      "N. gonorrhoeae": null,
+      "S. pneumoniae": null,
+      "H. pylori": null
+    },
+    "colistin": {
+      "S. aureus": null,
+      "S. aureus (MRSA)": null,
+      "A. baumannii": {
+        "n_findings": 4,
+        "evidence_types": [
+          "computational",
+          "in_vitro",
+          "in_vivo"
+        ],
+        "activity_types": [
+          "direct_antibacterial"
+        ],
+        "best_mic_ug_ml": 8,
+        "pmids": [
+          "40661217",
+          "39755609"
+        ]
+      },
+      "P. aeruginosa": {
+        "n_findings": 2,
+        "evidence_types": [
+          "in_vitro"
+        ],
+        "activity_types": [
+          "direct_antibacterial"
+        ],
+        "best_mic_ug_ml": 32,
+        "pmids": [
+          "40661217",
+          "40367640"
+        ]
+      },
+      "K. pneumoniae": {
+        "n_findings": 2,
+        "evidence_types": [
+          "in_vitro"
+        ],
+        "activity_types": [
+          "direct_antibacterial"
+        ],
+        "best_mic_ug_ml": 2,
+        "pmids": [
+          "40661217",
+          "39019790"
+        ]
+      },
+      "E. coli": null,
+      "E. faecium": null,
+      "E. faecium (VRE)": null,
+      "E. faecalis": null,
+      "Enterobacter spp.": null,
+      "M. tuberculosis": null,
+      "N. gonorrhoeae": null,
+      "S. pneumoniae": null,
+      "H. pylori": null
+    },
+    "thioridazine": {
+      "S. aureus": {
+        "n_findings": 2,
+        "evidence_types": [
+          "in_vitro"
+        ],
+        "activity_types": [
+          "efflux_inhibitor|adjuvant",
+          "adjuvant"
+        ],
+        "best_mic_ug_ml": null,
+        "pmids": [
+          "31446534",
+          "29706941"
+        ]
+      },
+      "S. aureus (MRSA)": {
+        "n_findings": 1,
+        "evidence_types": [
+          "in_vitro"
+        ],
+        "activity_types": [
+          "direct_antibacterial"
+        ],
+        "best_mic_ug_ml": null,
+        "pmids": [
+          "26553420"
+        ]
+      },
+      "A. baumannii": {
+        "n_findings": 1,
+        "evidence_types": [
+          "in_vitro"
+        ],
+        "activity_types": [
+          "anti_biofilm"
+        ],
+        "best_mic_ug_ml": null,
+        "pmids": [
+          "37341603"
+        ]
+      },
+      "P. aeruginosa": {
+        "n_findings": 1,
+        "evidence_types": [
+          "in_vitro"
+        ],
+        "activity_types": [
+          "anti_biofilm"
+        ],
+        "best_mic_ug_ml": null,
+        "pmids": [
+          "28085074"
+        ]
+      },
+      "K. pneumoniae": null,
+      "E. coli": {
+        "n_findings": 2,
+        "evidence_types": [
+          "in_vitro"
+        ],
+        "activity_types": [
+          "efflux_inhibitor",
+          "anti_biofilm"
+        ],
+        "best_mic_ug_ml": null,
+        "pmids": [
+          "40539807",
+          "28085074"
+        ]
+      },
+      "E. faecium": null,
+      "E. faecium (VRE)": null,
+      "E. faecalis": null,
+      "Enterobacter spp.": null,
+      "M. tuberculosis": null,
+      "N. gonorrhoeae": null,
+      "S. pneumoniae": null,
+      "H. pylori": null
+    },
+    "doxifluridine": {
+      "S. aureus": null,
+      "S. aureus (MRSA)": {
+        "n_findings": 7,
+        "evidence_types": [
+          "in_vitro",
+          "none"
+        ],
+        "activity_types": [
+          "direct_antibacterial",
+          "efflux_inhibitor",
+          "anti_virulence",
+          "synergy",
+          "bactericidal",
+          "anti_biofilm",
+          "adjuvant"
+        ],
+        "best_mic_ug_ml": 0.5,
+        "pmids": [
+          "40025471"
+        ]
+      },
+      "A. baumannii": null,
+      "P. aeruginosa": null,
+      "K. pneumoniae": null,
+      "E. coli": null,
+      "E. faecium": null,
+      "E. faecium (VRE)": null,
+      "E. faecalis": null,
+      "Enterobacter spp.": null,
+      "M. tuberculosis": null,
+      "N. gonorrhoeae": null,
+      "S. pneumoniae": null,
+      "H. pylori": null
+    },
+    "curcumin": {
+      "S. aureus": {
+        "n_findings": 2,
+        "evidence_types": [
+          "in_vitro"
+        ],
+        "activity_types": [
+          "direct_antibacterial"
+        ],
+        "best_mic_ug_ml": 100,
+        "pmids": [
+          "32952938",
+          "37458598"
+        ]
+      },
+      "S. aureus (MRSA)": null,
+      "A. baumannii": null,
+      "P. aeruginosa": {
+        "n_findings": 3,
+        "evidence_types": [
+          "in_vitro",
+          "in_vivo"
+        ],
+        "activity_types": [
+          "direct_antibacterial",
+          "anti_virulence"
+        ],
+        "best_mic_ug_ml": 50,
+        "pmids": [
+          "32952938",
+          "37458598"
+        ]
+      },
+      "K. pneumoniae": null,
+      "E. coli": {
+        "n_findings": 1,
+        "evidence_types": [
+          "in_vitro"
+        ],
+        "activity_types": [
+          "direct_antibacterial"
+        ],
+        "best_mic_ug_ml": null,
+        "pmids": [
+          "37458598"
+        ]
+      },
+      "E. faecium": null,
+      "E. faecium (VRE)": null,
+      "E. faecalis": null,
+      "Enterobacter spp.": null,
+      "M. tuberculosis": null,
+      "N. gonorrhoeae": null,
+      "S. pneumoniae": null,
+      "H. pylori": null
+    },
+    "Candesartan Cilexetil": {
+      "S. aureus": {
+        "n_findings": 6,
+        "evidence_types": [
+          "in_vitro"
+        ],
+        "activity_types": [
+          "direct_antibacterial",
+          "efflux_inhibitor",
+          "anti_virulence",
+          "synergy",
+          "anti_biofilm",
+          "adjuvant"
+        ],
+        "best_mic_ug_ml": 4,
+        "pmids": [
+          "34696514"
+        ]
+      },
+      "S. aureus (MRSA)": null,
+      "A. baumannii": null,
+      "P. aeruginosa": null,
+      "K. pneumoniae": null,
+      "E. coli": null,
+      "E. faecium": null,
+      "E. faecium (VRE)": null,
+      "E. faecalis": null,
+      "Enterobacter spp.": null,
+      "M. tuberculosis": null,
+      "N. gonorrhoeae": null,
+      "S. pneumoniae": null,
+      "H. pylori": null
+    },
+    "Nitazoxanide": {
+      "S. aureus": null,
+      "S. aureus (MRSA)": null,
+      "A. baumannii": {
+        "n_findings": 3,
+        "evidence_types": [
+          "in_vitro"
+        ],
+        "activity_types": [
+          "efflux_inhibitor",
+          "synergy",
+          "anti_biofilm"
+        ],
+        "best_mic_ug_ml": 128,
+        "pmids": [
+          "38047647"
+        ]
+      },
+      "P. aeruginosa": null,
+      "K. pneumoniae": null,
+      "E. coli": {
+        "n_findings": 3,
+        "evidence_types": [
+          "in_vitro"
+        ],
+        "activity_types": [
+          "efflux_inhibitor",
+          "synergy",
+          "anti_biofilm"
+        ],
+        "best_mic_ug_ml": 128,
+        "pmids": [
+          "38047647"
+        ]
+      },
+      "E. faecium": null,
+      "E. faecium (VRE)": null,
+      "E. faecalis": null,
+      "Enterobacter spp.": null,
+      "M. tuberculosis": null,
+      "N. gonorrhoeae": null,
+      "S. pneumoniae": null,
+      "H. pylori": null
+    },
+    "fusidic acid": {
+      "S. aureus": null,
+      "S. aureus (MRSA)": null,
+      "A. baumannii": null,
+      "P. aeruginosa": null,
+      "K. pneumoniae": null,
+      "E. coli": null,
+      "E. faecium": {
+        "n_findings": 3,
+        "evidence_types": [
+          "in_vitro",
+          "in_vivo"
+        ],
+        "activity_types": [
+          "direct_antibacterial",
+          "resistance_development"
+        ],
+        "best_mic_ug_ml": 4,
+        "pmids": [
+          "38259963"
+        ]
+      },
+      "E. faecium (VRE)": null,
+      "E. faecalis": {
+        "n_findings": 3,
+        "evidence_types": [
+          "in_vitro",
+          "in_vivo"
+        ],
+        "activity_types": [
+          "direct_antibacterial",
+          "resistance_development"
+        ],
+        "best_mic_ug_ml": 2,
+        "pmids": [
+          "38259963"
+        ]
+      },
+      "Enterobacter spp.": null,
+      "M. tuberculosis": null,
+      "N. gonorrhoeae": null,
+      "S. pneumoniae": null,
+      "H. pylori": null
+    },
+    "Glatiramer Acetate": {
+      "S. aureus": {
+        "n_findings": 1,
+        "evidence_types": [
+          "in_vitro"
+        ],
+        "activity_types": [
+          "direct_antibacterial"
+        ],
+        "best_mic_ug_ml": 500,
+        "pmids": [
+          "28873428"
+        ]
+      },
+      "S. aureus (MRSA)": null,
+      "A. baumannii": {
+        "n_findings": 1,
+        "evidence_types": [
+          "in_vitro"
+        ],
+        "activity_types": [
+          "direct_antibacterial"
+        ],
+        "best_mic_ug_ml": null,
+        "pmids": [
+          "28873428"
+        ]
+      },
+      "P. aeruginosa": {
+        "n_findings": 2,
+        "evidence_types": [
+          "in_vitro"
+        ],
+        "activity_types": [
+          "direct_antibacterial",
+          "adjuvant|synergy"
+        ],
+        "best_mic_ug_ml": 31,
+        "pmids": [
+          "35446884",
+          "28873428"
+        ]
+      },
+      "K. pneumoniae": null,
+      "E. coli": {
+        "n_findings": 1,
+        "evidence_types": [
+          "in_vitro"
+        ],
+        "activity_types": [
+          "direct_antibacterial"
+        ],
+        "best_mic_ug_ml": 500,
+        "pmids": [
+          "28873428"
+        ]
+      },
+      "E. faecium": null,
+      "E. faecium (VRE)": null,
+      "E. faecalis": null,
+      "Enterobacter spp.": null,
+      "M. tuberculosis": null,
+      "N. gonorrhoeae": null,
+      "S. pneumoniae": null,
+      "H. pylori": null
+    },
+    "silver (Ag+)": {
+      "S. aureus": null,
+      "S. aureus (MRSA)": null,
+      "A. baumannii": {
+        "n_findings": 1,
+        "evidence_types": [
+          "in_vitro"
+        ],
+        "activity_types": [
+          "direct_antibacterial"
+        ],
+        "best_mic_ug_ml": null,
+        "pmids": [
+          "28948099"
+        ]
+      },
+      "P. aeruginosa": {
+        "n_findings": 1,
+        "evidence_types": [
+          "in_vitro"
+        ],
+        "activity_types": [
+          "direct_antibacterial"
+        ],
+        "best_mic_ug_ml": null,
+        "pmids": [
+          "28948099"
+        ]
+      },
+      "K. pneumoniae": {
+        "n_findings": 1,
+        "evidence_types": [
+          "in_vitro"
+        ],
+        "activity_types": [
+          "direct_antibacterial"
+        ],
+        "best_mic_ug_ml": null,
+        "pmids": [
+          "28948099"
+        ]
+      },
+      "E. coli": {
+        "n_findings": 1,
+        "evidence_types": [
+          "in_vitro"
+        ],
+        "activity_types": [
+          "direct_antibacterial"
+        ],
+        "best_mic_ug_ml": 42,
+        "pmids": [
+          "28948099"
+        ]
+      },
+      "E. faecium": null,
+      "E. faecium (VRE)": null,
+      "E. faecalis": null,
+      "Enterobacter spp.": {
+        "n_findings": 1,
+        "evidence_types": [
+          "in_vitro"
+        ],
+        "activity_types": [
+          "direct_antibacterial"
+        ],
+        "best_mic_ug_ml": null,
+        "pmids": [
+          "28948099"
+        ]
+      },
+      "M. tuberculosis": null,
+      "N. gonorrhoeae": null,
+      "S. pneumoniae": null,
+      "H. pylori": null
+    },
+    "verapamil": {
+      "S. aureus": null,
+      "S. aureus (MRSA)": null,
+      "A. baumannii": null,
+      "P. aeruginosa": {
+        "n_findings": 1,
+        "evidence_types": [
+          "in_vitro"
+        ],
+        "activity_types": [
+          "efflux_inhibitor"
+        ],
+        "best_mic_ug_ml": null,
+        "pmids": [
+          "36110398"
+        ]
+      },
+      "K. pneumoniae": null,
+      "E. coli": null,
+      "E. faecium": null,
+      "E. faecium (VRE)": null,
+      "E. faecalis": null,
+      "Enterobacter spp.": null,
+      "M. tuberculosis": {
+        "n_findings": 4,
+        "evidence_types": [
+          "in_vitro|in_vivo",
+          "in_vitro",
+          "in_vitro|in_vivo|clinical"
+        ],
+        "activity_types": [
+          "efflux_inhibitor",
+          "direct_antibacterial|synergy|adjuvant",
+          "anti_biofilm|direct_antibacterial",
+          "adjuvant"
+        ],
+        "best_mic_ug_ml": 512,
+        "pmids": [
+          "29340835",
+          "34073235"
+        ]
+      },
+      "N. gonorrhoeae": null,
+      "S. pneumoniae": null,
+      "H. pylori": null
+    },
+    "Eltrombopag": {
+      "S. aureus": {
+        "n_findings": 3,
+        "evidence_types": [
+          "in_vitro",
+          "in_vivo"
+        ],
+        "activity_types": [
+          "direct_antibacterial",
+          "synergy",
+          "efflux_inhibitor"
+        ],
+        "best_mic_ug_ml": 1.4,
+        "pmids": [
+          "34824393"
+        ]
+      },
+      "S. aureus (MRSA)": {
+        "n_findings": 2,
+        "evidence_types": [
+          "in_vitro",
+          "in_vivo"
+        ],
+        "activity_types": [
+          "direct_antibacterial",
+          "anti_biofilm"
+        ],
+        "best_mic_ug_ml": null,
+        "pmids": [
+          "35011432"
+        ]
+      },
+      "A. baumannii": null,
+      "P. aeruginosa": null,
+      "K. pneumoniae": null,
+      "E. coli": null,
+      "E. faecium": null,
+      "E. faecium (VRE)": null,
+      "E. faecalis": null,
+      "Enterobacter spp.": null,
+      "M. tuberculosis": null,
+      "N. gonorrhoeae": null,
+      "S. pneumoniae": null,
+      "H. pylori": null
+    },
+    "AKBA": {
+      "S. aureus": null,
+      "S. aureus (MRSA)": {
+        "n_findings": 5,
+        "evidence_types": [
+          "in_vitro",
+          "in_vivo"
+        ],
+        "activity_types": [
+          "direct_antibacterial",
+          "synergy",
+          "anti_biofilm",
+          "anti_persister"
+        ],
+        "best_mic_ug_ml": 1,
+        "pmids": [
+          "38143555"
+        ]
+      },
+      "A. baumannii": null,
+      "P. aeruginosa": null,
+      "K. pneumoniae": null,
+      "E. coli": null,
+      "E. faecium": null,
+      "E. faecium (VRE)": null,
+      "E. faecalis": null,
+      "Enterobacter spp.": null,
+      "M. tuberculosis": null,
+      "N. gonorrhoeae": null,
+      "S. pneumoniae": null,
+      "H. pylori": null
+    },
+    "methylene blue": {
+      "S. aureus": {
+        "n_findings": 3,
+        "evidence_types": [
+          "in_vitro",
+          "in_vivo"
+        ],
+        "activity_types": [
+          "direct_antibacterial|synergy",
+          "adjuvant|anti_virulence",
+          "synergy"
+        ],
+        "best_mic_ug_ml": null,
+        "pmids": [
+          "33927718",
+          "37907954",
+          "22927795"
+        ]
+      },
+      "S. aureus (MRSA)": null,
+      "A. baumannii": null,
+      "P. aeruginosa": null,
+      "K. pneumoniae": null,
+      "E. coli": {
+        "n_findings": 1,
+        "evidence_types": [
+          "in_vitro"
+        ],
+        "activity_types": [
+          "direct_antibacterial|synergy"
+        ],
+        "best_mic_ug_ml": null,
+        "pmids": [
+          "33927718"
+        ]
+      },
+      "E. faecium": null,
+      "E. faecium (VRE)": null,
+      "E. faecalis": null,
+      "Enterobacter spp.": null,
+      "M. tuberculosis": null,
+      "N. gonorrhoeae": null,
+      "S. pneumoniae": null,
+      "H. pylori": null
+    },
+    "closantel": {
+      "S. aureus": null,
+      "S. aureus (MRSA)": {
+        "n_findings": 3,
+        "evidence_types": [
+          "in_vitro"
+        ],
+        "activity_types": [
+          "direct_antibacterial",
+          "synergy",
+          "anti_biofilm"
+        ],
+        "best_mic_ug_ml": 0.0625,
+        "pmids": [
+          "38689973"
+        ]
+      },
+      "A. baumannii": {
+        "n_findings": 1,
+        "evidence_types": [
+          "in_vitro"
+        ],
+        "activity_types": [
+          "adjuvant|synergy"
+        ],
+        "best_mic_ug_ml": 16,
+        "pmids": [
+          "26284040"
+        ]
+      },
+      "P. aeruginosa": null,
+      "K. pneumoniae": null,
+      "E. coli": null,
+      "E. faecium": null,
+      "E. faecium (VRE)": null,
+      "E. faecalis": null,
+      "Enterobacter spp.": null,
+      "M. tuberculosis": null,
+      "N. gonorrhoeae": null,
+      "S. pneumoniae": null,
+      "H. pylori": null
+    },
+    "celecoxib": {
+      "S. aureus": {
+        "n_findings": 4,
+        "evidence_types": [
+          "in_vitro",
+          "in_vivo"
+        ],
+        "activity_types": [
+          "direct_antibacterial",
+          "synergy",
+          "efflux_inhibitor",
+          "anti_biofilm"
+        ],
+        "best_mic_ug_ml": null,
+        "pmids": [
+          "26528965"
+        ]
+      },
+      "S. aureus (MRSA)": null,
+      "A. baumannii": null,
+      "P. aeruginosa": null,
+      "K. pneumoniae": null,
+      "E. coli": null,
+      "E. faecium": null,
+      "E. faecium (VRE)": null,
+      "E. faecalis": null,
+      "Enterobacter spp.": null,
+      "M. tuberculosis": null,
+      "N. gonorrhoeae": null,
+      "S. pneumoniae": null,
+      "H. pylori": null
+    },
+    "zidovudine": {
+      "S. aureus": {
+        "n_findings": 1,
+        "evidence_types": [
+          "in_vitro"
+        ],
+        "activity_types": [
+          "adjuvant"
+        ],
+        "best_mic_ug_ml": null,
+        "pmids": [
+          "37178319"
+        ]
+      },
+      "S. aureus (MRSA)": null,
+      "A. baumannii": {
+        "n_findings": 1,
+        "evidence_types": [
+          "in_vitro"
+        ],
+        "activity_types": [
+          "direct_antibacterial"
+        ],
+        "best_mic_ug_ml": null,
+        "pmids": [
+          "31080089"
+        ]
+      },
+      "P. aeruginosa": null,
+      "K. pneumoniae": null,
+      "E. coli": {
+        "n_findings": 2,
+        "evidence_types": [
+          "in_vitro",
+          "in_vivo"
+        ],
+        "activity_types": [
+          "direct_antibacterial",
+          "synergy"
+        ],
+        "best_mic_ug_ml": null,
+        "pmids": [
+          "39858337"
+        ]
+      },
+      "E. faecium": null,
+      "E. faecium (VRE)": null,
+      "E. faecalis": null,
+      "Enterobacter spp.": null,
+      "M. tuberculosis": null,
+      "N. gonorrhoeae": null,
+      "S. pneumoniae": null,
+      "H. pylori": null
+    },
+    "rifampicin": {
+      "S. aureus": null,
+      "S. aureus (MRSA)": null,
+      "A. baumannii": {
+        "n_findings": 1,
+        "evidence_types": [
+          "in_vitro"
+        ],
+        "activity_types": [
+          "direct_antibacterial"
+        ],
+        "best_mic_ug_ml": null,
+        "pmids": [
+          "32810364"
+        ]
+      },
+      "P. aeruginosa": {
+        "n_findings": 1,
+        "evidence_types": [
+          "in_vitro"
+        ],
+        "activity_types": [
+          "synergy"
+        ],
+        "best_mic_ug_ml": null,
+        "pmids": [
+          "31334131"
+        ]
+      },
+      "K. pneumoniae": {
+        "n_findings": 1,
+        "evidence_types": [
+          "in_vitro"
+        ],
+        "activity_types": [
+          "synergy"
+        ],
+        "best_mic_ug_ml": null,
+        "pmids": [
+          "31334131"
+        ]
+      },
+      "E. coli": {
+        "n_findings": 1,
+        "evidence_types": [
+          "in_vitro"
+        ],
+        "activity_types": [
+          "synergy"
+        ],
+        "best_mic_ug_ml": null,
+        "pmids": [
+          "31334131"
+        ]
+      },
+      "E. faecium": null,
+      "E. faecium (VRE)": null,
+      "E. faecalis": null,
+      "Enterobacter spp.": null,
+      "M. tuberculosis": null,
+      "N. gonorrhoeae": null,
+      "S. pneumoniae": null,
+      "H. pylori": null
+    },
+    "chlorpromazine": {
+      "S. aureus": {
+        "n_findings": 2,
+        "evidence_types": [
+          "in_vitro"
+        ],
+        "activity_types": [
+          "efflux_inhibitor",
+          "synergy"
+        ],
+        "best_mic_ug_ml": null,
+        "pmids": [
+          "40539807"
+        ]
+      },
+      "S. aureus (MRSA)": null,
+      "A. baumannii": {
+        "n_findings": 1,
+        "evidence_types": [
+          "in_vitro"
+        ],
+        "activity_types": [
+          "adjuvant"
+        ],
+        "best_mic_ug_ml": 200,
+        "pmids": [
+          "33362739"
+        ]
+      },
+      "P. aeruginosa": null,
+      "K. pneumoniae": null,
+      "E. coli": {
+        "n_findings": 1,
+        "evidence_types": [
+          "in_vitro"
+        ],
+        "activity_types": [
+          "efflux_inhibitor"
+        ],
+        "best_mic_ug_ml": null,
+        "pmids": [
+          "32428379"
+        ]
+      },
+      "E. faecium": null,
+      "E. faecium (VRE)": null,
+      "E. faecalis": null,
+      "Enterobacter spp.": null,
+      "M. tuberculosis": null,
+      "N. gonorrhoeae": null,
+      "S. pneumoniae": null,
+      "H. pylori": null
+    },
+    "idarubicin": {
+      "S. aureus": null,
+      "S. aureus (MRSA)": {
+        "n_findings": 4,
+        "evidence_types": [
+          "in_vitro"
+        ],
+        "activity_types": [
+          "direct_antibacterial",
+          "synergy",
+          "efflux_inhibitor",
+          "anti_biofilm"
+        ],
+        "best_mic_ug_ml": null,
+        "pmids": [
+          "32443498"
+        ]
+      },
+      "A. baumannii": null,
+      "P. aeruginosa": null,
+      "K. pneumoniae": null,
+      "E. coli": null,
+      "E. faecium": null,
+      "E. faecium (VRE)": null,
+      "E. faecalis": null,
+      "Enterobacter spp.": null,
+      "M. tuberculosis": null,
+      "N. gonorrhoeae": null,
+      "S. pneumoniae": null,
+      "H. pylori": null
+    },
+    "disulfiram": {
+      "S. aureus": {
+        "n_findings": 1,
+        "evidence_types": [
+          "in_vitro"
+        ],
+        "activity_types": [
+          "direct_antibacterial"
+        ],
+        "best_mic_ug_ml": null,
+        "pmids": [
+          "40074309"
+        ]
+      },
+      "S. aureus (MRSA)": {
+        "n_findings": 1,
+        "evidence_types": [
+          "in_vitro"
+        ],
+        "activity_types": [
+          "direct_antibacterial"
+        ],
+        "best_mic_ug_ml": 0.5,
+        "pmids": [
+          "35286809"
+        ]
+      },
+      "A. baumannii": null,
+      "P. aeruginosa": null,
+      "K. pneumoniae": null,
+      "E. coli": null,
+      "E. faecium": null,
+      "E. faecium (VRE)": null,
+      "E. faecalis": null,
+      "Enterobacter spp.": null,
+      "M. tuberculosis": null,
+      "N. gonorrhoeae": null,
+      "S. pneumoniae": null,
+      "H. pylori": {
+        "n_findings": 2,
+        "evidence_types": [
+          "in_vitro"
+        ],
+        "activity_types": [
+          "direct_antibacterial",
+          "anti_virulence"
+        ],
+        "best_mic_ug_ml": 1,
+        "pmids": [
+          "33777846"
+        ]
+      }
+    },
+    "ceritinib": {
+      "S. aureus": {
+        "n_findings": 4,
+        "evidence_types": [
+          "in_vitro",
+          "in_vivo"
+        ],
+        "activity_types": [
+          "direct_antibacterial",
+          "efflux_inhibitor",
+          "anti_biofilm",
+          "anti_virulence"
+        ],
+        "best_mic_ug_ml": null,
+        "pmids": [
+          "36454354"
+        ]
+      },
+      "S. aureus (MRSA)": null,
+      "A. baumannii": null,
+      "P. aeruginosa": null,
+      "K. pneumoniae": null,
+      "E. coli": null,
+      "E. faecium": null,
+      "E. faecium (VRE)": null,
+      "E. faecalis": null,
+      "Enterobacter spp.": null,
+      "M. tuberculosis": null,
+      "N. gonorrhoeae": null,
+      "S. pneumoniae": null,
+      "H. pylori": null
+    },
+    "9-Aminoacridine": {
+      "S. aureus": null,
+      "S. aureus (MRSA)": null,
+      "A. baumannii": null,
+      "P. aeruginosa": null,
+      "K. pneumoniae": {
+        "n_findings": 4,
+        "evidence_types": [
+          "in_vitro",
+          "mechanistic",
+          "in_vivo"
+        ],
+        "activity_types": [
+          "direct_antibacterial",
+          "synergy",
+          "efflux_inhibitor",
+          "adjuvant"
+        ],
+        "best_mic_ug_ml": 8,
+        "pmids": [
+          "36978084"
+        ]
+      },
+      "E. coli": null,
+      "E. faecium": null,
+      "E. faecium (VRE)": null,
+      "E. faecalis": null,
+      "Enterobacter spp.": null,
+      "M. tuberculosis": null,
+      "N. gonorrhoeae": null,
+      "S. pneumoniae": null,
+      "H. pylori": null
+    },
+    "Oxiconazole": {
+      "S. aureus": {
+        "n_findings": 4,
+        "evidence_types": [
+          "in_vitro",
+          "in_vivo"
+        ],
+        "activity_types": [
+          "direct_antibacterial",
+          "synergy",
+          "anti_biofilm",
+          "adjuvant"
+        ],
+        "best_mic_ug_ml": null,
+        "pmids": [
+          "37537267"
+        ]
+      },
+      "S. aureus (MRSA)": null,
+      "A. baumannii": null,
+      "P. aeruginosa": null,
+      "K. pneumoniae": null,
+      "E. coli": null,
+      "E. faecium": null,
+      "E. faecium (VRE)": null,
+      "E. faecalis": null,
+      "Enterobacter spp.": null,
+      "M. tuberculosis": null,
+      "N. gonorrhoeae": null,
+      "S. pneumoniae": null,
+      "H. pylori": null
+    },
+    "compound 3h": {
+      "S. aureus": {
+        "n_findings": 1,
+        "evidence_types": [
+          "in_vitro"
+        ],
+        "activity_types": [
+          "direct_antibacterial"
+        ],
+        "best_mic_ug_ml": 16,
+        "pmids": [
+          "38049492"
+        ]
+      },
+      "S. aureus (MRSA)": null,
+      "A. baumannii": null,
+      "P. aeruginosa": {
+        "n_findings": 1,
+        "evidence_types": [
+          "in_vitro"
+        ],
+        "activity_types": [
+          "direct_antibacterial"
+        ],
+        "best_mic_ug_ml": 32,
+        "pmids": [
+          "38049492"
+        ]
+      },
+      "K. pneumoniae": {
+        "n_findings": 1,
+        "evidence_types": [
+          "in_vitro"
+        ],
+        "activity_types": [
+          "direct_antibacterial"
+        ],
+        "best_mic_ug_ml": 32,
+        "pmids": [
+          "38049492"
+        ]
+      },
+      "E. coli": null,
+      "E. faecium": {
+        "n_findings": 1,
+        "evidence_types": [
+          "in_vitro"
+        ],
+        "activity_types": [
+          "direct_antibacterial"
+        ],
+        "best_mic_ug_ml": 32,
+        "pmids": [
+          "38049492"
+        ]
+      },
+      "E. faecium (VRE)": null,
+      "E. faecalis": null,
+      "Enterobacter spp.": null,
+      "M. tuberculosis": null,
+      "N. gonorrhoeae": null,
+      "S. pneumoniae": null,
+      "H. pylori": null
+    },
+    "guanethidine": {
+      "S. aureus": null,
+      "S. aureus (MRSA)": null,
+      "A. baumannii": null,
+      "P. aeruginosa": null,
+      "K. pneumoniae": null,
+      "E. coli": {
+        "n_findings": 4,
+        "evidence_types": [
+          "in_vitro"
+        ],
+        "activity_types": [
+          "efflux_inhibitor",
+          "synergy",
+          "adjuvant"
+        ],
+        "best_mic_ug_ml": null,
+        "pmids": [
+          "39308694"
+        ]
+      },
+      "E. faecium": null,
+      "E. faecium (VRE)": null,
+      "E. faecalis": null,
+      "Enterobacter spp.": null,
+      "M. tuberculosis": null,
+      "N. gonorrhoeae": null,
+      "S. pneumoniae": null,
+      "H. pylori": null
+    },
+    "Caspofungin acetate": {
+      "S. aureus": null,
+      "S. aureus (MRSA)": null,
+      "A. baumannii": null,
+      "P. aeruginosa": null,
+      "K. pneumoniae": null,
+      "E. coli": {
+        "n_findings": 4,
+        "evidence_types": [
+          "in_vitro",
+          "in_vivo"
+        ],
+        "activity_types": [
+          "synergy",
+          "anti_biofilm",
+          "adjuvant"
+        ],
+        "best_mic_ug_ml": null,
+        "pmids": [
+          "39329140"
+        ]
+      },
+      "E. faecium": null,
+      "E. faecium (VRE)": null,
+      "E. faecalis": null,
+      "Enterobacter spp.": null,
+      "M. tuberculosis": null,
+      "N. gonorrhoeae": null,
+      "S. pneumoniae": null,
+      "H. pylori": null
+    },
+    "sertraline": {
+      "S. aureus": {
+        "n_findings": 1,
+        "evidence_types": [
+          "in_vitro"
+        ],
+        "activity_types": [
+          "direct_antibacterial"
+        ],
+        "best_mic_ug_ml": 15,
+        "pmids": [
+          "39930418"
+        ]
+      },
+      "S. aureus (MRSA)": null,
+      "A. baumannii": null,
+      "P. aeruginosa": null,
+      "K. pneumoniae": null,
+      "E. coli": {
+        "n_findings": 3,
+        "evidence_types": [
+          "in_vitro"
+        ],
+        "activity_types": [
+          "direct_antibacterial",
+          "efflux_inhibitor",
+          "anti_biofilm"
+        ],
+        "best_mic_ug_ml": 15,
+        "pmids": [
+          "39930418"
+        ]
+      },
+      "E. faecium": null,
+      "E. faecium (VRE)": null,
+      "E. faecalis": null,
+      "Enterobacter spp.": null,
+      "M. tuberculosis": null,
+      "N. gonorrhoeae": null,
+      "S. pneumoniae": null,
+      "H. pylori": null
+    },
+    "paroxetine": {
+      "S. aureus": {
+        "n_findings": 2,
+        "evidence_types": [
+          "in_vitro"
+        ],
+        "activity_types": [
+          "direct_antibacterial",
+          "anti_biofilm"
+        ],
+        "best_mic_ug_ml": 60,
+        "pmids": [
+          "39930418"
+        ]
+      },
+      "S. aureus (MRSA)": null,
+      "A. baumannii": null,
+      "P. aeruginosa": null,
+      "K. pneumoniae": null,
+      "E. coli": {
+        "n_findings": 2,
+        "evidence_types": [
+          "in_vitro"
+        ],
+        "activity_types": [
+          "direct_antibacterial",
+          "efflux_inhibitor"
+        ],
+        "best_mic_ug_ml": 60,
+        "pmids": [
+          "39930418"
+        ]
+      },
+      "E. faecium": null,
+      "E. faecium (VRE)": null,
+      "E. faecalis": null,
+      "Enterobacter spp.": null,
+      "M. tuberculosis": null,
+      "N. gonorrhoeae": null,
+      "S. pneumoniae": null,
+      "H. pylori": null
+    },
+    "MK-8245": {
+      "S. aureus": null,
+      "S. aureus (MRSA)": null,
+      "A. baumannii": null,
+      "P. aeruginosa": {
+        "n_findings": 4,
+        "evidence_types": [
+          "in_vitro",
+          "in_vivo"
+        ],
+        "activity_types": [
+          "synergy",
+          "anti_virulence",
+          "anti_biofilm",
+          "adjuvant"
+        ],
+        "best_mic_ug_ml": 40,
+        "pmids": [
+          "41155646"
+        ]
+      },
+      "K. pneumoniae": null,
+      "E. coli": null,
+      "E. faecium": null,
+      "E. faecium (VRE)": null,
+      "E. faecalis": null,
+      "Enterobacter spp.": null,
+      "M. tuberculosis": null,
+      "N. gonorrhoeae": null,
+      "S. pneumoniae": null,
+      "H. pylori": null
+    },
+    "ENOblock": {
+      "S. aureus": null,
+      "S. aureus (MRSA)": null,
+      "A. baumannii": {
+        "n_findings": 4,
+        "evidence_types": [
+          "in_vitro",
+          "in_vivo"
+        ],
+        "activity_types": [
+          "direct_antibacterial",
+          "synergy",
+          "bactericidal",
+          "adjuvant"
+        ],
+        "best_mic_ug_ml": 16,
+        "pmids": [
+          "41301611"
+        ]
+      },
+      "P. aeruginosa": null,
+      "K. pneumoniae": null,
+      "E. coli": null,
+      "E. faecium": null,
+      "E. faecium (VRE)": null,
+      "E. faecalis": null,
+      "Enterobacter spp.": null,
+      "M. tuberculosis": null,
+      "N. gonorrhoeae": null,
+      "S. pneumoniae": null,
+      "H. pylori": null
+    },
+    "mitotane": {
+      "S. aureus": null,
+      "S. aureus (MRSA)": null,
+      "A. baumannii": {
+        "n_findings": 1,
+        "evidence_types": [
+          "in_vitro"
+        ],
+        "activity_types": [
+          "adjuvant"
+        ],
+        "best_mic_ug_ml": null,
+        "pmids": [
+          "29740519"
+        ]
+      },
+      "P. aeruginosa": {
+        "n_findings": 1,
+        "evidence_types": [
+          "in_vitro"
+        ],
+        "activity_types": [
+          "adjuvant"
+        ],
+        "best_mic_ug_ml": null,
+        "pmids": [
+          "29740519"
+        ]
+      },
+      "K. pneumoniae": {
+        "n_findings": 1,
+        "evidence_types": [
+          "in_vitro"
+        ],
+        "activity_types": [
+          "adjuvant"
+        ],
+        "best_mic_ug_ml": null,
+        "pmids": [
+          "29740519"
+        ]
+      },
+      "E. coli": null,
+      "E. faecium": null,
+      "E. faecium (VRE)": null,
+      "E. faecalis": null,
+      "Enterobacter spp.": null,
+      "M. tuberculosis": null,
+      "N. gonorrhoeae": null,
+      "S. pneumoniae": null,
+      "H. pylori": null
+    },
+    "c5": {
+      "S. aureus": null,
+      "S. aureus (MRSA)": {
+        "n_findings": 3,
+        "evidence_types": [
+          "in_vitro"
+        ],
+        "activity_types": [
+          "direct_antibacterial",
+          "synergy",
+          "efflux_inhibitor"
+        ],
+        "best_mic_ug_ml": 3.13,
+        "pmids": [
+          "30633761"
+        ]
+      },
+      "A. baumannii": null,
+      "P. aeruginosa": null,
+      "K. pneumoniae": null,
+      "E. coli": null,
+      "E. faecium": null,
+      "E. faecium (VRE)": null,
+      "E. faecalis": null,
+      "Enterobacter spp.": null,
+      "M. tuberculosis": null,
+      "N. gonorrhoeae": null,
+      "S. pneumoniae": null,
+      "H. pylori": null
+    },
+    "5-fluorouracil": {
+      "S. aureus": null,
+      "S. aureus (MRSA)": null,
+      "A. baumannii": {
+        "n_findings": 1,
+        "evidence_types": [
+          "in_vitro"
+        ],
+        "activity_types": [
+          "adjuvant"
+        ],
+        "best_mic_ug_ml": null,
+        "pmids": [
+          "30665342"
+        ]
+      },
+      "P. aeruginosa": {
+        "n_findings": 2,
+        "evidence_types": [
+          "in_vitro"
+        ],
+        "activity_types": [
+          "anti_biofilm",
+          "direct_antibacterial|anti_biofilm"
+        ],
+        "best_mic_ug_ml": 128,
+        "pmids": [
+          "37428033",
+          "35958130"
+        ]
+      },
+      "K. pneumoniae": null,
+      "E. coli": null,
+      "E. faecium": null,
+      "E. faecium (VRE)": null,
+      "E. faecalis": null,
+      "Enterobacter spp.": null,
+      "M. tuberculosis": null,
+      "N. gonorrhoeae": null,
+      "S. pneumoniae": null,
+      "H. pylori": null
+    },
+    "azithromycin": {
+      "S. aureus": null,
+      "S. aureus (MRSA)": null,
+      "A. baumannii": null,
+      "P. aeruginosa": {
+        "n_findings": 1,
+        "evidence_types": [
+          "in_vitro"
+        ],
+        "activity_types": [
+          "synergy"
+        ],
+        "best_mic_ug_ml": null,
+        "pmids": [
+          "31334131"
+        ]
+      },
+      "K. pneumoniae": {
+        "n_findings": 1,
+        "evidence_types": [
+          "in_vitro"
+        ],
+        "activity_types": [
+          "synergy"
+        ],
+        "best_mic_ug_ml": null,
+        "pmids": [
+          "31334131"
+        ]
+      },
+      "E. coli": {
+        "n_findings": 1,
+        "evidence_types": [
+          "in_vitro"
+        ],
+        "activity_types": [
+          "synergy"
+        ],
+        "best_mic_ug_ml": null,
+        "pmids": [
+          "31334131"
+        ]
+      },
+      "E. faecium": null,
+      "E. faecium (VRE)": null,
+      "E. faecalis": null,
+      "Enterobacter spp.": null,
+      "M. tuberculosis": null,
+      "N. gonorrhoeae": null,
+      "S. pneumoniae": null,
+      "H. pylori": null
+    }
+  },
+  "gaps": [
+    {
+      "drug": "auranofin",
+      "untested_pathogen": "P. aeruginosa",
+      "tested_against": [
+        "A. baumannii",
+        "E. faecalis",
+        "M. tuberculosis",
+        "S. aureus (MRSA)",
+        "N. gonorrhoeae",
+        "S. pneumoniae",
+        "S. aureus",
+        "E. coli",
+        "E. faecium (VRE)"
+      ],
+      "n_tested": 9
+    },
+    {
+      "drug": "auranofin",
+      "untested_pathogen": "K. pneumoniae",
+      "tested_against": [
+        "A. baumannii",
+        "E. faecalis",
+        "M. tuberculosis",
+        "S. aureus (MRSA)",
+        "N. gonorrhoeae",
+        "S. pneumoniae",
+        "S. aureus",
+        "E. coli",
+        "E. faecium (VRE)"
+      ],
+      "n_tested": 9
+    },
+    {
+      "drug": "auranofin",
+      "untested_pathogen": "E. faecium",
+      "tested_against": [
+        "A. baumannii",
+        "E. faecalis",
+        "M. tuberculosis",
+        "S. aureus (MRSA)",
+        "N. gonorrhoeae",
+        "S. pneumoniae",
+        "S. aureus",
+        "E. coli",
+        "E. faecium (VRE)"
+      ],
+      "n_tested": 9
+    },
+    {
+      "drug": "auranofin",
+      "untested_pathogen": "Enterobacter spp.",
+      "tested_against": [
+        "A. baumannii",
+        "E. faecalis",
+        "M. tuberculosis",
+        "S. aureus (MRSA)",
+        "N. gonorrhoeae",
+        "S. pneumoniae",
+        "S. aureus",
+        "E. coli",
+        "E. faecium (VRE)"
+      ],
+      "n_tested": 9
+    },
+    {
+      "drug": "auranofin",
+      "untested_pathogen": "H. pylori",
+      "tested_against": [
+        "A. baumannii",
+        "E. faecalis",
+        "M. tuberculosis",
+        "S. aureus (MRSA)",
+        "N. gonorrhoeae",
+        "S. pneumoniae",
+        "S. aureus",
+        "E. coli",
+        "E. faecium (VRE)"
+      ],
+      "n_tested": 9
+    },
+    {
+      "drug": "ebselen",
+      "untested_pathogen": "S. aureus (MRSA)",
+      "tested_against": [
+        "P. aeruginosa",
+        "S. aureus",
+        "E. faecium",
+        "E. coli"
+      ],
+      "n_tested": 4
+    },
+    {
+      "drug": "ebselen",
+      "untested_pathogen": "A. baumannii",
+      "tested_against": [
+        "P. aeruginosa",
+        "S. aureus",
+        "E. faecium",
+        "E. coli"
+      ],
+      "n_tested": 4
+    },
+    {
+      "drug": "ebselen",
+      "untested_pathogen": "K. pneumoniae",
+      "tested_against": [
+        "P. aeruginosa",
+        "S. aureus",
+        "E. faecium",
+        "E. coli"
+      ],
+      "n_tested": 4
+    },
+    {
+      "drug": "ebselen",
+      "untested_pathogen": "E. faecium (VRE)",
+      "tested_against": [
+        "P. aeruginosa",
+        "S. aureus",
+        "E. faecium",
+        "E. coli"
+      ],
+      "n_tested": 4
+    },
+    {
+      "drug": "ebselen",
+      "untested_pathogen": "E. faecalis",
+      "tested_against": [
+        "P. aeruginosa",
+        "S. aureus",
+        "E. faecium",
+        "E. coli"
+      ],
+      "n_tested": 4
+    },
+    {
+      "drug": "ebselen",
+      "untested_pathogen": "Enterobacter spp.",
+      "tested_against": [
+        "P. aeruginosa",
+        "S. aureus",
+        "E. faecium",
+        "E. coli"
+      ],
+      "n_tested": 4
+    },
+    {
+      "drug": "ebselen",
+      "untested_pathogen": "M. tuberculosis",
+      "tested_against": [
+        "P. aeruginosa",
+        "S. aureus",
+        "E. faecium",
+        "E. coli"
+      ],
+      "n_tested": 4
+    },
+    {
+      "drug": "ebselen",
+      "untested_pathogen": "N. gonorrhoeae",
+      "tested_against": [
+        "P. aeruginosa",
+        "S. aureus",
+        "E. faecium",
+        "E. coli"
+      ],
+      "n_tested": 4
+    },
+    {
+      "drug": "ebselen",
+      "untested_pathogen": "S. pneumoniae",
+      "tested_against": [
+        "P. aeruginosa",
+        "S. aureus",
+        "E. faecium",
+        "E. coli"
+      ],
+      "n_tested": 4
+    },
+    {
+      "drug": "ebselen",
+      "untested_pathogen": "H. pylori",
+      "tested_against": [
+        "P. aeruginosa",
+        "S. aureus",
+        "E. faecium",
+        "E. coli"
+      ],
+      "n_tested": 4
+    },
+    {
+      "drug": "niclosamide",
+      "untested_pathogen": "E. coli",
+      "tested_against": [
+        "A. baumannii",
+        "E. faecium",
+        "S. aureus (MRSA)",
+        "S. aureus",
+        "P. aeruginosa",
+        "K. pneumoniae"
+      ],
+      "n_tested": 6
+    },
+    {
+      "drug": "niclosamide",
+      "untested_pathogen": "E. faecium (VRE)",
+      "tested_against": [
+        "A. baumannii",
+        "E. faecium",
+        "S. aureus (MRSA)",
+        "S. aureus",
+        "P. aeruginosa",
+        "K. pneumoniae"
+      ],
+      "n_tested": 6
+    },
+    {
+      "drug": "niclosamide",
+      "untested_pathogen": "E. faecalis",
+      "tested_against": [
+        "A. baumannii",
+        "E. faecium",
+        "S. aureus (MRSA)",
+        "S. aureus",
+        "P. aeruginosa",
+        "K. pneumoniae"
+      ],
+      "n_tested": 6
+    },
+    {
+      "drug": "niclosamide",
+      "untested_pathogen": "Enterobacter spp.",
+      "tested_against": [
+        "A. baumannii",
+        "E. faecium",
+        "S. aureus (MRSA)",
+        "S. aureus",
+        "P. aeruginosa",
+        "K. pneumoniae"
+      ],
+      "n_tested": 6
+    },
+    {
+      "drug": "niclosamide",
+      "untested_pathogen": "M. tuberculosis",
+      "tested_against": [
+        "A. baumannii",
+        "E. faecium",
+        "S. aureus (MRSA)",
+        "S. aureus",
+        "P. aeruginosa",
+        "K. pneumoniae"
+      ],
+      "n_tested": 6
+    },
+    {
+      "drug": "niclosamide",
+      "untested_pathogen": "N. gonorrhoeae",
+      "tested_against": [
+        "A. baumannii",
+        "E. faecium",
+        "S. aureus (MRSA)",
+        "S. aureus",
+        "P. aeruginosa",
+        "K. pneumoniae"
+      ],
+      "n_tested": 6
+    },
+    {
+      "drug": "niclosamide",
+      "untested_pathogen": "S. pneumoniae",
+      "tested_against": [
+        "A. baumannii",
+        "E. faecium",
+        "S. aureus (MRSA)",
+        "S. aureus",
+        "P. aeruginosa",
+        "K. pneumoniae"
+      ],
+      "n_tested": 6
+    },
+    {
+      "drug": "niclosamide",
+      "untested_pathogen": "H. pylori",
+      "tested_against": [
+        "A. baumannii",
+        "E. faecium",
+        "S. aureus (MRSA)",
+        "S. aureus",
+        "P. aeruginosa",
+        "K. pneumoniae"
+      ],
+      "n_tested": 6
+    },
+    {
+      "drug": "ciclopirox",
+      "untested_pathogen": "S. aureus",
+      "tested_against": [
+        "A. baumannii",
+        "P. aeruginosa",
+        "K. pneumoniae",
+        "E. coli"
+      ],
+      "n_tested": 4
+    },
+    {
+      "drug": "ciclopirox",
+      "untested_pathogen": "S. aureus (MRSA)",
+      "tested_against": [
+        "A. baumannii",
+        "P. aeruginosa",
+        "K. pneumoniae",
+        "E. coli"
+      ],
+      "n_tested": 4
+    },
+    {
+      "drug": "ciclopirox",
+      "untested_pathogen": "E. faecium",
+      "tested_against": [
+        "A. baumannii",
+        "P. aeruginosa",
+        "K. pneumoniae",
+        "E. coli"
+      ],
+      "n_tested": 4
+    },
+    {
+      "drug": "ciclopirox",
+      "untested_pathogen": "E. faecium (VRE)",
+      "tested_against": [
+        "A. baumannii",
+        "P. aeruginosa",
+        "K. pneumoniae",
+        "E. coli"
+      ],
+      "n_tested": 4
+    },
+    {
+      "drug": "ciclopirox",
+      "untested_pathogen": "E. faecalis",
+      "tested_against": [
+        "A. baumannii",
+        "P. aeruginosa",
+        "K. pneumoniae",
+        "E. coli"
+      ],
+      "n_tested": 4
+    },
+    {
+      "drug": "ciclopirox",
+      "untested_pathogen": "Enterobacter spp.",
+      "tested_against": [
+        "A. baumannii",
+        "P. aeruginosa",
+        "K. pneumoniae",
+        "E. coli"
+      ],
+      "n_tested": 4
+    },
+    {
+      "drug": "ciclopirox",
+      "untested_pathogen": "M. tuberculosis",
+      "tested_against": [
+        "A. baumannii",
+        "P. aeruginosa",
+        "K. pneumoniae",
+        "E. coli"
+      ],
+      "n_tested": 4
+    },
+    {
+      "drug": "ciclopirox",
+      "untested_pathogen": "N. gonorrhoeae",
+      "tested_against": [
+        "A. baumannii",
+        "P. aeruginosa",
+        "K. pneumoniae",
+        "E. coli"
+      ],
+      "n_tested": 4
+    },
+    {
+      "drug": "ciclopirox",
+      "untested_pathogen": "S. pneumoniae",
+      "tested_against": [
+        "A. baumannii",
+        "P. aeruginosa",
+        "K. pneumoniae",
+        "E. coli"
+      ],
+      "n_tested": 4
+    },
+    {
+      "drug": "ciclopirox",
+      "untested_pathogen": "H. pylori",
+      "tested_against": [
+        "A. baumannii",
+        "P. aeruginosa",
+        "K. pneumoniae",
+        "E. coli"
+      ],
+      "n_tested": 4
+    },
+    {
+      "drug": "tamoxifen",
+      "untested_pathogen": "S. aureus",
+      "tested_against": [
+        "A. baumannii",
+        "P. aeruginosa",
+        "E. coli"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "tamoxifen",
+      "untested_pathogen": "S. aureus (MRSA)",
+      "tested_against": [
+        "A. baumannii",
+        "P. aeruginosa",
+        "E. coli"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "tamoxifen",
+      "untested_pathogen": "K. pneumoniae",
+      "tested_against": [
+        "A. baumannii",
+        "P. aeruginosa",
+        "E. coli"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "tamoxifen",
+      "untested_pathogen": "E. faecium",
+      "tested_against": [
+        "A. baumannii",
+        "P. aeruginosa",
+        "E. coli"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "tamoxifen",
+      "untested_pathogen": "E. faecium (VRE)",
+      "tested_against": [
+        "A. baumannii",
+        "P. aeruginosa",
+        "E. coli"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "tamoxifen",
+      "untested_pathogen": "E. faecalis",
+      "tested_against": [
+        "A. baumannii",
+        "P. aeruginosa",
+        "E. coli"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "tamoxifen",
+      "untested_pathogen": "Enterobacter spp.",
+      "tested_against": [
+        "A. baumannii",
+        "P. aeruginosa",
+        "E. coli"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "tamoxifen",
+      "untested_pathogen": "M. tuberculosis",
+      "tested_against": [
+        "A. baumannii",
+        "P. aeruginosa",
+        "E. coli"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "tamoxifen",
+      "untested_pathogen": "N. gonorrhoeae",
+      "tested_against": [
+        "A. baumannii",
+        "P. aeruginosa",
+        "E. coli"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "tamoxifen",
+      "untested_pathogen": "S. pneumoniae",
+      "tested_against": [
+        "A. baumannii",
+        "P. aeruginosa",
+        "E. coli"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "tamoxifen",
+      "untested_pathogen": "H. pylori",
+      "tested_against": [
+        "A. baumannii",
+        "P. aeruginosa",
+        "E. coli"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "polymyxin B",
+      "untested_pathogen": "S. aureus",
+      "tested_against": [
+        "A. baumannii",
+        "P. aeruginosa",
+        "K. pneumoniae"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "polymyxin B",
+      "untested_pathogen": "S. aureus (MRSA)",
+      "tested_against": [
+        "A. baumannii",
+        "P. aeruginosa",
+        "K. pneumoniae"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "polymyxin B",
+      "untested_pathogen": "E. coli",
+      "tested_against": [
+        "A. baumannii",
+        "P. aeruginosa",
+        "K. pneumoniae"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "polymyxin B",
+      "untested_pathogen": "E. faecium",
+      "tested_against": [
+        "A. baumannii",
+        "P. aeruginosa",
+        "K. pneumoniae"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "polymyxin B",
+      "untested_pathogen": "E. faecium (VRE)",
+      "tested_against": [
+        "A. baumannii",
+        "P. aeruginosa",
+        "K. pneumoniae"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "polymyxin B",
+      "untested_pathogen": "E. faecalis",
+      "tested_against": [
+        "A. baumannii",
+        "P. aeruginosa",
+        "K. pneumoniae"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "polymyxin B",
+      "untested_pathogen": "Enterobacter spp.",
+      "tested_against": [
+        "A. baumannii",
+        "P. aeruginosa",
+        "K. pneumoniae"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "polymyxin B",
+      "untested_pathogen": "M. tuberculosis",
+      "tested_against": [
+        "A. baumannii",
+        "P. aeruginosa",
+        "K. pneumoniae"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "polymyxin B",
+      "untested_pathogen": "N. gonorrhoeae",
+      "tested_against": [
+        "A. baumannii",
+        "P. aeruginosa",
+        "K. pneumoniae"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "polymyxin B",
+      "untested_pathogen": "S. pneumoniae",
+      "tested_against": [
+        "A. baumannii",
+        "P. aeruginosa",
+        "K. pneumoniae"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "polymyxin B",
+      "untested_pathogen": "H. pylori",
+      "tested_against": [
+        "A. baumannii",
+        "P. aeruginosa",
+        "K. pneumoniae"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "colistin",
+      "untested_pathogen": "S. aureus",
+      "tested_against": [
+        "A. baumannii",
+        "P. aeruginosa",
+        "K. pneumoniae"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "colistin",
+      "untested_pathogen": "S. aureus (MRSA)",
+      "tested_against": [
+        "A. baumannii",
+        "P. aeruginosa",
+        "K. pneumoniae"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "colistin",
+      "untested_pathogen": "E. coli",
+      "tested_against": [
+        "A. baumannii",
+        "P. aeruginosa",
+        "K. pneumoniae"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "colistin",
+      "untested_pathogen": "E. faecium",
+      "tested_against": [
+        "A. baumannii",
+        "P. aeruginosa",
+        "K. pneumoniae"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "colistin",
+      "untested_pathogen": "E. faecium (VRE)",
+      "tested_against": [
+        "A. baumannii",
+        "P. aeruginosa",
+        "K. pneumoniae"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "colistin",
+      "untested_pathogen": "E. faecalis",
+      "tested_against": [
+        "A. baumannii",
+        "P. aeruginosa",
+        "K. pneumoniae"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "colistin",
+      "untested_pathogen": "Enterobacter spp.",
+      "tested_against": [
+        "A. baumannii",
+        "P. aeruginosa",
+        "K. pneumoniae"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "colistin",
+      "untested_pathogen": "M. tuberculosis",
+      "tested_against": [
+        "A. baumannii",
+        "P. aeruginosa",
+        "K. pneumoniae"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "colistin",
+      "untested_pathogen": "N. gonorrhoeae",
+      "tested_against": [
+        "A. baumannii",
+        "P. aeruginosa",
+        "K. pneumoniae"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "colistin",
+      "untested_pathogen": "S. pneumoniae",
+      "tested_against": [
+        "A. baumannii",
+        "P. aeruginosa",
+        "K. pneumoniae"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "colistin",
+      "untested_pathogen": "H. pylori",
+      "tested_against": [
+        "A. baumannii",
+        "P. aeruginosa",
+        "K. pneumoniae"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "thioridazine",
+      "untested_pathogen": "K. pneumoniae",
+      "tested_against": [
+        "A. baumannii",
+        "S. aureus (MRSA)",
+        "S. aureus",
+        "E. coli",
+        "P. aeruginosa"
+      ],
+      "n_tested": 5
+    },
+    {
+      "drug": "thioridazine",
+      "untested_pathogen": "E. faecium",
+      "tested_against": [
+        "A. baumannii",
+        "S. aureus (MRSA)",
+        "S. aureus",
+        "E. coli",
+        "P. aeruginosa"
+      ],
+      "n_tested": 5
+    },
+    {
+      "drug": "thioridazine",
+      "untested_pathogen": "E. faecium (VRE)",
+      "tested_against": [
+        "A. baumannii",
+        "S. aureus (MRSA)",
+        "S. aureus",
+        "E. coli",
+        "P. aeruginosa"
+      ],
+      "n_tested": 5
+    },
+    {
+      "drug": "thioridazine",
+      "untested_pathogen": "E. faecalis",
+      "tested_against": [
+        "A. baumannii",
+        "S. aureus (MRSA)",
+        "S. aureus",
+        "E. coli",
+        "P. aeruginosa"
+      ],
+      "n_tested": 5
+    },
+    {
+      "drug": "thioridazine",
+      "untested_pathogen": "Enterobacter spp.",
+      "tested_against": [
+        "A. baumannii",
+        "S. aureus (MRSA)",
+        "S. aureus",
+        "E. coli",
+        "P. aeruginosa"
+      ],
+      "n_tested": 5
+    },
+    {
+      "drug": "thioridazine",
+      "untested_pathogen": "M. tuberculosis",
+      "tested_against": [
+        "A. baumannii",
+        "S. aureus (MRSA)",
+        "S. aureus",
+        "E. coli",
+        "P. aeruginosa"
+      ],
+      "n_tested": 5
+    },
+    {
+      "drug": "thioridazine",
+      "untested_pathogen": "N. gonorrhoeae",
+      "tested_against": [
+        "A. baumannii",
+        "S. aureus (MRSA)",
+        "S. aureus",
+        "E. coli",
+        "P. aeruginosa"
+      ],
+      "n_tested": 5
+    },
+    {
+      "drug": "thioridazine",
+      "untested_pathogen": "S. pneumoniae",
+      "tested_against": [
+        "A. baumannii",
+        "S. aureus (MRSA)",
+        "S. aureus",
+        "E. coli",
+        "P. aeruginosa"
+      ],
+      "n_tested": 5
+    },
+    {
+      "drug": "thioridazine",
+      "untested_pathogen": "H. pylori",
+      "tested_against": [
+        "A. baumannii",
+        "S. aureus (MRSA)",
+        "S. aureus",
+        "E. coli",
+        "P. aeruginosa"
+      ],
+      "n_tested": 5
+    },
+    {
+      "drug": "curcumin",
+      "untested_pathogen": "S. aureus (MRSA)",
+      "tested_against": [
+        "P. aeruginosa",
+        "S. aureus",
+        "E. coli"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "curcumin",
+      "untested_pathogen": "A. baumannii",
+      "tested_against": [
+        "P. aeruginosa",
+        "S. aureus",
+        "E. coli"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "curcumin",
+      "untested_pathogen": "K. pneumoniae",
+      "tested_against": [
+        "P. aeruginosa",
+        "S. aureus",
+        "E. coli"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "curcumin",
+      "untested_pathogen": "E. faecium",
+      "tested_against": [
+        "P. aeruginosa",
+        "S. aureus",
+        "E. coli"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "curcumin",
+      "untested_pathogen": "E. faecium (VRE)",
+      "tested_against": [
+        "P. aeruginosa",
+        "S. aureus",
+        "E. coli"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "curcumin",
+      "untested_pathogen": "E. faecalis",
+      "tested_against": [
+        "P. aeruginosa",
+        "S. aureus",
+        "E. coli"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "curcumin",
+      "untested_pathogen": "Enterobacter spp.",
+      "tested_against": [
+        "P. aeruginosa",
+        "S. aureus",
+        "E. coli"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "curcumin",
+      "untested_pathogen": "M. tuberculosis",
+      "tested_against": [
+        "P. aeruginosa",
+        "S. aureus",
+        "E. coli"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "curcumin",
+      "untested_pathogen": "N. gonorrhoeae",
+      "tested_against": [
+        "P. aeruginosa",
+        "S. aureus",
+        "E. coli"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "curcumin",
+      "untested_pathogen": "S. pneumoniae",
+      "tested_against": [
+        "P. aeruginosa",
+        "S. aureus",
+        "E. coli"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "curcumin",
+      "untested_pathogen": "H. pylori",
+      "tested_against": [
+        "P. aeruginosa",
+        "S. aureus",
+        "E. coli"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "Nitazoxanide",
+      "untested_pathogen": "S. aureus",
+      "tested_against": [
+        "A. baumannii",
+        "E. coli"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "Nitazoxanide",
+      "untested_pathogen": "S. aureus (MRSA)",
+      "tested_against": [
+        "A. baumannii",
+        "E. coli"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "Nitazoxanide",
+      "untested_pathogen": "P. aeruginosa",
+      "tested_against": [
+        "A. baumannii",
+        "E. coli"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "Nitazoxanide",
+      "untested_pathogen": "K. pneumoniae",
+      "tested_against": [
+        "A. baumannii",
+        "E. coli"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "Nitazoxanide",
+      "untested_pathogen": "E. faecium",
+      "tested_against": [
+        "A. baumannii",
+        "E. coli"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "Nitazoxanide",
+      "untested_pathogen": "E. faecium (VRE)",
+      "tested_against": [
+        "A. baumannii",
+        "E. coli"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "Nitazoxanide",
+      "untested_pathogen": "E. faecalis",
+      "tested_against": [
+        "A. baumannii",
+        "E. coli"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "Nitazoxanide",
+      "untested_pathogen": "Enterobacter spp.",
+      "tested_against": [
+        "A. baumannii",
+        "E. coli"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "Nitazoxanide",
+      "untested_pathogen": "M. tuberculosis",
+      "tested_against": [
+        "A. baumannii",
+        "E. coli"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "Nitazoxanide",
+      "untested_pathogen": "N. gonorrhoeae",
+      "tested_against": [
+        "A. baumannii",
+        "E. coli"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "Nitazoxanide",
+      "untested_pathogen": "S. pneumoniae",
+      "tested_against": [
+        "A. baumannii",
+        "E. coli"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "Nitazoxanide",
+      "untested_pathogen": "H. pylori",
+      "tested_against": [
+        "A. baumannii",
+        "E. coli"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "fusidic acid",
+      "untested_pathogen": "S. aureus",
+      "tested_against": [
+        "E. faecalis",
+        "E. faecium"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "fusidic acid",
+      "untested_pathogen": "S. aureus (MRSA)",
+      "tested_against": [
+        "E. faecalis",
+        "E. faecium"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "fusidic acid",
+      "untested_pathogen": "A. baumannii",
+      "tested_against": [
+        "E. faecalis",
+        "E. faecium"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "fusidic acid",
+      "untested_pathogen": "P. aeruginosa",
+      "tested_against": [
+        "E. faecalis",
+        "E. faecium"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "fusidic acid",
+      "untested_pathogen": "K. pneumoniae",
+      "tested_against": [
+        "E. faecalis",
+        "E. faecium"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "fusidic acid",
+      "untested_pathogen": "E. coli",
+      "tested_against": [
+        "E. faecalis",
+        "E. faecium"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "fusidic acid",
+      "untested_pathogen": "E. faecium (VRE)",
+      "tested_against": [
+        "E. faecalis",
+        "E. faecium"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "fusidic acid",
+      "untested_pathogen": "Enterobacter spp.",
+      "tested_against": [
+        "E. faecalis",
+        "E. faecium"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "fusidic acid",
+      "untested_pathogen": "M. tuberculosis",
+      "tested_against": [
+        "E. faecalis",
+        "E. faecium"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "fusidic acid",
+      "untested_pathogen": "N. gonorrhoeae",
+      "tested_against": [
+        "E. faecalis",
+        "E. faecium"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "fusidic acid",
+      "untested_pathogen": "S. pneumoniae",
+      "tested_against": [
+        "E. faecalis",
+        "E. faecium"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "fusidic acid",
+      "untested_pathogen": "H. pylori",
+      "tested_against": [
+        "E. faecalis",
+        "E. faecium"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "Glatiramer Acetate",
+      "untested_pathogen": "S. aureus (MRSA)",
+      "tested_against": [
+        "A. baumannii",
+        "S. aureus",
+        "P. aeruginosa",
+        "E. coli"
+      ],
+      "n_tested": 4
+    },
+    {
+      "drug": "Glatiramer Acetate",
+      "untested_pathogen": "K. pneumoniae",
+      "tested_against": [
+        "A. baumannii",
+        "S. aureus",
+        "P. aeruginosa",
+        "E. coli"
+      ],
+      "n_tested": 4
+    },
+    {
+      "drug": "Glatiramer Acetate",
+      "untested_pathogen": "E. faecium",
+      "tested_against": [
+        "A. baumannii",
+        "S. aureus",
+        "P. aeruginosa",
+        "E. coli"
+      ],
+      "n_tested": 4
+    },
+    {
+      "drug": "Glatiramer Acetate",
+      "untested_pathogen": "E. faecium (VRE)",
+      "tested_against": [
+        "A. baumannii",
+        "S. aureus",
+        "P. aeruginosa",
+        "E. coli"
+      ],
+      "n_tested": 4
+    },
+    {
+      "drug": "Glatiramer Acetate",
+      "untested_pathogen": "E. faecalis",
+      "tested_against": [
+        "A. baumannii",
+        "S. aureus",
+        "P. aeruginosa",
+        "E. coli"
+      ],
+      "n_tested": 4
+    },
+    {
+      "drug": "Glatiramer Acetate",
+      "untested_pathogen": "Enterobacter spp.",
+      "tested_against": [
+        "A. baumannii",
+        "S. aureus",
+        "P. aeruginosa",
+        "E. coli"
+      ],
+      "n_tested": 4
+    },
+    {
+      "drug": "Glatiramer Acetate",
+      "untested_pathogen": "M. tuberculosis",
+      "tested_against": [
+        "A. baumannii",
+        "S. aureus",
+        "P. aeruginosa",
+        "E. coli"
+      ],
+      "n_tested": 4
+    },
+    {
+      "drug": "Glatiramer Acetate",
+      "untested_pathogen": "N. gonorrhoeae",
+      "tested_against": [
+        "A. baumannii",
+        "S. aureus",
+        "P. aeruginosa",
+        "E. coli"
+      ],
+      "n_tested": 4
+    },
+    {
+      "drug": "Glatiramer Acetate",
+      "untested_pathogen": "S. pneumoniae",
+      "tested_against": [
+        "A. baumannii",
+        "S. aureus",
+        "P. aeruginosa",
+        "E. coli"
+      ],
+      "n_tested": 4
+    },
+    {
+      "drug": "Glatiramer Acetate",
+      "untested_pathogen": "H. pylori",
+      "tested_against": [
+        "A. baumannii",
+        "S. aureus",
+        "P. aeruginosa",
+        "E. coli"
+      ],
+      "n_tested": 4
+    },
+    {
+      "drug": "silver (Ag+)",
+      "untested_pathogen": "S. aureus",
+      "tested_against": [
+        "A. baumannii",
+        "E. coli",
+        "P. aeruginosa",
+        "Enterobacter spp.",
+        "K. pneumoniae"
+      ],
+      "n_tested": 5
+    },
+    {
+      "drug": "silver (Ag+)",
+      "untested_pathogen": "S. aureus (MRSA)",
+      "tested_against": [
+        "A. baumannii",
+        "E. coli",
+        "P. aeruginosa",
+        "Enterobacter spp.",
+        "K. pneumoniae"
+      ],
+      "n_tested": 5
+    },
+    {
+      "drug": "silver (Ag+)",
+      "untested_pathogen": "E. faecium",
+      "tested_against": [
+        "A. baumannii",
+        "E. coli",
+        "P. aeruginosa",
+        "Enterobacter spp.",
+        "K. pneumoniae"
+      ],
+      "n_tested": 5
+    },
+    {
+      "drug": "silver (Ag+)",
+      "untested_pathogen": "E. faecium (VRE)",
+      "tested_against": [
+        "A. baumannii",
+        "E. coli",
+        "P. aeruginosa",
+        "Enterobacter spp.",
+        "K. pneumoniae"
+      ],
+      "n_tested": 5
+    },
+    {
+      "drug": "silver (Ag+)",
+      "untested_pathogen": "E. faecalis",
+      "tested_against": [
+        "A. baumannii",
+        "E. coli",
+        "P. aeruginosa",
+        "Enterobacter spp.",
+        "K. pneumoniae"
+      ],
+      "n_tested": 5
+    },
+    {
+      "drug": "silver (Ag+)",
+      "untested_pathogen": "M. tuberculosis",
+      "tested_against": [
+        "A. baumannii",
+        "E. coli",
+        "P. aeruginosa",
+        "Enterobacter spp.",
+        "K. pneumoniae"
+      ],
+      "n_tested": 5
+    },
+    {
+      "drug": "silver (Ag+)",
+      "untested_pathogen": "N. gonorrhoeae",
+      "tested_against": [
+        "A. baumannii",
+        "E. coli",
+        "P. aeruginosa",
+        "Enterobacter spp.",
+        "K. pneumoniae"
+      ],
+      "n_tested": 5
+    },
+    {
+      "drug": "silver (Ag+)",
+      "untested_pathogen": "S. pneumoniae",
+      "tested_against": [
+        "A. baumannii",
+        "E. coli",
+        "P. aeruginosa",
+        "Enterobacter spp.",
+        "K. pneumoniae"
+      ],
+      "n_tested": 5
+    },
+    {
+      "drug": "silver (Ag+)",
+      "untested_pathogen": "H. pylori",
+      "tested_against": [
+        "A. baumannii",
+        "E. coli",
+        "P. aeruginosa",
+        "Enterobacter spp.",
+        "K. pneumoniae"
+      ],
+      "n_tested": 5
+    },
+    {
+      "drug": "verapamil",
+      "untested_pathogen": "S. aureus",
+      "tested_against": [
+        "P. aeruginosa",
+        "M. tuberculosis"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "verapamil",
+      "untested_pathogen": "S. aureus (MRSA)",
+      "tested_against": [
+        "P. aeruginosa",
+        "M. tuberculosis"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "verapamil",
+      "untested_pathogen": "A. baumannii",
+      "tested_against": [
+        "P. aeruginosa",
+        "M. tuberculosis"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "verapamil",
+      "untested_pathogen": "K. pneumoniae",
+      "tested_against": [
+        "P. aeruginosa",
+        "M. tuberculosis"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "verapamil",
+      "untested_pathogen": "E. coli",
+      "tested_against": [
+        "P. aeruginosa",
+        "M. tuberculosis"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "verapamil",
+      "untested_pathogen": "E. faecium",
+      "tested_against": [
+        "P. aeruginosa",
+        "M. tuberculosis"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "verapamil",
+      "untested_pathogen": "E. faecium (VRE)",
+      "tested_against": [
+        "P. aeruginosa",
+        "M. tuberculosis"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "verapamil",
+      "untested_pathogen": "E. faecalis",
+      "tested_against": [
+        "P. aeruginosa",
+        "M. tuberculosis"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "verapamil",
+      "untested_pathogen": "Enterobacter spp.",
+      "tested_against": [
+        "P. aeruginosa",
+        "M. tuberculosis"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "verapamil",
+      "untested_pathogen": "N. gonorrhoeae",
+      "tested_against": [
+        "P. aeruginosa",
+        "M. tuberculosis"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "verapamil",
+      "untested_pathogen": "S. pneumoniae",
+      "tested_against": [
+        "P. aeruginosa",
+        "M. tuberculosis"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "verapamil",
+      "untested_pathogen": "H. pylori",
+      "tested_against": [
+        "P. aeruginosa",
+        "M. tuberculosis"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "Eltrombopag",
+      "untested_pathogen": "A. baumannii",
+      "tested_against": [
+        "S. aureus",
+        "S. aureus (MRSA)"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "Eltrombopag",
+      "untested_pathogen": "P. aeruginosa",
+      "tested_against": [
+        "S. aureus",
+        "S. aureus (MRSA)"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "Eltrombopag",
+      "untested_pathogen": "K. pneumoniae",
+      "tested_against": [
+        "S. aureus",
+        "S. aureus (MRSA)"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "Eltrombopag",
+      "untested_pathogen": "E. coli",
+      "tested_against": [
+        "S. aureus",
+        "S. aureus (MRSA)"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "Eltrombopag",
+      "untested_pathogen": "E. faecium",
+      "tested_against": [
+        "S. aureus",
+        "S. aureus (MRSA)"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "Eltrombopag",
+      "untested_pathogen": "E. faecium (VRE)",
+      "tested_against": [
+        "S. aureus",
+        "S. aureus (MRSA)"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "Eltrombopag",
+      "untested_pathogen": "E. faecalis",
+      "tested_against": [
+        "S. aureus",
+        "S. aureus (MRSA)"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "Eltrombopag",
+      "untested_pathogen": "Enterobacter spp.",
+      "tested_against": [
+        "S. aureus",
+        "S. aureus (MRSA)"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "Eltrombopag",
+      "untested_pathogen": "M. tuberculosis",
+      "tested_against": [
+        "S. aureus",
+        "S. aureus (MRSA)"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "Eltrombopag",
+      "untested_pathogen": "N. gonorrhoeae",
+      "tested_against": [
+        "S. aureus",
+        "S. aureus (MRSA)"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "Eltrombopag",
+      "untested_pathogen": "S. pneumoniae",
+      "tested_against": [
+        "S. aureus",
+        "S. aureus (MRSA)"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "Eltrombopag",
+      "untested_pathogen": "H. pylori",
+      "tested_against": [
+        "S. aureus",
+        "S. aureus (MRSA)"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "methylene blue",
+      "untested_pathogen": "S. aureus (MRSA)",
+      "tested_against": [
+        "S. aureus",
+        "E. coli"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "methylene blue",
+      "untested_pathogen": "A. baumannii",
+      "tested_against": [
+        "S. aureus",
+        "E. coli"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "methylene blue",
+      "untested_pathogen": "P. aeruginosa",
+      "tested_against": [
+        "S. aureus",
+        "E. coli"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "methylene blue",
+      "untested_pathogen": "K. pneumoniae",
+      "tested_against": [
+        "S. aureus",
+        "E. coli"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "methylene blue",
+      "untested_pathogen": "E. faecium",
+      "tested_against": [
+        "S. aureus",
+        "E. coli"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "methylene blue",
+      "untested_pathogen": "E. faecium (VRE)",
+      "tested_against": [
+        "S. aureus",
+        "E. coli"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "methylene blue",
+      "untested_pathogen": "E. faecalis",
+      "tested_against": [
+        "S. aureus",
+        "E. coli"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "methylene blue",
+      "untested_pathogen": "Enterobacter spp.",
+      "tested_against": [
+        "S. aureus",
+        "E. coli"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "methylene blue",
+      "untested_pathogen": "M. tuberculosis",
+      "tested_against": [
+        "S. aureus",
+        "E. coli"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "methylene blue",
+      "untested_pathogen": "N. gonorrhoeae",
+      "tested_against": [
+        "S. aureus",
+        "E. coli"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "methylene blue",
+      "untested_pathogen": "S. pneumoniae",
+      "tested_against": [
+        "S. aureus",
+        "E. coli"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "methylene blue",
+      "untested_pathogen": "H. pylori",
+      "tested_against": [
+        "S. aureus",
+        "E. coli"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "closantel",
+      "untested_pathogen": "S. aureus",
+      "tested_against": [
+        "A. baumannii",
+        "S. aureus (MRSA)"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "closantel",
+      "untested_pathogen": "P. aeruginosa",
+      "tested_against": [
+        "A. baumannii",
+        "S. aureus (MRSA)"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "closantel",
+      "untested_pathogen": "K. pneumoniae",
+      "tested_against": [
+        "A. baumannii",
+        "S. aureus (MRSA)"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "closantel",
+      "untested_pathogen": "E. coli",
+      "tested_against": [
+        "A. baumannii",
+        "S. aureus (MRSA)"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "closantel",
+      "untested_pathogen": "E. faecium",
+      "tested_against": [
+        "A. baumannii",
+        "S. aureus (MRSA)"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "closantel",
+      "untested_pathogen": "E. faecium (VRE)",
+      "tested_against": [
+        "A. baumannii",
+        "S. aureus (MRSA)"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "closantel",
+      "untested_pathogen": "E. faecalis",
+      "tested_against": [
+        "A. baumannii",
+        "S. aureus (MRSA)"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "closantel",
+      "untested_pathogen": "Enterobacter spp.",
+      "tested_against": [
+        "A. baumannii",
+        "S. aureus (MRSA)"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "closantel",
+      "untested_pathogen": "M. tuberculosis",
+      "tested_against": [
+        "A. baumannii",
+        "S. aureus (MRSA)"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "closantel",
+      "untested_pathogen": "N. gonorrhoeae",
+      "tested_against": [
+        "A. baumannii",
+        "S. aureus (MRSA)"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "closantel",
+      "untested_pathogen": "S. pneumoniae",
+      "tested_against": [
+        "A. baumannii",
+        "S. aureus (MRSA)"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "closantel",
+      "untested_pathogen": "H. pylori",
+      "tested_against": [
+        "A. baumannii",
+        "S. aureus (MRSA)"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "zidovudine",
+      "untested_pathogen": "S. aureus (MRSA)",
+      "tested_against": [
+        "A. baumannii",
+        "S. aureus",
+        "E. coli"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "zidovudine",
+      "untested_pathogen": "P. aeruginosa",
+      "tested_against": [
+        "A. baumannii",
+        "S. aureus",
+        "E. coli"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "zidovudine",
+      "untested_pathogen": "K. pneumoniae",
+      "tested_against": [
+        "A. baumannii",
+        "S. aureus",
+        "E. coli"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "zidovudine",
+      "untested_pathogen": "E. faecium",
+      "tested_against": [
+        "A. baumannii",
+        "S. aureus",
+        "E. coli"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "zidovudine",
+      "untested_pathogen": "E. faecium (VRE)",
+      "tested_against": [
+        "A. baumannii",
+        "S. aureus",
+        "E. coli"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "zidovudine",
+      "untested_pathogen": "E. faecalis",
+      "tested_against": [
+        "A. baumannii",
+        "S. aureus",
+        "E. coli"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "zidovudine",
+      "untested_pathogen": "Enterobacter spp.",
+      "tested_against": [
+        "A. baumannii",
+        "S. aureus",
+        "E. coli"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "zidovudine",
+      "untested_pathogen": "M. tuberculosis",
+      "tested_against": [
+        "A. baumannii",
+        "S. aureus",
+        "E. coli"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "zidovudine",
+      "untested_pathogen": "N. gonorrhoeae",
+      "tested_against": [
+        "A. baumannii",
+        "S. aureus",
+        "E. coli"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "zidovudine",
+      "untested_pathogen": "S. pneumoniae",
+      "tested_against": [
+        "A. baumannii",
+        "S. aureus",
+        "E. coli"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "zidovudine",
+      "untested_pathogen": "H. pylori",
+      "tested_against": [
+        "A. baumannii",
+        "S. aureus",
+        "E. coli"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "rifampicin",
+      "untested_pathogen": "S. aureus",
+      "tested_against": [
+        "A. baumannii",
+        "P. aeruginosa",
+        "K. pneumoniae",
+        "E. coli"
+      ],
+      "n_tested": 4
+    },
+    {
+      "drug": "rifampicin",
+      "untested_pathogen": "S. aureus (MRSA)",
+      "tested_against": [
+        "A. baumannii",
+        "P. aeruginosa",
+        "K. pneumoniae",
+        "E. coli"
+      ],
+      "n_tested": 4
+    },
+    {
+      "drug": "rifampicin",
+      "untested_pathogen": "E. faecium",
+      "tested_against": [
+        "A. baumannii",
+        "P. aeruginosa",
+        "K. pneumoniae",
+        "E. coli"
+      ],
+      "n_tested": 4
+    },
+    {
+      "drug": "rifampicin",
+      "untested_pathogen": "E. faecium (VRE)",
+      "tested_against": [
+        "A. baumannii",
+        "P. aeruginosa",
+        "K. pneumoniae",
+        "E. coli"
+      ],
+      "n_tested": 4
+    },
+    {
+      "drug": "rifampicin",
+      "untested_pathogen": "E. faecalis",
+      "tested_against": [
+        "A. baumannii",
+        "P. aeruginosa",
+        "K. pneumoniae",
+        "E. coli"
+      ],
+      "n_tested": 4
+    },
+    {
+      "drug": "rifampicin",
+      "untested_pathogen": "Enterobacter spp.",
+      "tested_against": [
+        "A. baumannii",
+        "P. aeruginosa",
+        "K. pneumoniae",
+        "E. coli"
+      ],
+      "n_tested": 4
+    },
+    {
+      "drug": "rifampicin",
+      "untested_pathogen": "M. tuberculosis",
+      "tested_against": [
+        "A. baumannii",
+        "P. aeruginosa",
+        "K. pneumoniae",
+        "E. coli"
+      ],
+      "n_tested": 4
+    },
+    {
+      "drug": "rifampicin",
+      "untested_pathogen": "N. gonorrhoeae",
+      "tested_against": [
+        "A. baumannii",
+        "P. aeruginosa",
+        "K. pneumoniae",
+        "E. coli"
+      ],
+      "n_tested": 4
+    },
+    {
+      "drug": "rifampicin",
+      "untested_pathogen": "S. pneumoniae",
+      "tested_against": [
+        "A. baumannii",
+        "P. aeruginosa",
+        "K. pneumoniae",
+        "E. coli"
+      ],
+      "n_tested": 4
+    },
+    {
+      "drug": "rifampicin",
+      "untested_pathogen": "H. pylori",
+      "tested_against": [
+        "A. baumannii",
+        "P. aeruginosa",
+        "K. pneumoniae",
+        "E. coli"
+      ],
+      "n_tested": 4
+    },
+    {
+      "drug": "chlorpromazine",
+      "untested_pathogen": "S. aureus (MRSA)",
+      "tested_against": [
+        "A. baumannii",
+        "S. aureus",
+        "E. coli"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "chlorpromazine",
+      "untested_pathogen": "P. aeruginosa",
+      "tested_against": [
+        "A. baumannii",
+        "S. aureus",
+        "E. coli"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "chlorpromazine",
+      "untested_pathogen": "K. pneumoniae",
+      "tested_against": [
+        "A. baumannii",
+        "S. aureus",
+        "E. coli"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "chlorpromazine",
+      "untested_pathogen": "E. faecium",
+      "tested_against": [
+        "A. baumannii",
+        "S. aureus",
+        "E. coli"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "chlorpromazine",
+      "untested_pathogen": "E. faecium (VRE)",
+      "tested_against": [
+        "A. baumannii",
+        "S. aureus",
+        "E. coli"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "chlorpromazine",
+      "untested_pathogen": "E. faecalis",
+      "tested_against": [
+        "A. baumannii",
+        "S. aureus",
+        "E. coli"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "chlorpromazine",
+      "untested_pathogen": "Enterobacter spp.",
+      "tested_against": [
+        "A. baumannii",
+        "S. aureus",
+        "E. coli"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "chlorpromazine",
+      "untested_pathogen": "M. tuberculosis",
+      "tested_against": [
+        "A. baumannii",
+        "S. aureus",
+        "E. coli"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "chlorpromazine",
+      "untested_pathogen": "N. gonorrhoeae",
+      "tested_against": [
+        "A. baumannii",
+        "S. aureus",
+        "E. coli"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "chlorpromazine",
+      "untested_pathogen": "S. pneumoniae",
+      "tested_against": [
+        "A. baumannii",
+        "S. aureus",
+        "E. coli"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "chlorpromazine",
+      "untested_pathogen": "H. pylori",
+      "tested_against": [
+        "A. baumannii",
+        "S. aureus",
+        "E. coli"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "disulfiram",
+      "untested_pathogen": "A. baumannii",
+      "tested_against": [
+        "H. pylori",
+        "S. aureus",
+        "S. aureus (MRSA)"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "disulfiram",
+      "untested_pathogen": "P. aeruginosa",
+      "tested_against": [
+        "H. pylori",
+        "S. aureus",
+        "S. aureus (MRSA)"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "disulfiram",
+      "untested_pathogen": "K. pneumoniae",
+      "tested_against": [
+        "H. pylori",
+        "S. aureus",
+        "S. aureus (MRSA)"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "disulfiram",
+      "untested_pathogen": "E. coli",
+      "tested_against": [
+        "H. pylori",
+        "S. aureus",
+        "S. aureus (MRSA)"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "disulfiram",
+      "untested_pathogen": "E. faecium",
+      "tested_against": [
+        "H. pylori",
+        "S. aureus",
+        "S. aureus (MRSA)"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "disulfiram",
+      "untested_pathogen": "E. faecium (VRE)",
+      "tested_against": [
+        "H. pylori",
+        "S. aureus",
+        "S. aureus (MRSA)"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "disulfiram",
+      "untested_pathogen": "E. faecalis",
+      "tested_against": [
+        "H. pylori",
+        "S. aureus",
+        "S. aureus (MRSA)"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "disulfiram",
+      "untested_pathogen": "Enterobacter spp.",
+      "tested_against": [
+        "H. pylori",
+        "S. aureus",
+        "S. aureus (MRSA)"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "disulfiram",
+      "untested_pathogen": "M. tuberculosis",
+      "tested_against": [
+        "H. pylori",
+        "S. aureus",
+        "S. aureus (MRSA)"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "disulfiram",
+      "untested_pathogen": "N. gonorrhoeae",
+      "tested_against": [
+        "H. pylori",
+        "S. aureus",
+        "S. aureus (MRSA)"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "disulfiram",
+      "untested_pathogen": "S. pneumoniae",
+      "tested_against": [
+        "H. pylori",
+        "S. aureus",
+        "S. aureus (MRSA)"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "compound 3h",
+      "untested_pathogen": "S. aureus (MRSA)",
+      "tested_against": [
+        "P. aeruginosa",
+        "S. aureus",
+        "E. faecium",
+        "K. pneumoniae"
+      ],
+      "n_tested": 4
+    },
+    {
+      "drug": "compound 3h",
+      "untested_pathogen": "A. baumannii",
+      "tested_against": [
+        "P. aeruginosa",
+        "S. aureus",
+        "E. faecium",
+        "K. pneumoniae"
+      ],
+      "n_tested": 4
+    },
+    {
+      "drug": "compound 3h",
+      "untested_pathogen": "E. coli",
+      "tested_against": [
+        "P. aeruginosa",
+        "S. aureus",
+        "E. faecium",
+        "K. pneumoniae"
+      ],
+      "n_tested": 4
+    },
+    {
+      "drug": "compound 3h",
+      "untested_pathogen": "E. faecium (VRE)",
+      "tested_against": [
+        "P. aeruginosa",
+        "S. aureus",
+        "E. faecium",
+        "K. pneumoniae"
+      ],
+      "n_tested": 4
+    },
+    {
+      "drug": "compound 3h",
+      "untested_pathogen": "E. faecalis",
+      "tested_against": [
+        "P. aeruginosa",
+        "S. aureus",
+        "E. faecium",
+        "K. pneumoniae"
+      ],
+      "n_tested": 4
+    },
+    {
+      "drug": "compound 3h",
+      "untested_pathogen": "Enterobacter spp.",
+      "tested_against": [
+        "P. aeruginosa",
+        "S. aureus",
+        "E. faecium",
+        "K. pneumoniae"
+      ],
+      "n_tested": 4
+    },
+    {
+      "drug": "compound 3h",
+      "untested_pathogen": "M. tuberculosis",
+      "tested_against": [
+        "P. aeruginosa",
+        "S. aureus",
+        "E. faecium",
+        "K. pneumoniae"
+      ],
+      "n_tested": 4
+    },
+    {
+      "drug": "compound 3h",
+      "untested_pathogen": "N. gonorrhoeae",
+      "tested_against": [
+        "P. aeruginosa",
+        "S. aureus",
+        "E. faecium",
+        "K. pneumoniae"
+      ],
+      "n_tested": 4
+    },
+    {
+      "drug": "compound 3h",
+      "untested_pathogen": "S. pneumoniae",
+      "tested_against": [
+        "P. aeruginosa",
+        "S. aureus",
+        "E. faecium",
+        "K. pneumoniae"
+      ],
+      "n_tested": 4
+    },
+    {
+      "drug": "compound 3h",
+      "untested_pathogen": "H. pylori",
+      "tested_against": [
+        "P. aeruginosa",
+        "S. aureus",
+        "E. faecium",
+        "K. pneumoniae"
+      ],
+      "n_tested": 4
+    },
+    {
+      "drug": "sertraline",
+      "untested_pathogen": "S. aureus (MRSA)",
+      "tested_against": [
+        "S. aureus",
+        "E. coli"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "sertraline",
+      "untested_pathogen": "A. baumannii",
+      "tested_against": [
+        "S. aureus",
+        "E. coli"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "sertraline",
+      "untested_pathogen": "P. aeruginosa",
+      "tested_against": [
+        "S. aureus",
+        "E. coli"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "sertraline",
+      "untested_pathogen": "K. pneumoniae",
+      "tested_against": [
+        "S. aureus",
+        "E. coli"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "sertraline",
+      "untested_pathogen": "E. faecium",
+      "tested_against": [
+        "S. aureus",
+        "E. coli"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "sertraline",
+      "untested_pathogen": "E. faecium (VRE)",
+      "tested_against": [
+        "S. aureus",
+        "E. coli"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "sertraline",
+      "untested_pathogen": "E. faecalis",
+      "tested_against": [
+        "S. aureus",
+        "E. coli"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "sertraline",
+      "untested_pathogen": "Enterobacter spp.",
+      "tested_against": [
+        "S. aureus",
+        "E. coli"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "sertraline",
+      "untested_pathogen": "M. tuberculosis",
+      "tested_against": [
+        "S. aureus",
+        "E. coli"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "sertraline",
+      "untested_pathogen": "N. gonorrhoeae",
+      "tested_against": [
+        "S. aureus",
+        "E. coli"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "sertraline",
+      "untested_pathogen": "S. pneumoniae",
+      "tested_against": [
+        "S. aureus",
+        "E. coli"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "sertraline",
+      "untested_pathogen": "H. pylori",
+      "tested_against": [
+        "S. aureus",
+        "E. coli"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "paroxetine",
+      "untested_pathogen": "S. aureus (MRSA)",
+      "tested_against": [
+        "S. aureus",
+        "E. coli"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "paroxetine",
+      "untested_pathogen": "A. baumannii",
+      "tested_against": [
+        "S. aureus",
+        "E. coli"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "paroxetine",
+      "untested_pathogen": "P. aeruginosa",
+      "tested_against": [
+        "S. aureus",
+        "E. coli"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "paroxetine",
+      "untested_pathogen": "K. pneumoniae",
+      "tested_against": [
+        "S. aureus",
+        "E. coli"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "paroxetine",
+      "untested_pathogen": "E. faecium",
+      "tested_against": [
+        "S. aureus",
+        "E. coli"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "paroxetine",
+      "untested_pathogen": "E. faecium (VRE)",
+      "tested_against": [
+        "S. aureus",
+        "E. coli"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "paroxetine",
+      "untested_pathogen": "E. faecalis",
+      "tested_against": [
+        "S. aureus",
+        "E. coli"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "paroxetine",
+      "untested_pathogen": "Enterobacter spp.",
+      "tested_against": [
+        "S. aureus",
+        "E. coli"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "paroxetine",
+      "untested_pathogen": "M. tuberculosis",
+      "tested_against": [
+        "S. aureus",
+        "E. coli"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "paroxetine",
+      "untested_pathogen": "N. gonorrhoeae",
+      "tested_against": [
+        "S. aureus",
+        "E. coli"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "paroxetine",
+      "untested_pathogen": "S. pneumoniae",
+      "tested_against": [
+        "S. aureus",
+        "E. coli"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "paroxetine",
+      "untested_pathogen": "H. pylori",
+      "tested_against": [
+        "S. aureus",
+        "E. coli"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "mitotane",
+      "untested_pathogen": "S. aureus",
+      "tested_against": [
+        "A. baumannii",
+        "P. aeruginosa",
+        "K. pneumoniae"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "mitotane",
+      "untested_pathogen": "S. aureus (MRSA)",
+      "tested_against": [
+        "A. baumannii",
+        "P. aeruginosa",
+        "K. pneumoniae"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "mitotane",
+      "untested_pathogen": "E. coli",
+      "tested_against": [
+        "A. baumannii",
+        "P. aeruginosa",
+        "K. pneumoniae"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "mitotane",
+      "untested_pathogen": "E. faecium",
+      "tested_against": [
+        "A. baumannii",
+        "P. aeruginosa",
+        "K. pneumoniae"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "mitotane",
+      "untested_pathogen": "E. faecium (VRE)",
+      "tested_against": [
+        "A. baumannii",
+        "P. aeruginosa",
+        "K. pneumoniae"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "mitotane",
+      "untested_pathogen": "E. faecalis",
+      "tested_against": [
+        "A. baumannii",
+        "P. aeruginosa",
+        "K. pneumoniae"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "mitotane",
+      "untested_pathogen": "Enterobacter spp.",
+      "tested_against": [
+        "A. baumannii",
+        "P. aeruginosa",
+        "K. pneumoniae"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "mitotane",
+      "untested_pathogen": "M. tuberculosis",
+      "tested_against": [
+        "A. baumannii",
+        "P. aeruginosa",
+        "K. pneumoniae"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "mitotane",
+      "untested_pathogen": "N. gonorrhoeae",
+      "tested_against": [
+        "A. baumannii",
+        "P. aeruginosa",
+        "K. pneumoniae"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "mitotane",
+      "untested_pathogen": "S. pneumoniae",
+      "tested_against": [
+        "A. baumannii",
+        "P. aeruginosa",
+        "K. pneumoniae"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "mitotane",
+      "untested_pathogen": "H. pylori",
+      "tested_against": [
+        "A. baumannii",
+        "P. aeruginosa",
+        "K. pneumoniae"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "5-fluorouracil",
+      "untested_pathogen": "S. aureus",
+      "tested_against": [
+        "A. baumannii",
+        "P. aeruginosa"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "5-fluorouracil",
+      "untested_pathogen": "S. aureus (MRSA)",
+      "tested_against": [
+        "A. baumannii",
+        "P. aeruginosa"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "5-fluorouracil",
+      "untested_pathogen": "K. pneumoniae",
+      "tested_against": [
+        "A. baumannii",
+        "P. aeruginosa"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "5-fluorouracil",
+      "untested_pathogen": "E. coli",
+      "tested_against": [
+        "A. baumannii",
+        "P. aeruginosa"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "5-fluorouracil",
+      "untested_pathogen": "E. faecium",
+      "tested_against": [
+        "A. baumannii",
+        "P. aeruginosa"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "5-fluorouracil",
+      "untested_pathogen": "E. faecium (VRE)",
+      "tested_against": [
+        "A. baumannii",
+        "P. aeruginosa"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "5-fluorouracil",
+      "untested_pathogen": "E. faecalis",
+      "tested_against": [
+        "A. baumannii",
+        "P. aeruginosa"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "5-fluorouracil",
+      "untested_pathogen": "Enterobacter spp.",
+      "tested_against": [
+        "A. baumannii",
+        "P. aeruginosa"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "5-fluorouracil",
+      "untested_pathogen": "M. tuberculosis",
+      "tested_against": [
+        "A. baumannii",
+        "P. aeruginosa"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "5-fluorouracil",
+      "untested_pathogen": "N. gonorrhoeae",
+      "tested_against": [
+        "A. baumannii",
+        "P. aeruginosa"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "5-fluorouracil",
+      "untested_pathogen": "S. pneumoniae",
+      "tested_against": [
+        "A. baumannii",
+        "P. aeruginosa"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "5-fluorouracil",
+      "untested_pathogen": "H. pylori",
+      "tested_against": [
+        "A. baumannii",
+        "P. aeruginosa"
+      ],
+      "n_tested": 2
+    },
+    {
+      "drug": "azithromycin",
+      "untested_pathogen": "S. aureus",
+      "tested_against": [
+        "P. aeruginosa",
+        "K. pneumoniae",
+        "E. coli"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "azithromycin",
+      "untested_pathogen": "S. aureus (MRSA)",
+      "tested_against": [
+        "P. aeruginosa",
+        "K. pneumoniae",
+        "E. coli"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "azithromycin",
+      "untested_pathogen": "A. baumannii",
+      "tested_against": [
+        "P. aeruginosa",
+        "K. pneumoniae",
+        "E. coli"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "azithromycin",
+      "untested_pathogen": "E. faecium",
+      "tested_against": [
+        "P. aeruginosa",
+        "K. pneumoniae",
+        "E. coli"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "azithromycin",
+      "untested_pathogen": "E. faecium (VRE)",
+      "tested_against": [
+        "P. aeruginosa",
+        "K. pneumoniae",
+        "E. coli"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "azithromycin",
+      "untested_pathogen": "E. faecalis",
+      "tested_against": [
+        "P. aeruginosa",
+        "K. pneumoniae",
+        "E. coli"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "azithromycin",
+      "untested_pathogen": "Enterobacter spp.",
+      "tested_against": [
+        "P. aeruginosa",
+        "K. pneumoniae",
+        "E. coli"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "azithromycin",
+      "untested_pathogen": "M. tuberculosis",
+      "tested_against": [
+        "P. aeruginosa",
+        "K. pneumoniae",
+        "E. coli"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "azithromycin",
+      "untested_pathogen": "N. gonorrhoeae",
+      "tested_against": [
+        "P. aeruginosa",
+        "K. pneumoniae",
+        "E. coli"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "azithromycin",
+      "untested_pathogen": "S. pneumoniae",
+      "tested_against": [
+        "P. aeruginosa",
+        "K. pneumoniae",
+        "E. coli"
+      ],
+      "n_tested": 3
+    },
+    {
+      "drug": "azithromycin",
+      "untested_pathogen": "H. pylori",
+      "tested_against": [
+        "P. aeruginosa",
+        "K. pneumoniae",
+        "E. coli"
+      ],
+      "n_tested": 3
+    }
+  ]
+}
