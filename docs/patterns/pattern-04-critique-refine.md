@@ -12,6 +12,96 @@ You need to generate high-quality content (technical white paper, code architect
 
 **Key insight:** Adversarial critique (cheap model) + responsive refinement (expensive model) = systematic quality improvement at lower cost than expensive-model-only multi-shot.
 
+### Limitations: What Critique-Refine Can and Cannot Fix
+
+**✅ What Critique-Refine CAN fix:**
+- **Structural issues:** Missing sections, poor organization, unclear flow
+- **Vagueness:** Generic statements → specific claims with evidence
+- **Style problems:** Tone, formatting, clarity, readability
+- **Logical consistency:** Internal contradictions, weak arguments
+- **Completeness:** Missing context, unexplained assumptions
+
+**❌ What Critique-Refine CANNOT fix:**
+- **Factual hallucinations:** Invented APIs, wrong data, fabricated references
+- **Missing external context:** Information not in the original input
+- **Fundamental approach errors:** Wrong strategy, impossible requirements
+- **Domain knowledge gaps:** Tasks requiring expertise the model lacks
+
+**Why the limitation exists:**
+
+The critique model has no access to ground truth. It can only evaluate based on:
+- Internal consistency (does it contradict itself?)
+- Structural completeness (are all sections present?)
+- Stylistic quality (is it well-written?)
+
+It CANNOT verify:
+- Whether class `FooBarFactory` actually exists in your codebase
+- Whether the cited paper's methodology matches the description
+- Whether the SQL query will actually return correct results
+
+**Real example (from GraphRAG evaluation):**
+```scheme
+;; Generated draft documents invented package "graphrag-community"
+(define draft (llm-query #:instruction "Document this package" ...))
+
+;; Critique checked structure, not facts
+(define critique (llm-query
+  #:instruction "Review this documentation"
+  #:data draft))
+;; Result: "Good structure, add more details about CommunityDetector class"
+
+;; Refine made it MORE confidently wrong
+(define refined (llm-query
+  #:instruction "Improve based on critique"
+  #:data draft))
+;; Result: Expanded description of non-existent CommunityDetector
+```
+
+The critique-refine loop made the hallucination *more elaborate*, not more accurate.
+
+### When to Add Verification
+
+For tasks requiring factual accuracy (code documentation, data analysis, technical reference), add a **verification step** after refinement:
+
+```scheme
+;; Standard critique-refine
+(define draft (llm-query #:instruction "Generate API docs" #:data code))
+(define critique (llm-query #:instruction "Critique" #:data draft #:model "curie"))
+(define refined (llm-query #:instruction "Refine" #:data (string-append draft critique)))
+
+;; + Verification step (for factual tasks)
+(define verified (py-exec "
+# Check every documented class actually exists
+import re
+import subprocess
+
+documented_classes = re.findall(r'class (\\w+)', refined)
+errors = []
+
+for cls in documented_classes:
+    # Grep the codebase
+    result = subprocess.run(['grep', '-r', f'class {cls}', 'src/'], capture_output=True)
+    if result.returncode != 0:
+        errors.append(f'HALLUCINATION: Class {cls} not found in codebase')
+
+print('PASS' if not errors else f'FAIL: {chr(10).join(errors)}')
+"))
+
+(if (string-contains? verified "FAIL")
+    (finish-error (string-append "Documentation contains hallucinations:\\n" verified))
+    (finish refined))
+```
+
+**Better approach for factual tasks:** Use **Pattern 17 (Hybrid Extraction)**
+- Extract facts deterministically (AST, JSON parsing, grep)
+- LLM generates prose from verified facts only
+- Verification catches remaining errors
+
+**Summary:**
+- Critique-refine for: Style, structure, completeness, clarity
+- Verification for: Factual accuracy, existence checks
+- Hybrid extraction for: Code documentation, structured data analysis
+
 ### When to Use This Pattern
 ✅ Use when:
 - Quality requirements >80% and single-shot insufficient

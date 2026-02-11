@@ -200,6 +200,165 @@
 
 ---
 
+#### Anti-Pattern 6: Character-Count Truncation (Critical for Code/Docs)
+
+**Problem:** Blindly truncating data to fit context window loses coverage and causes hallucination.
+
+```scheme
+;; BAD: Truncate at arbitrary character count
+(define code (substring all-code 0 14000))  ;; Only first 14K chars
+(define docs (llm-query
+  #:instruction "Document this entire package"
+  #:data code))
+;; Result: LLM only sees 1-5% of large packages, hallucinates the rest
+```
+
+**Real impact (GraphRAG evaluation):**
+- Package: 262 files, 22,753 lines
+- Truncation: 350 lines (~1.5% coverage)
+- Result: 70% hallucinated APIs in documentation
+
+**Why this fails:**
+1. Alphabetically-first files may not be representative
+2. Cuts mid-file, loses entire modules
+3. LLM fills gaps with plausible inventions
+4. No way to verify what was documented vs. what exists
+
+**Solution: Intelligent Chunking**
+
+**Pattern A: File-Level Chunking**
+
+Process each file individually, get 100% coverage:
+
+```scheme
+;; GOOD: Process each file separately
+(define files (py-eval "
+import os
+[os.path.join(r, f) for r, _, fs in os.walk('src') for f in fs if f.endswith('.py')]
+"))
+
+(define per-file-docs (map-async
+  (lambda (filepath)
+    (llm-query-async
+      #:instruction "Document this file's APIs"
+      #:data (py-exec (string-append "open('" filepath "').read()"))
+      #:model "gpt-4o-mini"))
+  files
+  #:max-concurrent 10))
+
+;; Aggregate with Pattern 10 (Tree Aggregation)
+(define package-docs (tree-reduce combine-docs per-file-docs))
+```
+
+**Pattern B: Semantic Chunking**
+
+Split by logical boundaries (classes, functions), not arbitrary characters:
+
+```scheme
+;; GOOD: Split by class/function (preserves semantic units)
+(define chunks (py-exec "
+import ast, json
+
+def chunk_by_class(filepath):
+    with open(filepath) as f:
+        tree = ast.parse(f.read(), filepath)
+    chunks = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef):
+            chunks.append({
+                'type': 'class',
+                'name': node.name,
+                'code': ast.unparse(node),
+                'file': filepath
+            })
+    return chunks
+
+all_chunks = []
+for file in files:
+    all_chunks.extend(chunk_by_class(file))
+print(json.dumps(all_chunks))
+"))
+
+(define docs (map-async document-chunk chunks))
+```
+
+**Pattern C: Token-Aware Chunking**
+
+Maximize context usage without overflow:
+
+```scheme
+;; GOOD: Split by token budget (e.g., 3000 tokens per chunk)
+(define chunks (py-exec "
+import tiktoken
+enc = tiktoken.encoding_for_model('gpt-4o')
+
+chunks = []
+current_chunk = ''
+current_tokens = 0
+MAX_TOKENS = 3000
+
+for line in all_lines:
+    line_tokens = len(enc.encode(line))
+    if current_tokens + line_tokens > MAX_TOKENS:
+        chunks.append(current_chunk)
+        current_chunk = line
+        current_tokens = line_tokens
+    else:
+        current_chunk += line
+        current_tokens += line_tokens
+
+if current_chunk:
+    chunks.append(current_chunk)
+print(json.dumps(chunks))
+"))
+```
+
+**When to Use Each:**
+
+| Chunking Strategy | Use Case | Coverage | Semantic Integrity |
+|-------------------|----------|----------|-------------------|
+| **Character truncation** | ❌ Never (loses data) | 1-5% | ❌ Breaks mid-entity |
+| **File-level** | Code docs (1 file = 1 doc) | 100% | ✅ Preserves file boundaries |
+| **Semantic** | Function/class analysis | 100% | ✅ Preserves logical units |
+| **Token-aware** | Prose documents | 100% | ⚠️ May split paragraphs |
+
+**Best Practice for Code Documentation:**
+
+Use **Pattern 17 (Hybrid Extraction)**:
+1. Extract facts deterministically (AST parsing - 0% error)
+2. LLM generates prose from verified facts
+3. Verification catches hallucinations
+
+```scheme
+;; Deterministic extraction (100% coverage, 0% error)
+(define metadata (py-exec "
+import ast, json
+def extract(file):
+    tree = ast.parse(open(file).read())
+    return {
+        'classes': [n.name for n in ast.walk(tree) if isinstance(n, ast.ClassDef)],
+        'functions': [n.name for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]
+    }
+metadata = [extract(f) for f in files]
+print(json.dumps(metadata))
+"))
+
+;; LLM prose generation (from facts, not raw code)
+(define docs (map-async
+  (lambda (meta)
+    (llm-query-async
+      #:instruction "Generate API docs from this metadata. ONLY document listed classes/functions."
+      #:data meta))
+  metadata))
+
+;; Verification (catches hallucinations)
+(define verified (verify-docs docs metadata))
+```
+
+**Key Takeaway:** Never truncate at arbitrary character counts. Chunk by file, class, function, or tokens - anything except raw character count.
+
+---
+
 ### 5.5 Cost Reference Tables
 
 #### Model Costs (per 1M tokens)

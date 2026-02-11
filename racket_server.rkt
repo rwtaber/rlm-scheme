@@ -1152,6 +1152,14 @@
      (hasheq 'status "ok"
              'result (jsexpr->string (get-user-variables)))]
 
+    ;; inspect-state — return comprehensive sandbox state for debugging.
+    [(string=? op "inspect-state")
+     (define vars (get-user-variables))
+     (define py-available (and py-proc (eq? (subprocess-status py-proc) 'running)))
+     (hasheq 'status "ok"
+             'variables vars
+             'python_available py-available)]
+
     ;; reset — tear down and recreate everything.
     [(string=? op "reset")
      (clear-scope-log!)

@@ -34,6 +34,155 @@ Use **plan_strategy()** to get strategy recommendations for your task. This guid
 
 ---
 
+## State Persistence Between Calls
+
+**IMPORTANT:** All `execute_scheme()` calls share persistent state until `reset()` is called. Understanding this is critical for multi-call pipelines.
+
+### What Persists
+
+- **Scheme variables** (`define` creates variables that survive across calls)
+- **Python globals** (variables in `py-exec` persist in Python subprocess)
+- **Disk checkpoints** (saved via `checkpoint`, stored in `.rlm-scheme-checkpoints/`)
+- **Scope log** (audit trail of all sub-model calls)
+
+### What Doesn't Persist
+
+- Python subprocess state after timeout (>300s default)
+- In-progress async handles after errors
+- Progress/status from previous calls (call registry resets each execution)
+
+### Design Patterns
+
+**Pattern A: Multi-Call Pipeline (Recommended)**
+
+Split long-running work across multiple `execute_scheme` calls, each under timeout limit:
+
+```scheme
+;; Call 1: Load and prepare data (saves to disk)
+(py-exec "
+import json, os
+all_files = [f for f in os.listdir('.') if f.endswith('.py')]
+with open('files.json', 'w') as f:
+    json.dump(all_files, f)
+print(f'Saved {len(all_files)} files')
+")
+(finish "Data prepared")
+
+;; Call 2: Process data (reads from disk, references Call 1 state)
+(define files (py-exec "
+with open('files.json') as f:
+    print(json.load(f))
+"))
+(define analyses (map-async
+  (lambda (f) (llm-query-async #:instruction "Analyze" #:data f))
+  files))
+(py-exec "
+with open('analyses.json', 'w') as f:
+    json.dump(analyses, f)
+")
+(finish "Analysis complete")
+
+;; Call 3: Synthesize (reads Call 2 results)
+(define synthesis (llm-query
+  #:instruction "Synthesize all analyses"
+  #:data (py-exec "
+with open('analyses.json') as f:
+    print(json.dumps(json.load(f)))
+")))
+(finish synthesis)
+```
+
+**Pattern B: Checkpoints for Crash Recovery**
+
+Use `checkpoint` to save intermediate results that survive timeouts:
+
+```scheme
+;; Phase 1: Expensive computation
+(define results (map-async expensive-analysis items))
+(checkpoint "phase1_results" results)
+(finish "Phase 1 complete")
+
+;; Phase 2: If this times out, Phase 1 results are safe
+(define phase1 (restore "phase1_results"))
+(if phase1
+    (finish (process phase1))
+    (finish-error "Phase 1 results not found - run Phase 1 first"))
+```
+
+**Pattern C: Inspect State Between Calls**
+
+Use `get_sandbox_state()` MCP tool to debug what persists:
+
+```python
+# After running Scheme code
+state = get_sandbox_state()
+print(state)
+# {
+#   "scheme_variables": ["context", "result", "summaries"],
+#   "python_available": true,
+#   "checkpoints": ["phase1_data"],
+#   "scope_log_entries": 12
+# }
+```
+
+### Anti-Patterns (Avoid These)
+
+**❌ Relying on Implicit State**
+
+```scheme
+;; Call 1
+(define data (py-exec "print(expensive_load())"))
+
+;; Call 2 (hours later) - BUG!
+(finish (process data))  ;; ERROR: 'data' may not exist if Call 1 timed out
+```
+
+**✅ Fix: Save to disk explicitly**
+
+```scheme
+;; Call 1
+(define data (py-exec "..."))
+(py-exec "
+with open('data.json', 'w') as f:
+    json.dump(data, f)
+")
+
+;; Call 2: Load from disk
+(define data (py-exec "
+with open('data.json') as f:
+    print(json.load(f))
+"))
+```
+
+**❌ Not Calling reset() Between Unrelated Tasks**
+
+```scheme
+;; Task A
+(define temp (compute-something))
+(finish temp)
+
+;; Task B (unrelated) - BUG!
+(define result (process temp))  ;; Accidentally uses Task A's 'temp'
+```
+
+**✅ Fix: Call reset() between tasks**
+
+```python
+execute_scheme("...")  # Task A
+reset()  # Clear state
+execute_scheme("...")  # Task B starts fresh
+```
+
+### Best Practices
+
+1. **Save to disk for long pipelines** - Use `py-exec` to write JSON files after each major phase
+2. **Call `reset()` between unrelated tasks** - Avoid state leakage
+3. **Use `checkpoint` for crash recovery** - Persists to disk, survives timeouts
+4. **Don't assume Python globals survive timeouts** - They live in a subprocess that may restart
+5. **Use `get_sandbox_state()` to debug** - Verify what variables exist before using them
+
+---
+
 ## The 16 Patterns
 
 ### Speed (Latency Optimization)

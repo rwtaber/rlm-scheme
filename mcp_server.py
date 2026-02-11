@@ -199,6 +199,7 @@ _TOOL_DESCRIPTIONS = {
     "load_context": _load_tool_desc("load_context"),
     "get_scope_log": _load_tool_desc("get_scope_log"),
     "reset": _load_tool_desc("reset"),
+    "get_sandbox_state": _load_tool_desc("get_sandbox_state"),
     "get_status": _load_tool_desc("get_status"),
     "cancel_call": _load_tool_desc("cancel_call"),
 }
@@ -1503,6 +1504,22 @@ async def execute_scheme(code: str, timeout: int | None = None, ctx: Context = N
         exec_summary["tokens"] = token_usage["total_tokens"]
     result["execution"] = exec_summary
 
+    # Safety check: Detect suspicious phantom results
+    # If execution reports success but no LLM calls, log warning
+    if (resp["status"] == "finished" and
+        exec_summary.get("llm_calls", 0) == 0 and
+        elapsed > 1.0):
+        warning = (
+            f"[rlm] WARNING: Suspicious result - status='finished' but llm_calls=0 "
+            f"(elapsed={elapsed}s). This may indicate stale cached state. "
+            f"Consider calling reset() if result seems incorrect."
+        )
+        print(warning, file=sys.stderr, flush=True)
+        # Add warning to result but don't fail - might be legitimate (pure py-exec)
+        if "warnings" not in result:
+            result["warnings"] = []
+        result["warnings"].append(warning)
+
     return json.dumps(result)
 
 execute_scheme.__doc__ = _TOOL_DESCRIPTIONS["execute_scheme"]
@@ -1535,6 +1552,43 @@ def reset() -> str:
     return resp.get("result", "sandbox reset")
 
 reset.__doc__ = _TOOL_DESCRIPTIONS["reset"]
+
+
+@mcp.tool()
+def get_sandbox_state() -> str:
+    """Inspect current sandbox state for debugging."""
+    backend = get_backend()
+
+    # Get Scheme variable list from sandbox
+    resp = backend.send({"op": "inspect-state"})
+
+    # Get checkpoint list from disk
+    checkpoints = []
+    if os.path.exists(CHECKPOINT_DIR):
+        try:
+            checkpoints = [f.replace(".json", "") for f in os.listdir(CHECKPOINT_DIR)
+                          if f.endswith(".json")]
+        except Exception:
+            checkpoints = []
+
+    # Get scope log count
+    scope_resp = backend.send({"op": "get-scope-log"})
+    try:
+        scope_log = json.loads(scope_resp.get("result", "[]"))
+        scope_log_entries = len(scope_log)
+    except Exception:
+        scope_log_entries = 0
+
+    result = {
+        "scheme_variables": resp.get("variables", []),
+        "python_available": resp.get("python_available", True),
+        "checkpoints": sorted(checkpoints),
+        "scope_log_entries": scope_log_entries,
+    }
+
+    return json.dumps(result, indent=2)
+
+get_sandbox_state.__doc__ = _TOOL_DESCRIPTIONS["get_sandbox_state"]
 
 
 @mcp.tool()
