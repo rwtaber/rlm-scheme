@@ -38,6 +38,7 @@ PYTHON BRIDGE (for computation and I/O):
 (py-exec "python_code_string")
   → Runs multi-line Python code (imports, statements, loops, file I/O).
   → Returns stdout as string. Use print() to output results.
+  → Python bridge starts automatically on first use.
   → Example: (py-exec "import json; print(json.dumps({'key': 'value'}))")
 
 (py-eval "python_expression")
@@ -92,7 +93,7 @@ Conditionals:
 
 COMMON PATTERNS:
 
-Pattern 1: Parallel fan-out
+Parallel fan-out:
 ```scheme
 (define results (map-async
   (lambda (item)
@@ -102,14 +103,14 @@ Pattern 1: Parallel fan-out
 (finish results)
 ```
 
-Pattern 2: Extract with Python, analyze with LLM
+Extract with Python, analyze with LLM:
 ```scheme
 (define data (py-exec "import json; print(json.dumps(process_data()))"))
 (define analysis (syntax-e (llm-query #:instruction "analyze" #:data data #:model "gpt-4")))
 (finish analysis)
 ```
 
-Pattern 3: py-set! → py-exec → py-eval round-trip (most common data flow)
+Data flow: py-set! → py-exec → py-eval round-trip
 ```scheme
 ;; 1. Get data from LLM into Scheme
 (define analysis (syntax-e (llm-query #:instruction "Extract key facts as JSON" #:data doc #:model "gpt-4" #:json #t)))
@@ -129,7 +130,7 @@ result = json.dumps(data)
 (finish processed)
 ```
 
-Pattern 4: Define result variable (for generated code)
+Define result variable (for generated code):
 ```scheme
 (define result (... your computation ...))
 ;; Caller will use (finish-var "result") to retrieve this
@@ -142,3 +143,135 @@ IMPORTANT REMINDERS:
 - Use (finish ...) to return your result
 - Use cheap models (gpt-3.5-turbo) for parallel work
 - py-set! is safer than string interpolation for passing data to Python
+
+---
+
+# COMBINATOR LIBRARY
+
+Use these ~17 combinators to compose custom orchestration strategies.
+
+## Parallel
+
+- `(parallel [fn1 fn2 ...] #:max-concurrent N)` - Concurrent execution, return all results
+- `(race [fn1 fn2 ...])` - First to complete wins
+
+## Sequential
+
+- `(sequence fn1 fn2 fn3)` - Chain operations left-to-right
+- `(fold-sequential fn init items)` - Sequential fold with accumulator
+
+## Hierarchical
+
+- `(tree-reduce fn items #:branch-factor N #:leaf-fn f)` - Recursive tree aggregation
+- `(recursive-spawn strategy #:depth N)` - Delegate to sub-sandbox
+- `(fan-out-aggregate map-fn reduce-fn items #:max-concurrent N)` - Parallel map + reduce
+
+## Iterative
+
+- `(iterate-until fn pred init #:max-iter N)` - Loop until condition or max iterations
+- `(critique-refine gen critique refine #:max-iter N)` - Generate-critique-refine loop
+
+## Quality
+
+- `(with-validation fn validator)` - Wrap with validation step
+- `(vote [fn1 fn2 ...] #:method 'majority)` - Multi-strategy voting (majority/plurality/consensus)
+- `(ensemble [fn1 fn2 ...] #:aggregator fn)` - Multi-model ensemble with custom aggregation
+
+## Cost
+
+- `(tiered cheap-fn expensive-fn items)` - Cheap on all, expensive for synthesis
+- `(active-learning cheap expensive uncertain items #:threshold T)` - Cheap on all, expensive on uncertain
+- `(memoized fn #:key-fn hash)` - Cache results by key
+
+## Control
+
+- `(choose pred then-fn else-fn)` - Conditional execution
+- `(try-fallback primary fallback)` - Try primary, use fallback on error
+
+---
+
+## Common Patterns as Combinators
+
+```scheme
+;; Parallel processing with aggregation
+(fan-out-aggregate
+  (lambda (doc) (llm-query-async #:instruction "Extract" #:data doc #:model "gpt-4.1-nano"))
+  (lambda (results) (llm-query #:instruction "Synthesize" #:data (string-join results) #:model "gpt-4o"))
+  documents)
+
+;; Iterative quality refinement
+(critique-refine
+  (lambda () (llm-query #:instruction "Generate" #:data context))
+  (lambda (draft) (llm-query #:instruction "Critique" #:data draft #:model "gpt-4o-mini"))
+  (lambda (draft critique) (llm-query #:instruction "Refine" #:data (string-append draft "\n" critique)))
+  #:max-iter 3)
+
+;; Speculative execution - first wins
+(race
+  (list
+    (lambda () (llm-query-async #:instruction "Fast" #:model "gpt-4.1-nano"))
+    (lambda () (llm-query-async #:instruction "Slow" #:model "gpt-4o"))))
+
+;; Ensemble voting and consensus
+(vote
+  (list
+    (lambda () (llm-query #:instruction "Classify" #:model "gpt-4o"))
+    (lambda () (llm-query #:instruction "Classify" #:model "claude-3.5-sonnet"))
+    (lambda () (llm-query #:instruction "Classify" #:model "gpt-4o")))
+  #:method 'majority)
+
+;; Active learning - cheap first, expensive on uncertain
+(active-learning
+  (lambda (doc) (llm-query-async #:instruction "Extract" #:data doc #:model "gpt-4o-mini"))
+  (lambda (doc) (llm-query-async #:instruction "Extract carefully" #:data doc #:model "gpt-4o"))
+  (lambda (result) (if (< (string-length result) 50) 0.5 0.9))  ; Uncertainty
+  documents
+  #:threshold 0.7)
+
+;; Tree aggregation - hierarchical reduction
+(tree-reduce
+  (lambda (left right)
+    (syntax-e (llm-query #:instruction "Combine" #:data (string-append left "\n" right))))
+  extractions
+  #:branch-factor 5)
+```
+
+---
+
+## Composition Tips
+
+1. **Use `fan-out-aggregate` for map-reduce** - Most common pattern
+2. **Chain with `sequence`** - Build multi-phase pipelines
+3. **Add `with-validation`** - Quality gates at each phase
+4. **Use `choose` for adaptation** - Different strategies for different data
+5. **Wrap with `try-fallback`** - Robustness against failures
+
+---
+
+## Example: Multi-Phase Pipeline
+
+```scheme
+(define result
+  (sequence
+    ;; Phase 1: Parallel extraction with cheap model
+    (lambda (docs)
+      (fan-out-aggregate
+        (lambda (doc) (llm-query-async #:instruction "Extract" #:data doc #:model "gpt-4.1-nano"))
+        (lambda (results) (tree-reduce string-append results #:branch-factor 5))
+        docs))
+
+    ;; Phase 2: Refine with critique loop
+    (lambda (extraction)
+      (critique-refine
+        (lambda () extraction)
+        (lambda (draft) (syntax-e (llm-query #:instruction "Critique" #:data draft #:model "gpt-4o-mini")))
+        (lambda (draft critique) (syntax-e (llm-query #:instruction "Refine" #:data (string-append draft "\n" critique) #:model "gpt-4o")))
+        #:max-iter 2))
+
+    ;; Phase 3: Validation
+    (with-validation
+      identity
+      (lambda (result) (> (string-length result) 100)))))
+
+(finish ((result) documents))
+```

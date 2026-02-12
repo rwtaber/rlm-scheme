@@ -11,8 +11,8 @@ Named context slots (improvement #5) allow managing multiple datasets:
 - Later in Scheme: (get-context "gwas-data") or (get-context "expression-data")
 
 Strategy considerations after loading:
-- Data >100KB? → Use Pattern 1 (chunk via py-exec, parallel fan-out with map-async)
-- Unknown structure? → Use Pattern 2 (model inspects sample, generates analysis code)
-- Hierarchical? → Use Pattern 3 (recursive delegation to specialists)
+- Data >100KB? → Use fan-out-aggregate (chunk via py-exec, parallel processing with map-async)
+- Unknown structure? → Use meta-orchestration (model inspects sample, generates analysis code)
+- Hierarchical? → Use recursive-spawn (delegate to specialized sandboxes)
 
-See get_usage_guide for strategy templates.
+Call plan_strategy(task) for custom strategy recommendations.

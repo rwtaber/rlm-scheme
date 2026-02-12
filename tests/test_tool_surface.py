@@ -213,22 +213,22 @@ class TestModelGuide:
         assert "## Model Selection" in USAGE_GUIDE_CORE
 
     def test_economy_models_listed(self):
-        """Guide lists economy models."""
+        """Guide lists economy models (updated for 2026 pricing)."""
         from mcp_server import USAGE_GUIDE_CORE
-        assert "gpt-3.5-turbo" in USAGE_GUIDE_CORE
-        assert "ada" in USAGE_GUIDE_CORE
+        # Check for newer economy models
+        assert ("gpt-4o-mini" in USAGE_GUIDE_CORE or "gpt-4.1-nano" in USAGE_GUIDE_CORE)
 
     def test_capable_models_listed(self):
-        """Guide lists capable models."""
+        """Guide lists capable models (updated for 2026)."""
         from mcp_server import USAGE_GUIDE_CORE
+        # Check for modern GPT-4 variants
         assert "gpt-4" in USAGE_GUIDE_CORE
-        assert "curie" in USAGE_GUIDE_CORE or "code-davinci" in USAGE_GUIDE_CORE
 
     def test_pricing_included(self):
         """Guide includes pricing information."""
         from mcp_server import USAGE_GUIDE_CORE
-        # Should include pricing like $0.0004 (ada) or $0.002 (gpt-3.5-turbo)
-        assert "$0.0004" in USAGE_GUIDE_CORE or "$0.002" in USAGE_GUIDE_CORE
+        # Should include pricing for modern models (2026)
+        assert "$0.0001" in USAGE_GUIDE_CORE or "$0.0005" in USAGE_GUIDE_CORE or "$0.01" in USAGE_GUIDE_CORE
 
     def test_fan_out_guidance(self):
         """Guide recommends cheap models for fan-out."""

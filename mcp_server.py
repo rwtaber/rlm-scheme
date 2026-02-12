@@ -188,7 +188,7 @@ def _detect_project_python() -> str | None:
 # Usage guide & pattern documentation — loaded from docs/ at import time
 # ---------------------------------------------------------------------------
 
-USAGE_GUIDE_CORE = _load_doc("usage-guide.md")
+USAGE_GUIDE_CORE = _load_doc("getting-started.md")
 
 # Load tool descriptions from markdown files
 _TOOL_DESCRIPTIONS = {
@@ -204,97 +204,9 @@ _TOOL_DESCRIPTIONS = {
     "cancel_call": _load_tool_desc("cancel_call"),
 }
 
-_PATTERN_FILES = {
-    1: "patterns/pattern-01-parallel-fan-out.md",
-    2: "patterns/pattern-02-code-generation.md",
-    3: "patterns/pattern-03-recursive-delegation.md",
-    4: "patterns/pattern-04-critique-refine.md",
-    5: "patterns/pattern-05-cumulative-fold.md",
-    6: "patterns/pattern-06-meta-orchestration.md",
-    7: "patterns/pattern-07-speculative-execution.md",
-    8: "patterns/pattern-08-ensemble-voting.md",
-    9: "patterns/pattern-09-active-learning.md",
-    10: "patterns/pattern-10-tree-aggregation.md",
-    11: "patterns/pattern-11-consensus-protocol.md",
-    12: "patterns/pattern-12-backtracking-search.md",
-    13: "patterns/pattern-13-anytime-algorithms.md",
-    14: "patterns/pattern-14-memoization.md",
-    15: "patterns/pattern-15-stream-processing.md",
-    16: "patterns/pattern-16-multi-armed-bandit.md",
-}
 
 _CODE_GEN_API_REF = _load_doc("api-reference.md")
 _PLANNER_PROMPT_TEMPLATE = _load_doc("planner-prompt.md")
-
-
-# ---------------------------------------------------------------------------
-# Pattern knowledge extraction for planner
-# ---------------------------------------------------------------------------
-
-def _extract_pattern_knowledge() -> dict[int, dict]:
-    """Extract structured knowledge from pattern documentation files."""
-    patterns = {}
-
-    for pattern_id, path in _PATTERN_FILES.items():
-        content = _load_doc(path)
-
-        # Extract title
-        title_match = re.search(r"^##\s+Pattern \d+:\s*(.+)$", content, re.MULTILINE)
-        title = title_match.group(1).strip() if title_match else f"Pattern {pattern_id}"
-
-        # Extract "When to Use" section
-        when_match = re.search(r"### When to Use.*?\n(.*?)(?=\n###|\Z)", content, re.DOTALL)
-        when_to_use = when_match.group(1).strip() if when_match else ""
-
-        # Extract quantified improvements for key metrics
-        improvements_match = re.search(r"### Quantified Improvements.*?\n(.*?)(?=\n###|\Z)", content, re.DOTALL)
-        improvements = improvements_match.group(1).strip() if improvements_match else ""
-
-        # Extract key strengths from improvements
-        strengths = []
-        if "latency" in improvements.lower() or "faster" in improvements.lower():
-            strengths.append("speed")
-        if "cost" in improvements.lower() or "cheaper" in improvements.lower():
-            strengths.append("cost")
-        if "quality" in improvements.lower():
-            strengths.append("quality")
-
-        patterns[pattern_id] = {
-            "id": pattern_id,
-            "title": title,
-            "when_to_use": when_to_use[:300] if when_to_use else "",  # First 300 chars
-            "improvements": improvements[:200] if improvements else "",  # First 200 chars
-            "strengths": strengths,
-        }
-
-    return patterns
-
-
-def _create_pattern_summary() -> str:
-    """Create condensed pattern summary for planner prompts (~1000 tokens)."""
-    knowledge = _extract_pattern_knowledge()
-    lines = ["# Available Orchestration Patterns\n"]
-
-    for pid in sorted(knowledge.keys()):
-        info = knowledge[pid]
-        lines.append(f"\n## Pattern {pid}: {info['title']}")
-
-        # Add strength tags
-        if info['strengths']:
-            strength_tags = ", ".join(f"**{s}**" for s in info['strengths'])
-            lines.append(f"Optimizes: {strength_tags}")
-
-        # Add when to use (condensed)
-        if info['when_to_use']:
-            # Extract just the checkmark items for brevity
-            use_cases = re.findall(r'✅.*?(?:\n|$)', info['when_to_use'])
-            if use_cases:
-                lines.append("Use when: " + " ".join(u.replace('✅', '').strip() for u in use_cases[:2]))
-
-    return "\n".join(lines)
-
-
-_PATTERN_SUMMARY = _create_pattern_summary()
 
 
 
@@ -1177,12 +1089,12 @@ class RacketREPL:
                 "completion_tokens": 0,
             }
 
-        # Build the prompt — include USAGE_GUIDE so the sub-model knows the sandbox API
+        # Build the prompt — include USAGE_GUIDE_CORE so the sub-model knows the sandbox API
         full_instruction = (
             f"{instruction}\n\n"
             f"You have access to a Scheme sandbox. Write Scheme code to accomplish the task.\n"
             f"Use (finish value) to return your result.\n\n"
-            f"## Sandbox Reference\n{USAGE_GUIDE}"
+            f"## Sandbox Reference\n{USAGE_GUIDE_CORE}"
         )
 
         # Call the sub-model to get Scheme code
@@ -1355,6 +1267,30 @@ get_usage_guide.__doc__ = _TOOL_DESCRIPTIONS["get_usage_guide"]
 
 
 @mcp.tool()
+def get_combinator_reference() -> str:
+    """Get complete combinator library reference.
+
+    Returns comprehensive documentation for all ~17 core combinators including:
+    - Signature and parameters for each combinator
+    - Semantic descriptions
+    - Composition rules and patterns
+    - Code examples and usage
+    - Performance characteristics
+    - Pattern equivalences
+
+    Use this when:
+    - Designing custom orchestration strategies
+    - Understanding combinator semantics
+    - Learning composition patterns
+    - Looking up specific combinator details
+
+    For pattern recommendations based on your task, use plan_strategy() instead.
+    For condensed API reference, use get_code_generation_api_reference().
+    """
+    return _load_doc("combinators.md")
+
+
+@mcp.tool()
 def get_code_generation_api_reference() -> str:
     return _CODE_GEN_API_REF
 
@@ -1378,11 +1314,15 @@ def plan_strategy(
         data_characteristics=data_characteristics or "Not specified",
         constraints=constraints or "None specified",
         priority=priority,
-        pattern_summary=_PATTERN_SUMMARY,
     )
 
-    # Use curie for cost-effectiveness, gpt-4 for complex tasks
-    planner_model = "curie" if priority == "cost" else "gpt-4"
+    # Use modern models (2026 pricing) aligned with planner-prompt.md
+    if priority == "cost":
+        planner_model = "gpt-4o-mini"  # $0.0005/1K - cheap but capable
+    elif priority == "quality":
+        planner_model = "gpt-4o"  # $0.01/1K - best balance for strategy design
+    else:  # balanced, speed
+        planner_model = "gpt-4o-mini"  # Fast and cost-effective for most cases
 
     try:
         # Call planner model
@@ -1395,8 +1335,18 @@ def plan_strategy(
             max_tokens=2000,
         )
 
+        # Extract JSON from markdown fences if present
+        response_text = result["text"].strip()
+        json_match = re.search(r'```(?:json)?\s*\n(.*?)```', response_text, re.DOTALL)
+        if json_match:
+            response_text = json_match.group(1).strip()
+
         # Parse and validate JSON
-        parsed = json.loads(result["text"])
+        parsed = json.loads(response_text)
+
+        # Validate that parsed result is a dictionary
+        if not isinstance(parsed, dict):
+            raise ValueError(f"LLM returned valid JSON but not an object/dict. Got {type(parsed).__name__}: {str(parsed)[:100]}")
 
         # Add metadata
         parsed["_meta"] = {
@@ -1407,11 +1357,11 @@ def plan_strategy(
 
         return json.dumps(parsed, indent=2)
 
-    except json.JSONDecodeError:
+    except json.JSONDecodeError as e:
         # Fallback: return error with basic recommendation
         return json.dumps({
-            "error": "Failed to generate structured plan",
-            "fallback_recommendation": "Start with Pattern 1 (Parallel Fan-Out) for most tasks. Call get_usage_guide() for pattern overview.",
+            "error": f"Failed to parse LLM response as JSON: {str(e)}",
+            "fallback_recommendation": "Start with fan-out-aggregate for most tasks. Call get_combinator_reference() for full combinator docs.",
             "raw_output": result["text"][:500] if 'result' in locals() else "No output generated"
         }, indent=2)
     except Exception as e:

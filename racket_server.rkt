@@ -2,6 +2,9 @@
 
 ;;; racket_server.rkt — Sandboxed Scheme REPL for RLM-Scheme
 ;;;
+;;; Path resolution: All server resources (py_bridge.py) are resolved relative
+;;; to this file's directory, not the client's working directory
+;;;
 ;;; This is the security core of RLM-Scheme. It creates a restricted Scheme
 ;;; evaluator (sandbox) that LLM-generated code runs inside. The sandbox has:
 ;;;   - No filesystem or network access
@@ -39,7 +42,18 @@
          racket/port          ; get-output (captures sandbox stdout)
          racket/format        ; ~a format specifier
          racket/match         ; pattern matching (used by add-optional-fields)
+         racket/list          ; take, drop, range (for combinators)
+         racket/runtime-path  ; define-runtime-path for resource resolution
          json)                ; read-json, write-json, string->jsexpr, jsexpr->string
+
+;; ============================================================
+;; Path Resolution
+;; ============================================================
+
+;; Resolve server resources relative to this file's directory, not the client's working directory.
+;; This allows the MCP server to work correctly regardless of where Claude Code is invoked from.
+(define-runtime-path SERVER-DIR ".")
+(define PY-BRIDGE-PATH (build-path SERVER-DIR "py_bridge.py"))
 
 
 ;; ============================================================
@@ -170,20 +184,42 @@
           (or (find-executable-path "python3")
               (find-executable-path "python")
               (error 'start-py-bridge "Cannot find python3 or python in PATH")))))
+
+  ;; Log the Python path and py_bridge.py location
+  (eprintf "[racket] Starting Python bridge~n")
+  (eprintf "[racket]   Python: ~a~n" python-path)
+  (eprintf "[racket]   Bridge: ~a~n" PY-BRIDGE-PATH)
+  (eprintf "[racket]   Server dir: ~a~n" SERVER-DIR)
+  (eprintf "[racket]   Working dir: ~a~n" (current-directory))
+
+  (unless (file-exists? PY-BRIDGE-PATH)
+    (error 'start-py-bridge
+           (format "py_bridge.py not found at: ~a" PY-BRIDGE-PATH)))
+
   (define-values (proc out in err)
     (subprocess #f #f (current-error-port)
                 python-path
-                (path->string
-                 (build-path (current-directory) "py_bridge.py"))))
+                (path->string PY-BRIDGE-PATH)))
   (set! py-proc proc)
   (set! py-in in)
   (set! py-out out)
-  (file-stream-buffer-mode in 'line))
+  (file-stream-buffer-mode in 'line)
+
+  ;; Give the subprocess a moment to start and check if it's still running
+  (sleep 0.1)
+  (define status (subprocess-status proc))
+  (unless (eq? status 'running)
+    (eprintf "[racket] WARNING: Python bridge not running after start (status: ~a)~n" status))
+  (eprintf "[racket] Python bridge started successfully (status: ~a)~n" status))
 
 (define (ensure-py-bridge!)
   ;; Called before sandbox creation. Starts the bridge if not already running.
   (unless (and py-proc (eq? (subprocess-status py-proc) 'running))
-    (start-py-bridge!)))
+    (start-py-bridge!))
+  ;; Verify the bridge is actually running after start
+  (unless (and py-proc (eq? (subprocess-status py-proc) 'running))
+    (error 'ensure-py-bridge
+           "Python bridge failed to start. Check that Python is installed and py_bridge.py exists.")))
 
 (define (py-send! cmd)
   ;; Send a JSON command to py_bridge, read the JSON response.
@@ -472,6 +508,15 @@
   (void))
 
 ;; ============================================================
+;; Section 5.5: Combinator Library (scaffolding only)
+;;
+;; Combinators are defined inside the sandbox (Section 6) so they can
+;; access sandbox functions like await-any, map-async, etc.
+;; This section exists only as documentation of what combinators exist.
+;; ============================================================
+
+
+;; ============================================================
 ;; Section 6: Sandbox creation and scaffold injection
 ;;
 ;; This section creates the restricted Scheme evaluator and injects
@@ -522,6 +567,13 @@
          'unsafe-raw-query 'unsafe-interpolate 'unsafe-overwrite
          'unsafe-exec-sub-output
          'checkpoint 'restore 'heartbeat
+         ;; Combinator library bindings (Section 5.5)
+         'parallel 'race 'sequence 'fold-sequential
+         'tree-reduce 'recursive-spawn 'fan-out-aggregate
+         'iterate-until 'critique-refine
+         'with-validation 'vote 'ensemble
+         'tiered 'active-learning 'memoized
+         'choose 'try-fallback
          ;; Internal bindings — not user-facing but must be protected
          ;; so user code can't break the scaffold by redefining them.
          '__log-scope! '__py-send! '__llm-query-callback
@@ -971,6 +1023,216 @@
            (when (string=? (hash-ref resp 'status "") "error")
              (error 'py-set! (hash-ref resp 'message "unknown error")))
            (void)))
+
+  ;; ---- Group G: Combinator library bindings ----
+  ;; Define all combinators inside the sandbox so they can access
+  ;; sandbox functions like await-any, map-async, etc.
+
+  ;; Helper: identity function (not in racket/base)
+  (eval '(define (identity x) x))
+
+  ;; Helper: chunk list into groups of size n
+  (eval '(define (chunk lst n)
+           (if (<= (length lst) n)
+               (list lst)
+               (cons (take lst n)
+                     (chunk (drop lst n) n)))))
+
+  ;; --- Parallel Combinators ---
+
+  (eval '(define (parallel strategies #:max-concurrent [max-conc #f])
+           "Execute strategies concurrently, return all results as list"
+           (if (and max-conc (> (length strategies) max-conc))
+               ;; Batched execution
+               (let loop ([remaining strategies] [results '()])
+                 (if (null? remaining)
+                     (reverse results)
+                     (let* ([batch-size (min max-conc (length remaining))]
+                            [batch (take remaining batch-size)]
+                            [rest (drop remaining batch-size)]
+                            [batch-results (map (lambda (thunk) (thunk)) batch)])
+                       (loop rest (append (reverse batch-results) results)))))
+               ;; Simple case: launch all at once
+               (map (lambda (thunk) (thunk)) strategies))))
+
+  (eval '(define (race strategies)
+           "First to complete wins"
+           (when (null? strategies)
+             (error 'race "cannot race empty list"))
+           (define handles (map (lambda (thunk) (thunk)) strategies))
+           (define-values (first-result _) (await-any handles))
+           first-result))
+
+  ;; --- Sequential Combinators ---
+
+  (eval '(define (sequence . fns)
+           "Chain functions left-to-right"
+           (lambda (init)
+             (for/fold ([acc init])
+                       ([fn (in-list fns)])
+               (fn acc)))))
+
+  (eval '(define (fold-sequential fn init items)
+           "Sequential fold with accumulator"
+           (for/fold ([acc init])
+                     ([item (in-list items)])
+             (fn acc item))))
+
+  ;; --- Hierarchical Combinators ---
+
+  (eval '(define (tree-reduce fn items #:branch-factor [bf 5] #:leaf-fn [leaf-fn identity])
+           "Hierarchical tree reduction"
+           (define (reduce-level level-items)
+             (if (<= (length level-items) 1)
+                 (car level-items)
+                 (if (<= (length level-items) bf)
+                     (apply fn level-items)
+                     (let* ([groups (chunk level-items bf)]
+                            [reduced (map (lambda (group)
+                                           ; Only apply fn if group has multiple items
+                                           (if (= (length group) 1)
+                                               (car group)
+                                               (apply fn group)))
+                                         groups)])
+                       (reduce-level reduced)))))
+           (define transformed (map leaf-fn items))
+           (when (null? transformed)
+             (error 'tree-reduce "cannot reduce empty list"))
+           (reduce-level transformed)))
+
+  (eval '(define (recursive-spawn strategy #:depth [max-depth 1])
+           "Delegate to sub-sandbox with recursion"
+           (lambda (data)
+             (llm-query #:instruction (strategy)
+                        #:data data
+                        #:recursive #t))))
+
+  (eval '(define (fan-out-aggregate map-fn reduce-fn items #:max-concurrent [max-conc 20])
+           "Parallel map + hierarchical reduce"
+           (define mapped-results (map-async map-fn items #:max-concurrent max-conc))
+           (reduce-fn mapped-results)))
+
+  ;; --- Iterative Combinators ---
+
+  (eval '(define (iterate-until fn pred init #:max-iter [max-iter 10])
+           "Repeat until predicate or max iterations"
+           (define (loop val iteration)
+             (if (or (>= iteration max-iter) (pred val))
+                 val
+                 (loop (fn val) (+ iteration 1))))
+           (loop init 0)))
+
+  (eval '(define (critique-refine generate-fn critique-fn refine-fn
+                                  #:max-iter [max-iter 3]
+                                  #:quality-threshold [threshold #f])
+           "Generate, critique, refine loop"
+           (define (loop draft iteration)
+             (if (>= iteration max-iter)
+                 draft
+                 (let ([critique (critique-fn draft)])
+                   (if (and threshold
+                            (string-contains? (string-downcase critique) "approved"))
+                       draft
+                       (let ([refined (refine-fn draft critique)])
+                         (loop refined (+ iteration 1)))))))
+           (loop (generate-fn) 0)))
+
+  ;; --- Quality Combinators ---
+
+  (eval '(define (with-validation fn validator)
+           "Wrap function with validation step"
+           (lambda args
+             (define result (apply fn args))
+             (define validation (validator result))
+             (when (not validation)
+               (error 'with-validation "validation failed"))
+             result)))
+
+  (eval '(define (vote strategies #:method [method 'majority])
+           "Multi-strategy voting"
+           (define results (map (lambda (thunk) (thunk)) strategies))
+           (define counts (make-hash))
+           (for ([result results])
+             (hash-set! counts result (+ 1 (hash-ref counts result 0))))
+           (cond
+             [(eq? method 'majority)
+              (define majority-threshold (/ (length results) 2))
+              (define winner
+                (for/first ([(result count) (in-hash counts)]
+                            #:when (> count majority-threshold))
+                  result))
+              (or winner (error 'vote "no majority consensus"))]
+             [(eq? method 'plurality)
+              (define max-count (apply max (hash-values counts)))
+              (for/first ([(result count) (in-hash counts)]
+                          #:when (= count max-count))
+                result)]
+             [(eq? method 'consensus)
+              (if (= (hash-count counts) 1)
+                  (car results)
+                  (error 'vote "no consensus - strategies disagree"))]
+             [else (error 'vote "unknown method")])))
+
+  (eval '(define (ensemble strategies #:aggregator [aggregator #f])
+           "Multi-model ensemble with custom aggregation"
+           (define results (map (lambda (thunk) (thunk)) strategies))
+           (if aggregator
+               (aggregator results)
+               (string-join
+                (for/list ([result results] [i (in-naturals 1)])
+                  (format "Model ~a:\n~a" i result))
+                "\n\n"))))
+
+  ;; --- Cost Combinators ---
+
+  (eval '(define (tiered cheap-fn expensive-fn items)
+           "Cheap on all, expensive on synthesis"
+           (define cheap-results (map cheap-fn items))
+           (expensive-fn cheap-results)))
+
+  (eval '(define (active-learning cheap-fn expensive-fn uncertainty-fn items
+                                  #:threshold [threshold 0.7])
+           "Cheap on all, expensive on uncertain"
+           (define cheap-results (map cheap-fn items))
+           (define uncertain-indices
+             (for/list ([i (in-range (length items))]
+                        [result cheap-results]
+                        #:when (< (uncertainty-fn result) threshold))
+               i))
+           (define expensive-results
+             (map (lambda (idx)
+                    (expensive-fn (list-ref items idx)))
+                  uncertain-indices))
+           (define result-vec (list->vector cheap-results))
+           (for ([idx uncertain-indices] [exp-result expensive-results])
+             (vector-set! result-vec idx exp-result))
+           (vector->list result-vec)))
+
+  (eval '(define (memoized fn #:key-fn [key-fn identity])
+           "Cache results by content hash"
+           (define cache (make-hash))
+           (lambda args
+             (define key (key-fn args))
+             (hash-ref cache key
+                       (lambda ()
+                         (define result (apply fn args))
+                         (hash-set! cache key result)
+                         result)))))
+
+  ;; --- Control Flow Combinators ---
+
+  (eval '(define (choose pred then-fn else-fn)
+           "Conditional execution"
+           (lambda args
+             (if (if (procedure? pred) (apply pred args) pred)
+                 (apply then-fn args)
+                 (apply else-fn args)))))
+
+  (eval '(define (try-fallback primary-fn fallback-fn)
+           "Try primary, use fallback on error"
+           (lambda args
+             (with-handlers ([exn:fail? (lambda (e) (apply fallback-fn args))])
+               (apply primary-fn args)))))
 
   ;; ---- Snapshot initial namespace ----
   ;; After all scaffold bindings are injected, snapshot every symbol in

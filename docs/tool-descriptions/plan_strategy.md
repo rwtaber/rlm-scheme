@@ -1,17 +1,18 @@
-Design an optimal orchestration strategy for your task by analyzing requirements and recommending pattern compositions.
+Design an optimal orchestration strategy for your task by analyzing requirements and recommending combinator compositions.
 
 **When to use:**
 - Starting a new orchestration task
-- Unsure which patterns to compose
+- Unsure which combinators to compose
 - Want to see cost/latency/quality tradeoffs
 - Need creative alternatives
 
-**Philosophy:**
-The planner encourages creative risk-taking:
-- Shows 3 tiers: recommended, alternatives, experimental
-- Testing costs $0.01-0.05; wrong choices cost $1-5
-- Real experiments beat theoretical analysis
-- Combines 1-4 patterns for optimal results
+**Philosophy - Encourages Creative Risk-Taking:**
+The planner is designed to generate **creative, novel strategies** - not just safe templates:
+- Shows 3 tiers: recommended, alternatives, **genuinely experimental** options
+- Testing 3 approaches costs $0.01-0.05; wrong choices cost $1-5
+- **Real experiments beat theoretical analysis**
+- Creative compositions often outperform safe patterns
+- No single "right" approach - encourages exploration
 
 **Input:**
 - task_description: What you want to accomplish (required)
@@ -21,12 +22,19 @@ The planner encourages creative risk-taking:
 
 **Output:**
 JSON with:
-- **recommended**: Primary strategy with pattern composition, models, cost estimates, implementation steps, code template
+- **recommended**: Primary strategy with combinator composition, models, cost estimates, executable code template
 - **alternatives**: 2 alternative approaches with different tradeoffs
-- **creative_options**: 1-2 experimental approaches with risk/upside analysis
+- **creative_options**: 1-2 genuinely experimental approaches - unconventional, risky, novel compositions with high potential upside
 - **recommendations**: Practical next steps
 
-**Cost:** $0.01-0.10 per planning call (curie or gpt-4)
+**Creative Options Are Genuinely Creative:**
+The creative_options field contains EXPERIMENTAL strategies - not just variations on standard patterns:
+- Novel combinator compositions not shown in docs
+- Unconventional approaches worth trying despite risk
+- High-upside ideas that could outperform safe patterns
+- Strategies designed for exploration, not production
+
+**Cost:** $0.01-0.10 per planning call (uses gpt-4o-mini or gpt-4o)
 **ROI:** Typically saves 10-200× planning cost by choosing optimal strategy
 
 **Examples:**
@@ -55,7 +63,10 @@ plan_strategy(
 
 **Workflow:**
 1. Call plan_strategy() to get recommendations
-2. Review recommended strategy and alternatives
-3. Implement with execute_scheme() using provided code template
-4. If unsatisfied, try creative_options or alternatives
-5. For pattern details, see get_usage_guide()
+2. Review recommended, alternatives, AND creative_options
+3. **Test multiple strategies** - experimentation is cheap
+4. Execute with execute_scheme() using provided code templates
+5. For combinator details, call get_combinator_reference()
+
+**Key Difference from Traditional Planners:**
+This planner is designed to **push boundaries and encourage experimentation**, not just recommend safe patterns. The creative_options are genuinely risky/novel - try them!
