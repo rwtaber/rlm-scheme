@@ -1,8 +1,8 @@
 # RLM-Scheme: Hygienic LLM Orchestration
 
-**A Scheme-based implementation of Recursive Language Models with safe parallel composition, multi-model routing, and 16 composable orchestration patterns.**
+**A Scheme-based implementation of Recursive Language Models with combinator library for composing orchestration strategies, safe parallel execution, and formal scope hygiene guarantees.**
 
-RLM-Scheme reimagines how language models solve complex problems by giving them a programmable execution environment. Instead of forcing everything into a single prompt, models write orchestration code that chunks data, delegates to specialized sub-models, combines results, and builds answers incrementally. This is the Recursive Language Model architecture (Zhang et al. 2026), rebuilt from scratch with formal scope hygiene guarantees.
+RLM-Scheme reimagines how language models solve complex problems by giving them a programmable execution environment. Instead of forcing everything into a single prompt, models write orchestration code using ~17 composable combinators that handle parallelization, hierarchical aggregation, iterative refinement, and cost optimization. This is the Recursive Language Model architecture (Zhang et al. 2026), enhanced with a combinator library for infinite strategy compositions.
 
 ---
 
@@ -11,11 +11,17 @@ RLM-Scheme reimagines how language models solve complex problems by giving them 
 - [What is the RLM Model?](#what-is-the-rlm-model)
 - [Why Scheme? The Formal Foundation](#why-scheme-the-formal-foundation)
 - [Novel Orchestration Strategies](#novel-orchestration-strategies)
-- [Quick Start](#quick-start)
+  - [Combinator Library Approach](#combinator-library-approach)
+  - [Core Combinators](#core-combinators-17-total)
+  - [Implementation Details](#implementation-details)
+  - [Strategy Planner](#strategy-planner)
+- [Examples](#examples)
 - [Installation](#installation)
 - [Core Capabilities](#core-capabilities)
-- [Example Patterns](#example-patterns)
 - [Architecture](#architecture)
+- [MCP Tools Reference](#mcp-tools-reference)
+- [Best Practices](#best-practices)
+- [Getting Started](#getting-started)
 - [References](#references)
 
 ---
@@ -123,45 +129,90 @@ These aren't Python library calls—they're **effect handlers** in the orchestra
 
 Scheme's macro system (Dybvig 1993, Kohlbecker 1986) makes it ideal for **embedded domain-specific languages**. The orchestration primitives (`llm-query`, `map-async`, `checkpoint`, `py-exec`) form a DSL for LLM coordination. The scaffold is ~1200 lines of Racket that implement this DSL's semantics.
 
-Python REPLs require string-based code generation (fragile, injection-prone). Scheme's `datum->syntax` and `syntax-e` provide first-class support for code-as-data manipulation, making the code generation pattern (Pattern 2) **safe by construction**.
+Python REPLs require string-based code generation (fragile, injection-prone). Scheme's `datum->syntax` and `syntax-e` provide first-class support for code-as-data manipulation, making adaptive code generation strategies **safe by construction**.
 
 ---
 
 ## Novel Orchestration Strategies
 
-RLM-Scheme documents **16 composable patterns** for different optimization goals. These aren't library functions—they're architectural strategies you implement by composing primitives.
+RLM-Scheme provides a **combinator library** for composing orchestration strategies. Instead of choosing from a fixed catalog, you compose ~17 core combinators to create custom strategies optimized for your specific needs.
 
-### Pattern Categories
+### Combinator Library Approach
 
-#### Speed Optimization (Latency)
-- **Pattern 1: Parallel Fan-Out** — Process N items concurrently, synthesize results (10× faster)
-- **Pattern 7: Speculative Execution** — Launch multiple strategies in parallel, use first to complete
-- **Pattern 15: Stream Processing** — Process data incrementally for constant memory and latency
+**Core Philosophy:**
+- **~17 building blocks** (combinators) instead of enumerated strategies
+- **Infinite compositional space** - create novel strategies by combining primitives
+- **16 documented examples** in `/docs/patterns/` show proven compositions (parallel processing, iterative refinement, cost optimization, etc.)
+- **Experimentation is cheap** ($0.01-0.05 to test approaches vs $1-5 for wrong strategy)
 
-#### Cost Optimization (Budget)
-- **Pattern 9: Active Learning** — Use cheap model on all items, expensive model only on uncertain cases (5× cost reduction)
-- **Pattern 14: Memoization** — Content-addressed caching for repeated queries (50% savings at 50% hit rate)
-- **Pattern 16: Multi-Armed Bandit** — Adaptive model selection based on historical performance
+### Core Combinators (~17 total)
 
-#### Quality Optimization (Accuracy)
-- **Pattern 4: Critique-Refine Loop** — Generate, critique with cheap model, refine iteratively (10-15% quality improvement)
-- **Pattern 8: Ensemble Voting** — Run multiple models/prompts, vote on best answer (Byzantine fault tolerance)
-- **Pattern 11: Consensus Protocol** — Multi-round voting with supermajority (< 1% error rate vs 10% single-model)
+#### Parallel Execution
+- **`parallel`** — Execute strategies concurrently, return all results
+- **`race`** — First to complete wins, cancel others
 
-#### Adaptivity (Unknown Structure)
-- **Pattern 2: Code Generation** — LLM inspects data, writes custom analysis code (100% adaptability)
-- **Pattern 6: Meta-Orchestration** — LLM designs the orchestration strategy based on data characteristics
-- **Pattern 12: Backtracking Search** — Explore strategy space, backtrack on failure
+#### Sequential Processing
+- **`sequence`** — Chain operations left-to-right
+- **`fold-sequential`** — Sequential fold with accumulator
 
-#### Hierarchical Composition
-- **Pattern 3: Recursive Delegation** — Sub-models get their own sandboxes and decide their own strategies
-- **Pattern 10: Tree Aggregation** — Hierarchical reduction for large fan-out results (handles >1000 chunks)
-- **Pattern 5: Cumulative Fold** — Sequential processing with accumulating context
+#### Hierarchical Aggregation
+- **`tree-reduce`** — Recursive tree aggregation (log-depth reduction)
+- **`fan-out-aggregate`** — Parallel map + hierarchical reduce in one combinator
+- **`recursive-spawn`** — Delegate to sub-sandbox with recursion
 
-#### Progressive Refinement
-- **Pattern 13: Anytime Algorithms** — Produce intermediate results at multiple quality levels with checkpoints
+#### Iterative Refinement
+- **`iterate-until`** — Loop until condition or max iterations
+- **`critique-refine`** — Generate → critique → refine loop
 
-### Example: Pattern 1 + Pattern 10 Composition
+#### Quality Control
+- **`with-validation`** — Wrap function with validation step
+- **`vote`** — Multi-strategy voting (majority/plurality/consensus)
+- **`ensemble`** — Multi-model ensemble with custom aggregation
+
+#### Cost Optimization
+- **`tiered`** — Cheap function on all, expensive for synthesis
+- **`active-learning`** — Cheap on all, expensive on uncertain cases
+- **`memoized`** — Cache results by content hash
+
+#### Control Flow
+- **`choose`** — Conditional execution based on predicate
+- **`try-fallback`** — Try primary, use fallback on error
+
+**For complete documentation:** Use the `get_combinator_reference()` MCP tool for detailed reference with examples, composition rules, and performance characteristics.
+
+### Implementation Details
+
+**Combinators are meta-level:** They don't make LLM calls directly—they orchestrate the functions you pass to them.
+
+**Example: `fan-out-aggregate`**
+```scheme
+;; Implementation (simplified):
+(define (fan-out-aggregate map-fn reduce-fn items #:max-concurrent N)
+  (define mapped-results (map-async map-fn items #:max-concurrent N))
+  (reduce-fn mapped-results))
+```
+- Your `map-fn` makes LLM calls (via `llm-query-async`)
+- The combinator handles parallelization and result collection
+- Your `reduce-fn` decides how to aggregate (can use `tree-reduce` or direct LLM synthesis)
+
+**Example: `critique-refine`**
+```scheme
+;; Implementation (simplified):
+(define (critique-refine generate-fn critique-fn refine-fn #:max-iter N)
+  (let loop ([draft (generate-fn)] [iteration 0])
+    (if (>= iteration N)
+        draft
+        (let* ([critique (critique-fn draft)]
+               [refined (refine-fn draft critique)])
+          (loop refined (+ iteration 1))))))
+```
+- Each of your functions (`generate-fn`, `critique-fn`, `refine-fn`) makes LLM calls
+- The combinator handles the iteration loop and termination logic
+- You control model selection, prompts, and termination conditions
+
+**Key insight:** Combinators are control flow abstractions. You provide functions that call `llm-query` or `llm-query-async`, and combinators orchestrate when/how they execute.
+
+### Example: Parallel Processing + Tree Aggregation
 
 **Problem:** Analyze 500 research papers (10 MB total) for mentions of "ACE2 protein" and synthesize findings.
 
@@ -170,117 +221,72 @@ RLM-Scheme documents **16 composable patterns** for different optimization goals
 - Sequential: 500 × 30s = 4+ hours
 - Expensive model: 500 × $0.05 = $25
 
-**RLM-Scheme solution:**
-1. **Pattern 1 (Parallel Fan-Out):** Extract mentions from each paper in parallel with `gpt-4.1-nano` ($0.10/1M tokens)
-2. **Pattern 10 (Tree Aggregation):** Hierarchically reduce 500 results → 50 → 5 → 1 using cheap models for intermediate steps
-3. **Final synthesis:** Use `gpt-4o` once on the reduced summary
+**Combinator solution:**
+```scheme
+(define summary (fan-out-aggregate
+  ;; Map phase: extract with cheap model
+  (lambda (paper)
+    (llm-query-async
+      #:instruction "Extract ACE2 mentions"
+      #:data paper
+      #:model "gpt-4.1-nano"))
+
+  ;; Reduce phase: hierarchical synthesis
+  (lambda (extractions)
+    (tree-reduce
+      (lambda (left right)
+        (syntax-e (llm-query
+          #:instruction "Combine findings"
+          #:data (string-append left "\n\n" right)
+          #:model "gpt-4o-mini")))
+      extractions
+      #:branch-factor 5))
+
+  papers
+  #:max-concurrent 20))
+
+(finish summary)
+```
 
 **Result:**
 - **Latency:** 4 hours → 5 minutes (50× faster via parallelism)
-- **Cost:** $25 → $1.50 (17× cheaper: 500 × $0.0001 + tree overhead + 1 × $0.10)
+- **Cost:** $25 → $1.50 (17× cheaper: 500 × $0.0001 + tree overhead)
 - **Quality:** Comparable (extraction is simple enough for cheap models)
 
 ### Strategy Planner
 
-The `plan_strategy` tool analyzes your task and recommends pattern compositions:
+The `plan_strategy` tool analyzes your task and recommends **combinator compositions**:
 
 ```python
 plan_strategy(
     task_description="Analyze 200 research papers for antimicrobial resistance genes",
     data_characteristics="~5KB per paper, 1MB total",
-    priority="balanced"
+    priority="balanced"  # speed/cost/quality/balanced
 )
 ```
 
 Returns:
-- **Recommended strategy** with pattern composition, model assignments, cost/latency estimates
-- **2 alternatives** with explicit trade-offs
-- **1-2 experimental options** for high-risk/high-reward approaches
-- **Implementation templates** with code examples
+- **Recommended strategy** with executable combinator code, cost/latency estimates
+- **2 alternatives** with explicit trade-offs (speed vs cost vs quality)
+- **1-2 creative options** for experimental/high-upside approaches
+- **Implementation templates** ready to execute
+
+**Example output:**
+```json
+{
+  "recommended": {
+    "strategy_name": "Parallel Extraction + Tree Reduction",
+    "combinators": ["fan-out-aggregate", "tree-reduce"],
+    "code_template": "(define result (fan-out-aggregate ...))\n(finish result)",
+    "estimated_cost": "$0.50-1.00",
+    "estimated_latency": "30-60s"
+  },
+  "alternatives": [...],
+  "creative_options": [...]
+}
+```
 
 The planner costs $0.01-0.10 but typically saves 10-200× that by choosing optimal strategies.
-
----
-
-## Quick Start
-
-### Example 1: Parallel Fan-Out
-
-Process 50 research papers in parallel with cheap model, synthesize with expensive model:
-
-```scheme
-;; 1. Chunk data in Python
-(define papers (py-eval "[context[i:i+5000] for i in range(0, len(context), 5000)]"))
-
-;; 2. Parallel fan-out with cheap model
-(define extractions (map-async
-  (lambda (paper)
-    (llm-query-async
-      #:instruction "Extract key findings as JSON"
-      #:data paper
-      #:model "gpt-4.1-nano"  ; $0.10/1M tokens
-      #:json #t
-      #:temperature 0.0))
-  papers
-  #:max-concurrent 10))
-
-;; 3. Combine in Python
-(py-set! "results" extractions)
-(define combined (py-exec "print(json.dumps(results))"))
-
-;; 4. Synthesize with expensive model
-(define synthesis (syntax-e (llm-query
-  #:instruction "Synthesize findings across all papers"
-  #:data combined
-  #:model "gpt-4o"  ; $2.50/1M tokens
-  #:temperature 0.5)))
-
-(finish synthesis)
-```
-
-**Key pattern:** Cheap model for fan-out (10-25× cheaper than using `gpt-4o` everywhere).
-
-### Example 2: Code Generation + Validation
-
-Let a model write its own analysis code for unknown data structure:
-
-```scheme
-;; 1. Show data sample to code-generating model
-(define sample (py-exec "print(context[:500])"))
-
-(define analysis-code (unsafe-raw-query
-  #:instruction "Write Scheme code that analyzes this data.
-                 Use py-exec for parsing, llm-query for insights.
-                 Define variable `result`, do NOT call (finish)."
-  #:data sample
-  #:model "gpt-4o"
-  #:temperature 0.0))
-
-;; 2. Execute generated code
-(unsafe-exec-sub-output (datum->syntax #f analysis-code))
-
-;; 3. Validate result with second model
-(define validation (syntax-e (llm-query
-  #:instruction "Check if this analysis has specific evidence.
-                 Return JSON: {valid: bool, issues: [strings]}"
-  #:data (py-eval "str(result)")
-  #:json #t
-  #:temperature 0.0)))
-
-;; 4. Refine if invalid
-(py-set! "v" validation)
-(define is-valid (py-eval "import json; json.loads(v)['valid']"))
-
-(if is-valid
-    (finish (py-eval "result"))
-    ;; Recursive refinement
-    (finish (syntax-e (llm-query
-      #:instruction (string-append "Revise this analysis: " validation)
-      #:data context
-      #:recursive #t))))
-```
-
-**Key pattern:** Adaptivity (Pattern 2) + quality assurance (Pattern 4).
 
 ---
 
@@ -387,19 +393,24 @@ All 464 tests should pass.
 
 | Feature | Original RLM | RLM-Scheme |
 |---------|--------------|------------|
-| **Sub-model calls** | Sequential only | Parallel via `map-async` |
-| **Model selection** | Single model | Per-call `#:model` override |
+| **Orchestration model** | Manual pattern coding | ~17 composable combinators for infinite strategies |
+| **Sub-model calls** | Sequential only | Parallel via `map-async`, combinator composition |
+| **Model selection** | Single model | Per-call `#:model` override, multi-model ensembles |
 | **Generation control** | None | `#:temperature`, `#:max-tokens`, `#:json` |
 | **Structured output** | None | `#:json #t` (guaranteed valid JSON) |
 | **Vision / multimodal** | None | `#:image`, `#:images` for vision models |
 | **Token budgets** | None | `parameterize` scoped limits with real API counts |
 | **Recursion depth** | 1 level | Up to 3 levels (sub-models spawn sub-sub-models) |
-| **Computation** | Python only | Scheme + Python bridge (`py-exec`, `py-eval`) |
+| **Computation** | Python only | Scheme + Python bridge (`py-exec`, `py-eval`, `py-set!`) |
+| **File I/O** | None | Python bridge with file wrappers for large outputs |
+| **Code transfer** | String escaping | Base64 encoding for multi-line code (production-ready) |
 | **Audit trail** | None | Full scope log of every call with provenance |
-| **Data transfer safety** | String escaping | `py-set!` (type-safe Scheme→Python) |
+| **Data transfer safety** | String escaping | `py-set!` (type-safe Scheme→Python via JSON) |
 | **Standard library** | N/A | `racket/list`, `racket/string` in sandbox |
 | **Call visibility** | None | Live registry, stderr logging, cancellation |
-| **Crash recovery** | None | Auto-restart, 60s timeout, checkpoints |
+| **Crash recovery** | None | Auto-restart, 60s timeout, disk checkpoints |
+
+**Key Innovation:** The combinator library transforms orchestration from "pick a pattern from 16 options" to "compose primitives for infinite custom strategies". Use `plan_strategy()` to get strategy recommendations, or compose combinators manually for full control.
 
 ### Reliability Improvements
 
@@ -437,96 +448,211 @@ response = "I will compute the FINAL result..."
 
 ---
 
-## Example Patterns
+## Examples
 
-### Pattern 1: Parallel Fan-Out + Tree Aggregation
+### Getting Started: Two Approaches
+
+**Option 1: Use the Strategy Planner (Recommended for new users)**
+
+```python
+# 1. Ask the planner for combinator strategies
+plan = plan_strategy(
+    task_description="Analyze 100 research papers and synthesize findings",
+    data_characteristics="~5KB per paper, ~500KB total",
+    priority="balanced"  # speed/cost/quality/balanced
+)
+
+# 2. Load your data
+load_context(your_papers)
+
+# 3. Execute recommended strategy
+result = execute_scheme(plan["recommended"]["code_template"])
+
+# 4. Or try alternatives/creative options
+result = execute_scheme(plan["alternatives"][0]["code_template"])
+```
+
+**Option 2: Compose Combinators Manually**
+
+Read the combinator reference (`get_combinator_reference()`) and compose your own strategy.
+
+---
+
+### Example 1: Parallel Processing with Hierarchical Aggregation
+
+**Combinators:** `fan-out-aggregate` + `tree-reduce`
+
+**Use case:** Process large datasets (100-1000+ items) efficiently
 
 ```scheme
-;; Process 1000 documents: fan-out → tree reduce → synthesis
-(define summaries (map-async
+;; Process 1000 documents using fan-out-aggregate combinator
+(define summary (fan-out-aggregate
+  ;; Map phase: extract with cheap model
   (lambda (doc)
     (llm-query-async
       #:instruction "Summarize key points"
       #:data doc
       #:model "gpt-4.1-nano"))
+
+  ;; Reduce phase: hierarchical tree reduction
+  (lambda (summaries)
+    (tree-reduce
+      (lambda (left right)
+        (syntax-e (llm-query
+          #:instruction "Combine summaries"
+          #:data (string-append left "\n\n" right)
+          #:model "gpt-4o-mini")))
+      summaries
+      #:branch-factor 5))
+
   documents
-  #:max-concurrent 10))
+  #:max-concurrent 20))
 
-;; Tree aggregation (hierarchical reduction)
-(define tree-reduced
-  (let loop ([items summaries] [level 0])
-    (if (<= (length items) 5)
-        (string-join items "\n\n")
-        (let ([groups (py-eval (format "[items[i:i+5] for i in range(0, len(items), 5)]"))])
-          (loop (map-async
-                  (lambda (group)
-                    (llm-query-async
-                      #:instruction "Combine these summaries"
-                      #:data (string-join group "\n")
-                      #:model "curie"))
-                  groups)
-                (+ level 1))))))
-
-(finish (syntax-e (llm-query
-  #:instruction "Final synthesis"
-  #:data tree-reduced
-  #:model "gpt-4o")))
+(finish summary)
 ```
 
-### Pattern 4: Critique-Refine Loop
+**How it works:**
+- `fan-out-aggregate` orchestrates parallel map + reduce
+- Your map function (`llm-query-async`) makes LLM calls in parallel
+- Your reduce function uses `tree-reduce` for hierarchical aggregation
+
+**Cost:** ~$0.50-1.00 for 1000 docs | **Latency:** ~2-5 minutes | **Quality:** High
+
+---
+
+### Example 2: Iterative Quality Refinement
+
+**Combinator:** `critique-refine`
+
+**Use case:** Quality-critical outputs requiring multiple revision rounds
 
 ```scheme
-;; Generate initial draft
-(define draft (syntax-e (llm-query
-  #:instruction "Write analysis"
-  #:data context
-  #:model "gpt-4o")))
+;; Use critique-refine combinator for iterative improvement
+(define refined-analysis (critique-refine
+  ;; Generate initial draft
+  (lambda ()
+    (syntax-e (llm-query
+      #:instruction "Write comprehensive analysis"
+      #:data context
+      #:model "gpt-4o")))
 
-;; Critique with cheap model
-(define critique (syntax-e (llm-query
-  #:instruction "Identify weaknesses and gaps"
-  #:data draft
-  #:model "gpt-4o-mini"
-  #:temperature 0.0)))
+  ;; Critique with cheap model
+  (lambda (draft)
+    (syntax-e (llm-query
+      #:instruction "Identify weaknesses and gaps"
+      #:data draft
+      #:model "gpt-4o-mini"
+      #:temperature 0.0)))
 
-;; Refine based on critique
-(define refined (syntax-e (llm-query
-  #:instruction (string-append "Improve based on: " critique)
-  #:data draft
-  #:model "gpt-4o")))
+  ;; Refine based on critique
+  (lambda (draft critique)
+    (syntax-e (llm-query
+      #:instruction "Improve the analysis based on this critique"
+      #:data (string-append "Draft:\n" draft "\n\nCritique:\n" critique)
+      #:model "gpt-4o")))
 
-(finish refined)
+  #:max-iter 3))
+
+(finish refined-analysis)
 ```
 
-### Pattern 9: Active Learning (Cost Optimization)
+**How it works:**
+- `critique-refine` implements the loop logic (up to `max-iter` iterations)
+- Each of your functions makes LLM calls with your chosen models/prompts
+- The combinator passes results between functions and handles termination
+
+**Cost:** ~$0.20-0.50 | **Latency:** ~30-60s | **Quality:** Very High (10-15% improvement)
+
+---
+
+### Example 3: Cost Optimization with Selective Refinement
+
+**Combinator:** `active-learning`
+
+**Use case:** Large datasets where only some items need expensive processing
 
 ```scheme
-;; Phase 1: Cheap model on all items with confidence scores
-(define cheap-results (map-async
+;; Use active-learning combinator for selective refinement
+(define results (active-learning
+  ;; Cheap model on all items
   (lambda (item)
     (llm-query-async
       #:instruction "Analyze and rate confidence (low/medium/high)"
       #:data item
       #:model "gpt-4.1-nano"))
-  items))
 
-;; Phase 2: Identify uncertain cases
-(py-set! "results" cheap-results)
-(define uncertain-indices (py-eval "
-[i for i, r in enumerate(results) if 'confidence: low' in r.lower()]
-"))
-
-;; Phase 3: Expensive model only on uncertain (5-10% typically)
-(define refined (map-async
-  (lambda (idx)
+  ;; Expensive model only on uncertain cases
+  (lambda (item)
     (llm-query-async
-      #:instruction "Deep analysis"
-      #:data (list-ref items idx)
+      #:instruction "Deep analysis with high precision"
+      #:data item
       #:model "gpt-4o"))
-  uncertain-indices))
 
-;; Result: 5× cost reduction at same accuracy
+  ;; Uncertainty function
+  (lambda (result)
+    (if (string-contains? (string-downcase result) "confidence: low")
+        0.9  ; High uncertainty
+        0.1)) ; Low uncertainty
+
+  items
+  #:threshold 0.7))
+
+(finish results)
 ```
+
+**How it works:**
+- `active-learning` runs cheap function on all items first
+- Your uncertainty function scores each result (0.0-1.0)
+- Items above threshold get processed by expensive function
+- Combinator merges results (cheap where certain, expensive where uncertain)
+
+**Cost:** ~5× cheaper than using gpt-4o on all | **Quality:** Comparable | **When:** Large datasets with variable complexity
+
+---
+
+### Example 4: Complex Multi-Stage Pipeline
+
+**Combinators:** `sequence` + `with-validation` + `fan-out-aggregate` + `tree-reduce` + `critique-refine`
+
+**Use case:** Mission-critical outputs requiring multiple quality gates
+
+```scheme
+;; Compose multiple combinators for robust processing
+(define validated-result
+  (sequence
+    ;; Phase 1: Parallel extraction with validation
+    (with-validation
+      (lambda (docs)
+        (fan-out-aggregate
+          (lambda (doc) (llm-query-async #:instruction "Extract" #:data doc #:model "gpt-4o-mini"))
+          (lambda (results) (tree-reduce string-append results #:branch-factor 5))
+          docs))
+      (lambda (result) (> (string-length result) 100)))
+
+    ;; Phase 2: Iterative refinement with quality gates
+    (lambda (extraction)
+      (critique-refine
+        (lambda () extraction)
+        (lambda (draft) (syntax-e (llm-query #:instruction "Critique" #:data draft #:model "gpt-4o-mini")))
+        (lambda (draft critique) (syntax-e (llm-query #:instruction "Refine" #:data (string-append draft "\n" critique) #:model "gpt-4o")))
+        #:max-iter 2))
+
+    ;; Phase 3: Final validation
+    (with-validation
+      identity
+      (lambda (result) (string-contains? result "conclusion")))))
+
+(finish ((validated-result) documents))
+```
+
+**How it works:**
+- `sequence` chains three phases left-to-right
+- Phase 1 uses `fan-out-aggregate` + `tree-reduce` for parallel processing
+- `with-validation` wraps phases 1 and 3 with quality checks
+- Phase 2 uses `critique-refine` for iterative improvement
+- Each combinator handles its orchestration logic; you provide LLM-calling functions
+
+**Cost:** Higher (~$1-2) | **Quality:** Exceptional | **When:** Mission-critical outputs requiring guarantees
 
 ---
 
@@ -542,19 +668,21 @@ Claude Code → [JSON-RPC/stdio] → mcp_server.py → [JSON/stdin] → racket_s
 
 **Claude Code:** Writes Scheme orchestration code, sends via MCP tool calls
 
-**mcp_server.py** (1,503 lines):
-- MCP server exposing 8 tools over JSON-RPC
+**mcp_server.py** (~1,500 lines):
+- MCP server exposing 9 tools over JSON-RPC
 - Manages Racket subprocess lifecycle
 - OpenAI API bridge (handles `llm-query` callbacks from Racket)
 - Thread-safe call registry for in-flight requests
+- Strategy planner with combinator-first recommendations
 - Structured logging to stderr
 
-**racket_server.rkt** (1,198 lines):
-- Sandboxed Scheme evaluator
+**racket_server.rkt** (~1,200 lines):
+- Sandboxed Scheme evaluator with ~17 combinator primitives
 - Memory limit: 256 MB
 - CPU timeout: 30s per expression
 - No filesystem/network access
-- Scaffold bindings injected as host-side closures (can't be redefined)
+- Scaffold bindings + combinators injected as host-side closures (can't be redefined)
+- Base64 code encoding for production-ready multi-line generation
 
 **py_bridge.py** (125 lines):
 - Isolated Python subprocess for `py-exec`/`py-eval`
@@ -577,17 +705,28 @@ The **callback loop** is the architectural core: real API calls happen in Python
 
 ## MCP Tools Reference
 
+### Planning & Reference
 | Tool | Purpose |
 |------|---------|
-| `get_usage_guide()` | Complete primitive reference, model selection guide, pattern summaries |
-| `plan_strategy(task, data_characteristics, constraints, priority)` | Recommend pattern compositions with cost/latency/quality estimates |
-| `get_code_generation_api_reference()` | Condensed API docs for code-generating sub-models (Pattern 2) |
-| `execute_scheme(code, timeout)` | Run orchestration code in sandbox (state persists) |
-| `load_context(data, name)` | Load input data as `context` variable (supports named slots) |
-| `get_scope_log()` | Audit trail of all sub-calls with provenance metadata |
-| `get_status()` | Active calls, cumulative token usage, API rate limits |
-| `cancel_call(call_id)` | Cancel in-flight sub-model call |
+| `plan_strategy(task, data_characteristics, constraints, priority)` | Recommend combinator compositions with executable code, cost/latency estimates |
+| `get_combinator_reference()` | Complete combinator library documentation with examples and composition rules |
+| `get_usage_guide()` | Comprehensive guide: combinators, primitives, examples, best practices |
+| `get_code_generation_api_reference()` | Condensed API reference including combinator syntax |
+
+### Execution
+| Tool | Purpose |
+|------|---------|
+| `load_context(data, name)` | Load input data as `context` variable (available in Scheme and Python) |
+| `execute_scheme(code, timeout)` | Run Scheme orchestration code in sandbox (state persists across calls) |
 | `reset()` | Clear all sandbox state (call between unrelated tasks) |
+
+### Monitoring & Debugging
+| Tool | Purpose |
+|------|---------|
+| `get_sandbox_state()` | Inspect current sandbox state: variables, checkpoints, Python bridge status |
+| `get_status()` | Monitor active calls, cumulative token usage, API rate limits |
+| `get_scope_log()` | Audit trail of all sub-calls with provenance metadata |
+| `cancel_call(call_id)` | Cancel in-flight sub-model call |
 
 ---
 
@@ -693,8 +832,30 @@ If you use RLM-Scheme in research, please cite both this implementation and the 
 
 ---
 
-**Next Steps:**
-1. Run `get_usage_guide` MCP tool for complete primitive reference
-2. Call `plan_strategy` with your task to get orchestration recommendations
-3. Read `docs/patterns/` for full pattern implementations
-4. Check `tests/` for 464 test cases demonstrating all features
+## Getting Started
+
+### For New Users
+
+1. **Get strategy recommendations:**
+   ```python
+   plan = plan_strategy("Your task description", priority="balanced")
+   load_context(your_data)
+   execute_scheme(plan["recommended"]["code_template"])
+   ```
+
+2. **Learn combinators:**
+   - Use `get_combinator_reference()` for complete documentation
+   - Use `get_usage_guide()` for comprehensive guide with examples
+   - Experiment freely - testing costs $0.01-0.05
+
+3. **Explore examples:**
+   - Check `docs/` for combinator reference and usage patterns
+   - Review `tests/` for 464+ test cases demonstrating all features
+
+### Key Resources
+
+- **`plan_strategy()`** - Get custom combinator strategies for your task
+- **`get_combinator_reference()`** - Complete combinator library documentation
+- **`get_usage_guide()`** - Comprehensive guide to RLM-Scheme
+- **`docs/combinators.md`** - Full combinator reference with composition rules
+- **`docs/getting-started.md`** - Quick start guide and workflow examples
