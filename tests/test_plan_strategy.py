@@ -20,6 +20,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import mcp_server
 from mcp_server import (
     plan_strategy,
+    plan_strategy_clarify,
+    plan_strategy_finalize,
     _PLANNER_PROMPT_TEMPLATE,
 )
 
@@ -237,7 +239,7 @@ class TestPlanStrategy:
 
     @patch("mcp_server.get_backend")
     def test_uses_curie_for_cost_priority(self, mock_backend):
-        """Uses curie model when priority=cost."""
+        """Uses gpt-4o model for all priorities (quality over cost for planning)."""
         mock_repl = MagicMock()
         mock_repl._call_llm = MagicMock(return_value=self._mock_llm_response())
         mock_backend.return_value = mock_repl
@@ -245,9 +247,9 @@ class TestPlanStrategy:
         result = plan_strategy("Analyze documents", priority="cost")
         data = json.loads(result)
 
-        # Check that gpt-4o-mini was used (updated from curie)
+        # Check that gpt-4o was used (always use quality model for planning)
         call_args = mock_repl._call_llm.call_args
-        assert call_args[1]["model"] == "gpt-4o-mini"
+        assert call_args[1]["model"] == "gpt-4o"
 
     @patch("mcp_server.get_backend")
     def test_uses_gpt4_for_other_priorities(self, mock_backend):
@@ -393,3 +395,349 @@ class TestPlannerIntegration:
         desc = _TOOL_DESCRIPTIONS["plan_strategy"]
         assert len(desc) > 50
         assert "strategy" in desc.lower()
+
+
+# ============================================================
+# Phase 1: Scale Parameters Tests
+# ============================================================
+
+
+class TestPhase1ScaleParameters:
+    """Phase 1: Explicit scale parameters and improved token limits."""
+
+    def _mock_llm_response(self):
+        """Mock LLM response with scale validation."""
+        return {
+            "text": json.dumps({
+                "recommended": {
+                    "strategy_name": "Comprehensive Documentation Strategy",
+                    "combinators": [{"combinator": "fan-out-aggregate"}],
+                    "code_template": "(define result (fan-out-aggregate ...))\n(finish result)",
+                    "description": "Processes all 500 files",
+                    "estimated_cost": "$1-2",
+                    "estimated_latency": "5-10 min",
+                    "estimated_quality": "high",
+                    "estimated_outputs": "500 documentation files",
+                    "coverage_achieved": "100% (all files)",
+                    "scale_validation": "✓ Processes all 500 files | ✓ Produces 500 outputs",
+                    "why_this_works": "Full coverage via parallel processing"
+                },
+                "alternatives": [],
+                "creative_options": [],
+                "recommendations": []
+            }),
+            "prompt_tokens": 2000,
+            "completion_tokens": 5000
+        }
+
+    @patch("mcp_server.get_backend")
+    def test_accepts_scale_parameter(self, mock_backend):
+        """plan_strategy accepts scale parameter."""
+        mock_repl = MagicMock()
+        mock_repl._call_llm = MagicMock(return_value=self._mock_llm_response())
+        mock_backend.return_value = mock_repl
+
+        result = plan_strategy(
+            "Document repository",
+            scale="comprehensive"
+        )
+        data = json.loads(result)
+        assert "_meta" in data
+        assert data["_meta"]["scale"] == "comprehensive"
+
+    @patch("mcp_server.get_backend")
+    def test_accepts_min_outputs_parameter(self, mock_backend):
+        """plan_strategy accepts min_outputs parameter."""
+        mock_repl = MagicMock()
+        mock_repl._call_llm = MagicMock(return_value=self._mock_llm_response())
+        mock_backend.return_value = mock_repl
+
+        result = plan_strategy(
+            "Document repository",
+            min_outputs=500
+        )
+        data = json.loads(result)
+        assert data["_meta"]["min_outputs"] == 500
+
+    @patch("mcp_server.get_backend")
+    def test_accepts_coverage_target_parameter(self, mock_backend):
+        """plan_strategy accepts coverage_target parameter."""
+        mock_repl = MagicMock()
+        mock_repl._call_llm = MagicMock(return_value=self._mock_llm_response())
+        mock_backend.return_value = mock_repl
+
+        result = plan_strategy(
+            "Document repository",
+            coverage_target="all files"
+        )
+        data = json.loads(result)
+        assert data["_meta"]["coverage_target"] == "all files"
+
+    @patch("mcp_server.get_backend")
+    def test_uses_increased_token_limits(self, mock_backend):
+        """plan_strategy uses increased token limits (15K default)."""
+        mock_repl = MagicMock()
+        mock_repl._call_llm = MagicMock(return_value=self._mock_llm_response())
+        mock_backend.return_value = mock_repl
+
+        plan_strategy("Document repository", priority="balanced")
+
+        call_args = mock_repl._call_llm.call_args
+        assert call_args[1]["max_tokens"] == 16000  # Always use max
+
+    @patch("mcp_server.get_backend")
+    def test_quality_priority_uses_16k_tokens(self, mock_backend):
+        """Quality priority uses 16K tokens (gpt-4o limit)."""
+        mock_repl = MagicMock()
+        mock_repl._call_llm = MagicMock(return_value=self._mock_llm_response())
+        mock_backend.return_value = mock_repl
+
+        plan_strategy("Document repository", priority="quality")
+
+        call_args = mock_repl._call_llm.call_args
+        assert call_args[1]["max_tokens"] == 16000
+
+    @patch("mcp_server.get_backend")
+    def test_cost_priority_uses_10k_tokens(self, mock_backend):
+        """Cost priority uses 10K tokens."""
+        mock_repl = MagicMock()
+        mock_repl._call_llm = MagicMock(return_value=self._mock_llm_response())
+        mock_backend.return_value = mock_repl
+
+        plan_strategy("Document repository", priority="cost")
+
+        call_args = mock_repl._call_llm.call_args
+        assert call_args[1]["max_tokens"] == 16000  # Always use max
+
+    @patch("mcp_server.get_backend")
+    def test_uses_gpt4o_as_default_model(self, mock_backend):
+        """Default priority uses gpt-4o (upgraded from gpt-4o-mini)."""
+        mock_repl = MagicMock()
+        mock_repl._call_llm = MagicMock(return_value=self._mock_llm_response())
+        mock_backend.return_value = mock_repl
+
+        plan_strategy("Document repository", priority="balanced")
+
+        call_args = mock_repl._call_llm.call_args
+        assert call_args[1]["model"] == "gpt-4o"
+
+    @patch("mcp_server.get_backend")
+    def test_prompt_includes_scale_parameters(self, mock_backend):
+        """Prompt includes scale, min_outputs, coverage_target."""
+        mock_repl = MagicMock()
+        mock_repl._call_llm = MagicMock(return_value=self._mock_llm_response())
+        mock_backend.return_value = mock_repl
+
+        plan_strategy(
+            "Document repository",
+            scale="comprehensive",
+            min_outputs=500,
+            coverage_target="all files"
+        )
+
+        call_args = mock_repl._call_llm.call_args
+        prompt = call_args[1]["instruction"]
+
+        # Should include scale level
+        assert "comprehensive" in prompt.lower()
+        # Should include validation requirements
+        assert "500" in prompt or "minimum" in prompt.lower()
+
+    @patch("mcp_server.get_backend")
+    def test_scale_defaults_to_medium(self, mock_backend):
+        """Scale parameter defaults to 'medium'."""
+        mock_repl = MagicMock()
+        mock_repl._call_llm = MagicMock(return_value=self._mock_llm_response())
+        mock_backend.return_value = mock_repl
+
+        result = plan_strategy("Document repository")
+        data = json.loads(result)
+
+        assert data["_meta"]["scale"] == "medium"
+
+
+# ============================================================
+# Phase 2: Multi-Turn Planning Tests
+# ============================================================
+
+
+class TestPhase2MultiTurnPlanning:
+    """Phase 2: Multi-turn clarification workflow."""
+
+    def _mock_clarify_response_clear(self):
+        """Mock clarify response for clear task."""
+        return {
+            "text": json.dumps({
+                "clarity_assessment": {
+                    "is_clear": True,
+                    "confidence": 0.95,
+                    "reasoning": "Task specifies file count and format"
+                },
+                "ambiguities_found": [],
+                "assumptions": [],
+                "recommended_clarifications": []
+            }),
+            "prompt_tokens": 500,
+            "completion_tokens": 200
+        }
+
+    def _mock_clarify_response_ambiguous(self):
+        """Mock clarify response for ambiguous task."""
+        return {
+            "text": json.dumps({
+                "clarity_assessment": {
+                    "is_clear": False,
+                    "confidence": 0.3,
+                    "reasoning": "Scale and format unclear"
+                },
+                "ambiguities_found": [
+                    {
+                        "category": "scale",
+                        "question": "How many files in the repository?",
+                        "why_matters": "Determines parallelization strategy",
+                        "suggested_options": ["<50", "50-500", "500+"]
+                    }
+                ],
+                "assumptions": [],
+                "recommended_clarifications": [
+                    "How many files are in your repository?",
+                    "What format of documentation do you need?"
+                ]
+            }),
+            "prompt_tokens": 500,
+            "completion_tokens": 400
+        }
+
+    def _mock_finalize_response(self):
+        """Mock finalize response."""
+        return {
+            "text": json.dumps({
+                "recommended": {
+                    "strategy_name": "Clarified Strategy",
+                    "combinators": [{"combinator": "fan-out-aggregate"}],
+                    "code_template": "(define result ...)",
+                    "description": "Based on user clarifications",
+                    "estimated_cost": "$1-2",
+                    "clarification_alignment": "Processes all 500 files as user specified"
+                },
+                "alternatives": [],
+                "creative_options": [],
+                "recommendations": []
+            }),
+            "prompt_tokens": 3000,
+            "completion_tokens": 6000
+        }
+
+    @patch("mcp_server.get_backend")
+    def test_clarify_returns_clear_assessment(self, mock_backend):
+        """plan_strategy_clarify returns clarity assessment."""
+        mock_repl = MagicMock()
+        mock_repl._call_llm = MagicMock(return_value=self._mock_clarify_response_clear())
+        mock_backend.return_value = mock_repl
+
+        result = plan_strategy_clarify("Process 500 documents")
+        data = json.loads(result)
+
+        assert "clarity_assessment" in data
+        assert data["clarity_assessment"]["is_clear"] == True
+        assert "ambiguities_found" in data
+
+    @patch("mcp_server.get_backend")
+    def test_clarify_identifies_ambiguities(self, mock_backend):
+        """plan_strategy_clarify identifies ambiguities."""
+        mock_repl = MagicMock()
+        mock_repl._call_llm = MagicMock(return_value=self._mock_clarify_response_ambiguous())
+        mock_backend.return_value = mock_repl
+
+        result = plan_strategy_clarify("Document the repository")
+        data = json.loads(result)
+
+        assert data["clarity_assessment"]["is_clear"] == False
+        assert len(data["ambiguities_found"]) > 0
+        assert len(data["recommended_clarifications"]) > 0
+
+    @patch("mcp_server.get_backend")
+    def test_clarify_uses_efficient_model(self, mock_backend):
+        """plan_strategy_clarify uses gpt-4o-mini for efficiency."""
+        mock_repl = MagicMock()
+        mock_repl._call_llm = MagicMock(return_value=self._mock_clarify_response_clear())
+        mock_backend.return_value = mock_repl
+
+        plan_strategy_clarify("Process documents")
+
+        call_args = mock_repl._call_llm.call_args
+        assert call_args[1]["model"] == "gpt-4o"  # Always use quality model
+
+    @patch("mcp_server.get_backend")
+    def test_clarify_uses_lower_temperature(self, mock_backend):
+        """plan_strategy_clarify uses lower temperature (0.5) for analysis."""
+        mock_repl = MagicMock()
+        mock_repl._call_llm = MagicMock(return_value=self._mock_clarify_response_clear())
+        mock_backend.return_value = mock_repl
+
+        plan_strategy_clarify("Process documents")
+
+        call_args = mock_repl._call_llm.call_args
+        assert call_args[1]["temperature"] == 0.5  # Lower temp for analysis
+
+    @patch("mcp_server.get_backend")
+    def test_finalize_accepts_clarifications(self, mock_backend):
+        """plan_strategy_finalize accepts clarifications parameter."""
+        mock_repl = MagicMock()
+        mock_repl._call_llm = MagicMock(return_value=self._mock_finalize_response())
+        mock_backend.return_value = mock_repl
+
+        clarifications = "500 files, API docs format, all files"
+        result = plan_strategy_finalize(
+            "Document repository",
+            clarifications=clarifications
+        )
+        data = json.loads(result)
+
+        assert "_meta" in data
+        assert data["_meta"]["clarifications_incorporated"] == True
+
+    @patch("mcp_server.get_backend")
+    def test_finalize_includes_clarifications_in_prompt(self, mock_backend):
+        """plan_strategy_finalize includes clarifications in prompt."""
+        mock_repl = MagicMock()
+        mock_repl._call_llm = MagicMock(return_value=self._mock_finalize_response())
+        mock_backend.return_value = mock_repl
+
+        clarifications = "500 Python files, comprehensive coverage"
+        plan_strategy_finalize(
+            "Document repository",
+            clarifications=clarifications
+        )
+
+        call_args = mock_repl._call_llm.call_args
+        prompt = call_args[1]["instruction"]
+
+        assert "500" in prompt
+        assert "comprehensive" in prompt.lower()
+
+    @patch("mcp_server.get_backend")
+    def test_finalize_uses_same_token_limits(self, mock_backend):
+        """plan_strategy_finalize uses same token limits as plan_strategy."""
+        mock_repl = MagicMock()
+        mock_repl._call_llm = MagicMock(return_value=self._mock_finalize_response())
+        mock_backend.return_value = mock_repl
+
+        plan_strategy_finalize(
+            "Document repository",
+            clarifications="500 files",
+            priority="quality"
+        )
+
+        call_args = mock_repl._call_llm.call_args
+        assert call_args[1]["max_tokens"] == 16000  # Quality priority (gpt-4o limit)
+
+    def test_clarify_tool_is_registered(self):
+        """plan_strategy_clarify is registered with MCP."""
+        from mcp_server import _TOOL_DESCRIPTIONS
+        assert "plan_strategy_clarify" in _TOOL_DESCRIPTIONS
+
+    def test_finalize_tool_is_registered(self):
+        """plan_strategy_finalize is registered with MCP."""
+        from mcp_server import _TOOL_DESCRIPTIONS
+        assert "plan_strategy_finalize" in _TOOL_DESCRIPTIONS

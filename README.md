@@ -257,11 +257,38 @@ RLM-Scheme provides a **combinator library** for composing orchestration strateg
 
 The `plan_strategy` tool analyzes your task and recommends **combinator compositions**:
 
+**Phase 1: Explicit Scale Parameters (NEW)**
 ```python
 plan_strategy(
     task_description="Analyze 200 research papers for antimicrobial resistance genes",
     data_characteristics="~5KB per paper, 1MB total",
-    priority="balanced"  # speed/cost/quality/balanced
+    priority="balanced",  # speed/cost/quality/balanced
+    scale="large",  # NEW: minimal/small/medium/large/comprehensive
+    min_outputs=200,  # NEW: Minimum artifacts required
+    coverage_target="all papers"  # NEW: Explicit coverage requirement
+)
+```
+
+**Phase 2: Multi-Turn Clarification (NEW)**
+
+For ambiguous tasks, use two-stage workflow:
+```python
+# Step 1: Analyze and identify ambiguities
+clarify_result = plan_strategy_clarify(
+    "Document the large repository",
+    priority="balanced"
+)
+# Returns: {"is_clear": false, "recommended_clarifications": [...]}
+
+# Step 2: Collect user answers (via Claude Code)
+
+# Step 3: Generate strategy with clarifications
+plan = plan_strategy_finalize(
+    "Document the large repository",
+    clarifications="500 Python files, API docs format, all files",
+    scale="comprehensive",
+    min_outputs=500,
+    coverage_target="all files"
 )
 ```
 
@@ -270,6 +297,7 @@ Returns:
 - **2 alternatives** with explicit trade-offs (speed vs cost vs quality)
 - **1-2 creative options** for experimental/high-upside approaches
 - **Implementation templates** ready to execute
+- **Scale validation** showing strategy matches requirements
 
 **Example output:**
 ```json
@@ -279,14 +307,23 @@ Returns:
     "combinators": ["fan-out-aggregate", "tree-reduce"],
     "code_template": "(define result (fan-out-aggregate ...))\n(finish result)",
     "estimated_cost": "$0.50-1.00",
-    "estimated_latency": "30-60s"
+    "estimated_latency": "30-60s",
+    "estimated_outputs": "200 analyses",
+    "coverage_achieved": "100% (all papers)",
+    "scale_validation": "✓ Processes all 200 papers | ✓ Produces 200+ outputs"
   },
   "alternatives": [...],
   "creative_options": [...]
 }
 ```
 
-The planner costs $0.01-0.10 but typically saves 10-200× that by choosing optimal strategies.
+**Improvements:**
+- **Larger token budgets** (15K-20K) for thorough planning
+- **Better default model** (gpt-4o instead of gpt-4o-mini)
+- **Explicit scale validation** prevents under-scoping
+- **Multi-turn workflow** resolves ambiguities before planning
+
+The planner costs $0.01-0.30 but typically saves 10-200× that by choosing optimal strategies.
 
 ---
 
@@ -352,10 +389,7 @@ Copy the appropriate `.mcp.json` configuration to your project directory:
     "rlm-scheme": {
       "command": "/absolute/path/to/rlm-scheme/.venv/bin/python",
       "args": ["/absolute/path/to/rlm-scheme/mcp_server.py"],
-      "cwd": "/absolute/path/to/rlm-scheme",
-      "env": {
-        "RLM_SUB_MODEL": "gpt-4o"
-      }
+      "cwd": "/absolute/path/to/rlm-scheme"
     }
   }
 }
@@ -368,14 +402,13 @@ Copy the appropriate `.mcp.json` configuration to your project directory:
     "rlm-scheme": {
       "command": "C:\\absolute\\path\\to\\rlm-scheme\\.venv\\Scripts\\python.exe",
       "args": ["C:\\absolute\\path\\to\\rlm-scheme\\mcp_server.py"],
-      "cwd": "C:\\absolute\\path\\to\\rlm-scheme",
-      "env": {
-        "RLM_SUB_MODEL": "gpt-4o"
-      }
+      "cwd": "C:\\absolute\\path\\to\\rlm-scheme"
     }
   }
 }
 ```
+
+**Note:** The default model is `gpt-4o` (hardcoded). To use a different model for specific calls, specify it explicitly with `#:model` parameter in your Scheme code.
 
 ### Verify Installation
 
@@ -444,7 +477,7 @@ response = "I will compute the FINAL result..."
 
 **Python:** No tracking of which data came from which model.
 
-**RLM-Scheme:** Every scope crossing logged in audit trail. `get_scope_log` shows provenance of every value.
+**RLM-Scheme:** Every scope crossing logged in audit trail. `get_execution_trace` shows provenance of every value.
 
 ---
 
@@ -708,10 +741,12 @@ The **callback loop** is the architectural core: real API calls happen in Python
 ### Planning & Reference
 | Tool | Purpose |
 |------|---------|
-| `plan_strategy(task, data_characteristics, constraints, priority)` | Recommend combinator compositions with executable code, cost/latency estimates |
+| `plan_strategy(task, data_characteristics, constraints, priority, scale, min_outputs, coverage_target)` | Recommend combinator compositions with executable code, cost/latency estimates (Phase 1: explicit scale parameters) |
+| `plan_strategy_clarify(task, data_characteristics, constraints, priority)` | Analyze task ambiguities and generate clarifying questions (Phase 2: multi-turn planning) |
+| `plan_strategy_finalize(task, clarifications, ..., scale, min_outputs, coverage_target)` | Generate final strategy with user clarifications incorporated (Phase 2: multi-turn planning) |
 | `get_combinator_reference()` | Complete combinator library documentation with examples and composition rules |
 | `get_usage_guide()` | Comprehensive guide: combinators, primitives, examples, best practices |
-| `get_code_generation_api_reference()` | Condensed API reference including combinator syntax |
+| `get_codegen_reference()` | Condensed API reference including combinator syntax |
 
 ### Execution
 | Tool | Purpose |
@@ -725,7 +760,7 @@ The **callback loop** is the architectural core: real API calls happen in Python
 |------|---------|
 | `get_sandbox_state()` | Inspect current sandbox state: variables, checkpoints, Python bridge status |
 | `get_status()` | Monitor active calls, cumulative token usage, API rate limits |
-| `get_scope_log()` | Audit trail of all sub-calls with provenance metadata |
+| `get_execution_trace()` | Audit trail of all sub-calls with provenance metadata |
 | `cancel_call(call_id)` | Cancel in-flight sub-model call |
 
 ---

@@ -193,11 +193,14 @@ USAGE_GUIDE_CORE = _load_doc("getting-started.md")
 # Load tool descriptions from markdown files
 _TOOL_DESCRIPTIONS = {
     "get_usage_guide": _load_tool_desc("get_usage_guide"),
-    "get_code_generation_api_reference": _load_tool_desc("get_code_generation_api_reference"),
+    "get_combinator_reference": _load_tool_desc("get_combinator_reference"),
+    "get_codegen_reference": _load_tool_desc("get_codegen_reference"),
     "plan_strategy": _load_tool_desc("plan_strategy"),
+    "plan_strategy_clarify": _load_tool_desc("plan_strategy_clarify"),
+    "plan_strategy_finalize": _load_tool_desc("plan_strategy_finalize"),
     "execute_scheme": _load_tool_desc("execute_scheme"),
     "load_context": _load_tool_desc("load_context"),
-    "get_scope_log": _load_tool_desc("get_scope_log"),
+    "get_execution_trace": _load_tool_desc("get_execution_trace"),
     "reset": _load_tool_desc("reset"),
     "get_sandbox_state": _load_tool_desc("get_sandbox_state"),
     "get_status": _load_tool_desc("get_status"),
@@ -207,6 +210,8 @@ _TOOL_DESCRIPTIONS = {
 
 _CODE_GEN_API_REF = _load_doc("api-reference.md")
 _PLANNER_PROMPT_TEMPLATE = _load_doc("planner-prompt.md")
+_PLANNER_CLARIFY_PROMPT_TEMPLATE = _load_doc("planner-clarify-prompt.md")
+_PLANNER_FINALIZE_PROMPT_TEMPLATE = _load_doc("planner-finalize-prompt.md")
 
 
 
@@ -1259,70 +1264,52 @@ def _format_progress_message(calls: list[dict], stats: dict) -> str | None:
 STDOUT_LIMIT = 2000
 
 
-@mcp.tool()
+@mcp.tool(description="Get comprehensive usage guide and best practices.")
 def get_usage_guide() -> str:
     return USAGE_GUIDE_CORE
 
 get_usage_guide.__doc__ = _TOOL_DESCRIPTIONS["get_usage_guide"]
 
 
-@mcp.tool()
+@mcp.tool(description="Get complete combinator library reference.")
 def get_combinator_reference() -> str:
-    """Get complete combinator library reference.
-
-    Returns comprehensive documentation for all ~17 core combinators including:
-    - Signature and parameters for each combinator
-    - Semantic descriptions
-    - Composition rules and patterns
-    - Code examples and usage
-    - Performance characteristics
-    - Pattern equivalences
-
-    Use this when:
-    - Designing custom orchestration strategies
-    - Understanding combinator semantics
-    - Learning composition patterns
-    - Looking up specific combinator details
-
-    For pattern recommendations based on your task, use plan_strategy() instead.
-    For condensed API reference, use get_code_generation_api_reference().
-    """
     return _load_doc("combinators.md")
 
+get_combinator_reference.__doc__ = _TOOL_DESCRIPTIONS["get_combinator_reference"]
 
-@mcp.tool()
-def get_code_generation_api_reference() -> str:
+
+@mcp.tool(description="Get API reference for code generation features.")
+def get_codegen_reference() -> str:
     return _CODE_GEN_API_REF
 
-get_code_generation_api_reference.__doc__ = _TOOL_DESCRIPTIONS["get_code_generation_api_reference"]
+get_codegen_reference.__doc__ = _TOOL_DESCRIPTIONS["get_codegen_reference"]
 
 
-@mcp.tool()
+@mcp.tool(description="Design an optimal orchestration strategy for your task.")
 def plan_strategy(
     task_description: str,
     data_characteristics: str | None = None,
     constraints: str | None = None,
     priority: str = "balanced",
+    scale: str = "medium",
+    min_outputs: int | None = None,
+    coverage_target: str | None = None,
 ) -> str:
-    """Design an optimal orchestration strategy for your task.
-
-    Analyzes requirements and recommends pattern compositions with cost/latency/quality tradeoffs.
-    """
     # Construct planning prompt from template
     prompt = _PLANNER_PROMPT_TEMPLATE.format(
         task_description=task_description,
         data_characteristics=data_characteristics or "Not specified",
         constraints=constraints or "None specified",
         priority=priority,
+        scale=scale,
+        min_outputs=min_outputs if min_outputs is not None else "Not specified",
+        coverage_target=coverage_target or "Not specified",
     )
 
-    # Use modern models (2026 pricing) aligned with planner-prompt.md
-    if priority == "cost":
-        planner_model = "gpt-4o-mini"  # $0.0005/1K - cheap but capable
-    elif priority == "quality":
-        planner_model = "gpt-4o"  # $0.01/1K - best balance for strategy design
-    else:  # balanced, speed
-        planner_model = "gpt-4o-mini"  # Fast and cost-effective for most cases
+    # PHASE 1: Model selection and token limits
+    # Always use gpt-4o for planning - quality over cost
+    planner_model = "gpt-4o"
+    max_tokens_planning = 16000  # Always use max - thoroughness matters more than token cost
 
     try:
         # Call planner model
@@ -1332,7 +1319,7 @@ def plan_strategy(
             data="",
             model=planner_model,
             temperature=0.7,  # Encourage creative strategies
-            max_tokens=2000,
+            max_tokens=max_tokens_planning,
         )
 
         # Extract JSON from markdown fences if present
@@ -1353,6 +1340,9 @@ def plan_strategy(
             "planner_model": planner_model,
             "planning_cost": f"${result['prompt_tokens'] + result['completion_tokens']} tokens (~$0.01-0.10)",
             "task_analyzed": task_description[:100] + "..." if len(task_description) > 100 else task_description,
+            "scale": scale,
+            "min_outputs": min_outputs,
+            "coverage_target": coverage_target,
         }
 
         return json.dumps(parsed, indent=2)
@@ -1373,9 +1363,168 @@ def plan_strategy(
 plan_strategy.__doc__ = _TOOL_DESCRIPTIONS["plan_strategy"]
 
 
+@mcp.tool(description="Analyze task and identify clarifying questions before planning.")
+def plan_strategy_clarify(
+    task_description: str,
+    data_characteristics: str | None = None,
+    constraints: str | None = None,
+    priority: str = "balanced",
+) -> str:
+    """Analyze task and identify clarifying questions before planning (Phase 2: Multi-turn planning).
 
-@mcp.tool()
+    Returns clarity assessment, ambiguities found, and recommended clarifying questions to ask the user.
+    Use this when task description is vague about scale, scope, or requirements.
+    Follow up with plan_strategy_finalize() after collecting user answers.
+    """
+    # Construct clarification analysis prompt
+    prompt = _PLANNER_CLARIFY_PROMPT_TEMPLATE.format(
+        task_description=task_description,
+        data_characteristics=data_characteristics or "Not specified",
+        constraints=constraints or "None specified",
+        priority=priority,
+    )
+
+    # Use gpt-4o for analysis - quality over cost
+    planner_model = "gpt-4o"
+    max_tokens_analysis = 16000  # Always use max - thoroughness matters more than token cost
+
+    try:
+        backend = get_backend()
+        result = backend._call_llm(
+            instruction=prompt,
+            data="",
+            model=planner_model,
+            temperature=0.5,  # Lower temp for analysis
+            max_tokens=max_tokens_analysis,
+            json_mode=True,
+        )
+
+        # Extract JSON from markdown fences if present
+        response_text = result["text"].strip()
+        json_match = re.search(r'```(?:json)?\s*\n(.*?)```', response_text, re.DOTALL)
+        if json_match:
+            response_text = json_match.group(1).strip()
+
+        parsed = json.loads(response_text)
+
+        if not isinstance(parsed, dict):
+            raise ValueError(f"LLM returned valid JSON but not an object/dict. Got {type(parsed).__name__}")
+
+        # Add metadata
+        parsed["_meta"] = {
+            "planner_model": planner_model,
+            "analysis_cost": f"${result['prompt_tokens'] + result['completion_tokens']} tokens (~$0.10-0.20)",
+            "task_analyzed": task_description[:100] + "..." if len(task_description) > 100 else task_description,
+        }
+
+        return json.dumps(parsed, indent=2)
+
+    except json.JSONDecodeError as e:
+        return json.dumps({
+            "error": f"Failed to parse LLM response as JSON: {str(e)}",
+            "clarity_assessment": {"is_clear": False, "confidence": 0.0, "reasoning": "Analysis failed"},
+            "raw_output": result["text"][:500] if 'result' in locals() else "No output generated"
+        }, indent=2)
+    except Exception as e:
+        return json.dumps({
+            "error": f"Analysis failed: {type(e).__name__}: {str(e)}",
+            "clarity_assessment": {"is_clear": False, "confidence": 0.0, "reasoning": "Analysis failed"}
+        }, indent=2)
+
+plan_strategy_clarify.__doc__ = _TOOL_DESCRIPTIONS["plan_strategy_clarify"]
+
+
+@mcp.tool(description="Generate final orchestration strategy with user clarifications incorporated.")
+def plan_strategy_finalize(
+    task_description: str,
+    clarifications: str,
+    data_characteristics: str | None = None,
+    constraints: str | None = None,
+    priority: str = "balanced",
+    scale: str = "medium",
+    min_outputs: int | None = None,
+    coverage_target: str | None = None,
+) -> str:
+    """Generate final orchestration strategy with user clarifications incorporated (Phase 2: Multi-turn planning).
+
+    Second stage of two-phase planning workflow. Takes user's answers to clarifying questions
+    and generates a strategy aligned with their requirements. Use after plan_strategy_clarify().
+    """
+    # Construct finalization prompt with clarifications
+    prompt = _PLANNER_FINALIZE_PROMPT_TEMPLATE.format(
+        task_description=task_description,
+        data_characteristics=data_characteristics or "Not specified",
+        constraints=constraints or "None specified",
+        priority=priority,
+        clarifications=clarifications,
+        scale=scale,
+        min_outputs=min_outputs if min_outputs is not None else "Not specified",
+        coverage_target=coverage_target or "Not specified",
+    )
+
+    # Same model selection logic as plan_strategy
+    # Always use gpt-4o for planning - quality over cost
+    planner_model = "gpt-4o"
+    max_tokens_planning = 16000  # Always use max - thoroughness matters more than token cost
+
+    try:
+        backend = get_backend()
+        result = backend._call_llm(
+            instruction=prompt,
+            data="",
+            model=planner_model,
+            temperature=0.7,  # Encourage creative strategies
+            max_tokens=max_tokens_planning,
+        )
+
+        # Extract JSON from markdown fences if present
+        response_text = result["text"].strip()
+        json_match = re.search(r'```(?:json)?\s*\n(.*?)```', response_text, re.DOTALL)
+        if json_match:
+            response_text = json_match.group(1).strip()
+
+        parsed = json.loads(response_text)
+
+        if not isinstance(parsed, dict):
+            raise ValueError(f"LLM returned valid JSON but not an object/dict. Got {type(parsed).__name__}")
+
+        # Add metadata
+        parsed["_meta"] = {
+            "planner_model": planner_model,
+            "planning_cost": f"${result['prompt_tokens'] + result['completion_tokens']} tokens (~$0.10-0.40)",
+            "task_analyzed": task_description[:100] + "..." if len(task_description) > 100 else task_description,
+            "clarifications_incorporated": True,
+        }
+
+        return json.dumps(parsed, indent=2)
+
+    except json.JSONDecodeError as e:
+        return json.dumps({
+            "error": f"Failed to parse LLM response as JSON: {str(e)}",
+            "fallback_recommendation": "Start with fan-out-aggregate. Call get_combinator_reference() for full combinator docs.",
+            "raw_output": result["text"][:500] if 'result' in locals() else "No output generated"
+        }, indent=2)
+    except Exception as e:
+        return json.dumps({
+            "error": f"Planning failed: {type(e).__name__}: {str(e)}",
+            "fallback_recommendation": "Call get_usage_guide() to see pattern overview and choose manually."
+        }, indent=2)
+
+plan_strategy_finalize.__doc__ = _TOOL_DESCRIPTIONS["plan_strategy_finalize"]
+
+
+@mcp.tool(description="Execute Scheme code in the sandbox and return results.")
 async def execute_scheme(code: str, timeout: int | None = None, ctx: Context = None) -> str:
+    """Execute Scheme code in the sandbox and return results.
+
+    Runs your orchestration code in the Racket sandbox. Returns execution results including:
+    - Final value or error message
+    - Token usage and cost information
+    - LLM call statistics
+    - Execution time
+
+    Default timeout is 300 seconds (5 minutes). Use longer timeouts for complex orchestrations.
+    """
     # Resolve timeout: parameter > env var > default 300
     if timeout is None:
         timeout = int(os.environ.get("RLM_TIMEOUT_SECONDS", "300"))
@@ -1475,7 +1624,7 @@ async def execute_scheme(code: str, timeout: int | None = None, ctx: Context = N
 execute_scheme.__doc__ = _TOOL_DESCRIPTIONS["execute_scheme"]
 
 
-@mcp.tool()
+@mcp.tool(description="Load data into sandbox context for use in orchestrations.")
 def load_context(data: str, name: str | None = None) -> str:
     cmd = {"op": "load-context", "data": data}
     if name is not None:
@@ -1488,15 +1637,15 @@ def load_context(data: str, name: str | None = None) -> str:
 load_context.__doc__ = _TOOL_DESCRIPTIONS["load_context"]
 
 
-@mcp.tool()
-def get_scope_log() -> str:
+@mcp.tool(description="Get execution trace showing LLM call hierarchy and data flow.")
+def get_execution_trace() -> str:
     resp = get_backend().send({"op": "get-scope-log"})
     return resp.get("result", "[]")
 
-get_scope_log.__doc__ = _TOOL_DESCRIPTIONS["get_scope_log"]
+get_execution_trace.__doc__ = _TOOL_DESCRIPTIONS["get_execution_trace"]
 
 
-@mcp.tool()
+@mcp.tool(description="Reset the sandbox to initial state, clearing all context and state.")
 def reset() -> str:
     resp = get_backend().send({"op": "reset"})
     return resp.get("result", "sandbox reset")
@@ -1504,9 +1653,8 @@ def reset() -> str:
 reset.__doc__ = _TOOL_DESCRIPTIONS["reset"]
 
 
-@mcp.tool()
+@mcp.tool(description="Inspect current sandbox state for debugging.")
 def get_sandbox_state() -> str:
-    """Inspect current sandbox state for debugging."""
     backend = get_backend()
 
     # Get Scheme variable list from sandbox
@@ -1541,7 +1689,7 @@ def get_sandbox_state() -> str:
 get_sandbox_state.__doc__ = _TOOL_DESCRIPTIONS["get_sandbox_state"]
 
 
-@mcp.tool()
+@mcp.tool(description="Get current sandbox status and health information.")
 def get_status() -> str:
     backend = get_backend()
     return json.dumps({
@@ -1553,7 +1701,7 @@ def get_status() -> str:
 get_status.__doc__ = _TOOL_DESCRIPTIONS["get_status"]
 
 
-@mcp.tool()
+@mcp.tool(description="Cancel a running LLM call by its call ID.")
 def cancel_call(call_id: str) -> str:
     return get_backend().cancel_call(call_id)
 

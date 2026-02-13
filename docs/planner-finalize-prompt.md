@@ -1,8 +1,8 @@
-# LLM Orchestration Strategy Design
+# LLM Orchestration Strategy Design (With Clarifications)
 
 You are designing orchestration strategies using **combinators** - composable building blocks for LLM workflows.
 
-**Your goal:** Design CREATIVE, NOVEL strategies. Don't follow templates or stick to safe patterns.
+**Your goal:** Design CREATIVE, NOVEL strategies based on the clarified task requirements.
 
 ## The Creative Mandate
 
@@ -23,7 +23,7 @@ You are designing orchestration strategies using **combinators** - composable bu
 
 ---
 
-## Task
+## Task (With User Clarifications)
 
 **Objective:** {task_description}
 
@@ -31,7 +31,13 @@ You are designing orchestration strategies using **combinators** - composable bu
 
 **Constraints:** {constraints}
 
-**Priority:** {priority} (speed/cost/quality/balanced)
+**Priority:** {priority}
+
+### USER CLARIFICATIONS (INCORPORATE THESE)
+
+{clarifications}
+
+**These clarifications are AUTHORITATIVE.** Design your strategy to match what the user specified.
 
 ---
 
@@ -51,20 +57,7 @@ Scale definitions:
 **Coverage Target:** {coverage_target}
 
 ⚠️ **CRITICAL VALIDATION REQUIREMENT:**
-Your strategy MUST produce at least {min_outputs} output artifacts (if specified) and achieve {coverage_target} coverage (if specified).
-
-If your recommended approach produces fewer outputs than required, YOU ARE FAILING THE TASK.
-If the scale is "large" or "comprehensive" and your strategy only processes a subset, YOU ARE FAILING THE TASK.
-
-**Examples of WRONG (insufficient scale):**
-- Task: "Document 500 files", Scale: "comprehensive" → Strategy processes 10 files ❌
-- Task: "Analyze all research papers", Min outputs: 200 → Strategy produces 20 summaries ❌
-- Task: "Complete coverage", Coverage: "100%" → Strategy selectively samples ❌
-
-**Examples of CORRECT (appropriate scale):**
-- Task: "Document 500 files", Scale: "comprehensive" → Strategy processes all 500 files ✓
-- Task: "Analyze all papers", Min outputs: 200 → Strategy produces 200+ analyses ✓
-- Task: "Complete coverage", Coverage: "100%" → Strategy has no selective filtering ✓
+Your strategy MUST align with the user's clarifications and scale requirements.
 
 ---
 
@@ -132,24 +125,26 @@ Think of these as LEGO pieces. The manual shows a few example builds, but your j
 
 Before generating your output, validate your strategy against these requirements:
 
+**Clarification Alignment:**
+□ Does my strategy incorporate ALL user clarifications?
+□ Have I matched the user's specified scale/scope/format?
+□ Am I addressing what the user actually wants (not what I assume)?
+
 **Scale Validation:**
-□ Does my strategy process ALL items mentioned in the task?
-□ If min_outputs is specified, does my strategy produce at least that many outputs?
-□ If coverage_target is specified, does my strategy achieve that coverage?
+□ Does my strategy process ALL items mentioned?
+□ If min_outputs specified, does my strategy produce at least that many?
+□ If coverage_target specified, does my strategy achieve that coverage?
 □ Does my strategy match the scale level (minimal/small/medium/large/comprehensive)?
-□ Am I using batch processing that covers the full dataset, not just a subset?
 
 **Code Template Validation:**
 □ Is my code_template EXECUTABLE Scheme code (not pseudocode)?
 □ Does the code template actually iterate over all items (not just first N)?
 □ If using map-async or fan-out-aggregate, am I mapping over the FULL list?
-□ Have I avoided artificial limits (e.g., `(take items 10)` when all items needed)?
 
 **Quality Validation:**
-□ Is my recommended strategy ambitious enough for the task scale?
+□ Is my recommended strategy ambitious enough for the clarified task?
 □ Have I provided genuine alternatives with different tradeoffs?
-□ Are my creative options actually creative/experimental (not just safe variations)?
-□ Have I included realistic cost/latency estimates?
+□ Are my creative options actually creative/experimental?
 
 **If ANY checkbox fails, REVISE your strategy before responding.**
 
@@ -177,7 +172,8 @@ Return ONLY valid JSON:
     "estimated_outputs": "Number of output artifacts this strategy will produce",
     "coverage_achieved": "Percentage or description of coverage",
     "why_this_works": "What makes this effective for the task",
-    "scale_validation": "✓ Processes all X items | ✓ Produces Y+ outputs | ✓ Achieves Z coverage"
+    "scale_validation": "✓ Processes all X items | ✓ Produces Y+ outputs | ✓ Achieves Z coverage",
+    "clarification_alignment": "How this strategy addresses user's clarifications"
   }},
   "alternatives": [
     {{
@@ -214,16 +210,18 @@ Return ONLY valid JSON:
 - **creative_options** must be GENUINELY CREATIVE - not just safe patterns reshuffled
 - Use actual combinator names and valid Scheme syntax
 - Provide realistic cost/latency estimates
+- **Incorporate user clarifications throughout**
 
 ---
 
 ## Design Principles
 
 **What makes a great strategy:**
-- **Fits the task:** Considers data size, quality needs, constraints
+- **Fits the clarified task:** Addresses user's specific requirements
 - **Novel composition:** Combines combinators in interesting ways
 - **Clear tradeoffs:** Honest about cost/quality/speed
 - **Executable:** code_template actually runs
+- **Aligned:** Matches user's clarifications and scale
 
 **What makes a great creative_option:**
 - **Takes risks:** Unconventional approach with high potential upside
@@ -263,12 +261,12 @@ Return ONLY valid JSON:
   items)
 ```
 
-These are just syntax examples. YOUR job is to design strategies that fit the specific task, not copy these patterns.
+These are just syntax examples. YOUR job is to design strategies that fit the specific clarified task, not copy these patterns.
 
 ---
 
 ## Now Design
 
-Create strategies for the task above. Push boundaries. Try novel compositions. Design something creative that could actually work better than the obvious approach.
+Create strategies for the task above with user clarifications incorporated. Push boundaries. Try novel compositions. Design something creative that addresses exactly what the user specified.
 
 Remember: The cost of testing your creative idea is $0.01-0.05. The cost of choosing the wrong safe pattern is $1-5. Be bold.

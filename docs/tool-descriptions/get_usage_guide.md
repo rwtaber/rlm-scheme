@@ -31,7 +31,7 @@ This guide provides building blocks, not recipes. The ~17 combinators can be com
 **For deeper documentation:**
 - **Full combinator reference:** `get_combinator_reference()` - Complete docs for all 17 combinators
 - **Strategy recommendations:** `plan_strategy(task, data, priority)` - Get creative custom strategies for your task
-- **API reference:** `get_code_generation_api_reference()` - Syntax reference
+- **API reference:** `get_codegen_reference()` - Syntax reference
 
 **Workflow:**
 1. Read this guide to understand the building blocks

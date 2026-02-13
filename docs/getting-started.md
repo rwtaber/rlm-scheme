@@ -39,7 +39,9 @@ A Scheme sandbox for composing LLM orchestration strategies using **combinators*
 
 ## Quick Start
 
-### Option 1: Get Strategy Recommendations (Easiest)
+### Option 1: Simple Tasks - Get Strategy Recommendations (Easiest)
+
+**Use when:** Task is clear and well-defined.
 
 ```python
 # 1. Ask the planner for strategies
@@ -59,6 +61,65 @@ result = execute_scheme(plan["recommended"]["code_template"])
 result = execute_scheme(plan["alternatives"][0]["code_template"])
 result = execute_scheme(plan["creative_options"][0]["code_template"])
 ```
+
+### Option 1b: Complex/Ambiguous Tasks - Two-Phase Planning (Recommended for Quality)
+
+**Use when:** Task description is vague, scope unclear, or quality is critical.
+
+```python
+# STEP 1: Check what's ambiguous
+clarity = plan_strategy_clarify(
+    task_description="Generate comprehensive documentation for the repository",
+    data_characteristics="Large Python codebase",
+    priority="quality"
+)
+
+# STEP 2: Check if clarification needed
+clarity_result = json.loads(clarity)
+if not clarity_result["clarity_assessment"]["is_clear"]:
+    # Task is ambiguous - ask user the recommended questions
+    questions = clarity_result["recommended_clarifications"]
+    # Example questions returned:
+    # - "How many files are in your repository?"
+    # - "What format of documentation do you need?"
+    # - "Do you want all files documented or just public APIs?"
+
+    # STEP 3: Get user's answers (you provide these)
+    user_answers = """
+    File count: 500 Python files
+    Format: API reference documentation with examples
+    Coverage: All files (comprehensive documentation)
+    """
+
+    # STEP 4: Generate strategy with clarifications
+    plan = plan_strategy_finalize(
+        task_description="Generate comprehensive documentation for the repository",
+        clarifications=user_answers,
+        scale="comprehensive",  # Based on user's answer
+        min_outputs=500,         # One doc per file
+        coverage_target="all files",
+        priority="quality"
+    )
+else:
+    # Task is clear - skip straight to planning
+    plan = plan_strategy(
+        task_description="Generate comprehensive documentation for the repository",
+        scale="comprehensive",
+        priority="quality"
+    )
+
+# STEP 5: Load your data and execute
+load_context(repo_files)
+result = execute_scheme(plan["recommended"]["code_template"])
+```
+
+**Why use two-phase planning?**
+- ✅ Ensures strategy matches your actual intent
+- ✅ Prevents under-scoping (e.g., processing 20 files when you wanted 500)
+- ✅ Explicitly surfaces assumptions before expensive execution
+- ✅ Higher quality plans through clarification
+- 💰 Cost: ~$0.20-0.40 total (clarity + finalize) vs. ~$0.10-0.30 (single-shot)
+- ⏱️ Time: +5-10 seconds for extra LLM call
 
 ### Option 2: Compose Manually
 
@@ -123,7 +184,7 @@ execute_scheme(code)
 - Default: 300s computation timeout (configurable via `execute_scheme(code, timeout=600)`)
 - Use checkpoints to save expensive intermediate results
 
-### 3. Model Selection
+## Model Selection
 
 | Model | Cost/1K | Characteristics |
 |-------|---------|----------------|
@@ -748,7 +809,7 @@ get_sandbox_state()  # Variables, checkpoints, Python status
 get_status()  # Active calls, token usage, rate limits
 
 # View execution history
-get_scope_log()  # Audit trail of all LLM calls
+get_execution_trace()  # Audit trail of all LLM calls
 
 # Cancel long-running call
 cancel_call("call_123")
@@ -756,13 +817,101 @@ cancel_call("call_123")
 
 ---
 
+## Planning Workflows: When to Use Each Approach
+
+### Single-Shot Planning: `plan_strategy()`
+
+**Use when:**
+- ✅ Task is clear and well-specified
+- ✅ You know the scale (e.g., "process 500 documents")
+- ✅ Format and outputs are explicit
+- ✅ Speed matters more than perfection
+
+**Cost:** ~$0.10-0.30 | **Time:** 5-10 seconds
+
+**Example:**
+```python
+plan = plan_strategy(
+    "Extract findings from 100 papers (5KB each), produce JSON summary, budget <$5",
+    scale="medium",
+    priority="balanced"
+)
+```
+
+---
+
+### Two-Phase Planning: `plan_strategy_clarify()` → `plan_strategy_finalize()`
+
+**Use when:**
+- ✅ Task description is vague ("document the large repo")
+- ✅ Unclear how many items/outputs
+- ✅ Quality and accuracy are critical
+- ✅ Risk of under-scoping or over-scoping
+
+**Cost:** ~$0.20-0.40 | **Time:** 10-15 seconds
+
+**Workflow:**
+```python
+# Phase 1: Identify ambiguities
+clarity = plan_strategy_clarify("Document the large repository")
+result = json.loads(clarity)
+
+if not result["clarity_assessment"]["is_clear"]:
+    # Phase 2: Ask user, then finalize
+    questions = result["recommended_clarifications"]
+    answers = get_user_answers(questions)  # Your code to ask user
+
+    plan = plan_strategy_finalize(
+        "Document the large repository",
+        clarifications=answers,
+        scale="comprehensive",
+        min_outputs=500
+    )
+```
+
+**Why this is better:**
+- Prevents expensive mistakes (wrong scale/scope)
+- Surfaces assumptions explicitly
+- Higher quality plans through clarification
+- Worth the extra $0.10 and 5 seconds
+
+---
+
+### Manual Composition: `get_combinator_reference()` → DIY
+
+**Use when:**
+- ✅ None of the generated strategies work
+- ✅ You have specific combinator composition in mind
+- ✅ You're experimenting with novel patterns
+- ✅ Learning the system deeply
+
+**Cost:** Free (no planning LLM call) | **Time:** Depends on your expertise
+
+---
+
+### Decision Guide
+
+```
+Is your task description clear and specific?
+├─ YES → Use plan_strategy() (simple, fast)
+└─ NO → Use plan_strategy_clarify() + plan_strategy_finalize()
+         (better quality, prevents mistakes)
+
+Did the generated strategies fail?
+└─ YES → Manual composition with get_combinator_reference()
+```
+
+---
+
 ## Available Tools
 
 **Planning & Reference:**
-- `plan_strategy(task, data, priority)` - Get custom strategy recommendations
+- `plan_strategy(task, data, priority, scale)` - Single-shot planning, 3 strategy variants
+- `plan_strategy_clarify(task, data, priority)` - Identify ambiguities and generate clarifying questions
+- `plan_strategy_finalize(task, clarifications, scale, min_outputs)` - Generate strategy with clarifications incorporated
 - `get_usage_guide()` - This guide
 - `get_combinator_reference()` - Full docs for all 17 combinators
-- `get_code_generation_api_reference()` - API reference
+- `get_codegen_reference()` - API reference
 
 **Execution:**
 - `load_context(data, name)` - Load data into sandbox
@@ -772,7 +921,7 @@ cancel_call("call_123")
 **Monitoring:**
 - `get_sandbox_state()` - Inspect current state
 - `get_status()` - Active calls, token usage
-- `get_scope_log()` - Execution audit trail
+- `get_execution_trace()` - Execution audit trail
 - `cancel_call(call_id)` - Cancel active call
 
 ---
@@ -791,9 +940,15 @@ cancel_call("call_123")
 
 ## Workflow for New Users
 
+### For Clear Tasks (Most Common)
+
 1. **Get recommendations:**
    ```python
-   plan = plan_strategy("Your task here", priority="balanced")
+   plan = plan_strategy(
+       "Your task here",
+       scale="medium",  # minimal/small/medium/large/comprehensive
+       priority="balanced"
+   )
    ```
 
 2. **Review options:**
@@ -808,8 +963,39 @@ cancel_call("call_123")
    result2 = execute_scheme(plan["creative_options"][0]["code_template"])
    ```
 
+### For Ambiguous Tasks (Better Quality)
+
+1. **Check clarity:**
+   ```python
+   clarity = plan_strategy_clarify("Your vague task here")
+   result = json.loads(clarity)
+   ```
+
+2. **If ambiguous, clarify then plan:**
+   ```python
+   if not result["clarity_assessment"]["is_clear"]:
+       # Show questions to user, collect answers
+       questions = result["recommended_clarifications"]
+       answers = "..." # User's answers
+
+       plan = plan_strategy_finalize(
+           "Your vague task here",
+           clarifications=answers,
+           scale="large",  # Based on user's answers
+           min_outputs=100
+       )
+   ```
+
+3. **Execute:**
+   ```python
+   load_context(your_data)
+   result = execute_scheme(plan["recommended"]["code_template"])
+   ```
+
+### General Tips
+
 4. **Iterate:**
-   - If unsatisfied, try other options
+   - If unsatisfied, try other plan variants
    - Read `get_combinator_reference()` for deeper understanding
    - Compose your own strategy based on what you learned
 

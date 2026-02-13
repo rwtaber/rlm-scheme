@@ -921,23 +921,23 @@ class TestDocumentationIssues:
 
     def test_issue2_pyeval_warning_in_api_reference(self):
         """Issue 2: API reference warns about py-eval only accepting expressions."""
-        from mcp_server import get_code_generation_api_reference
-        ref = get_code_generation_api_reference()
+        from mcp_server import get_codegen_reference
+        ref = get_codegen_reference()
         assert "COMMON MISTAKE" in ref
         assert "py-eval CANNOT handle imports" in ref
         assert "SyntaxError" in ref
 
     def test_issue4_mapasync_raw_strings_documented(self):
         """Issue 4: API reference clarifies map-async returns raw strings."""
-        from mcp_server import get_code_generation_api_reference
-        ref = get_code_generation_api_reference()
+        from mcp_server import get_codegen_reference
+        ref = get_codegen_reference()
         assert "raw LLM output strings" in ref
         assert "NOT parsed JSON" in ref
 
     def test_issue9_pyset_roundtrip_example(self):
         """Issue 9: API reference has py-set! → py-exec → py-eval round-trip."""
-        from mcp_server import get_code_generation_api_reference
-        ref = get_code_generation_api_reference()
+        from mcp_server import get_codegen_reference
+        ref = get_codegen_reference()
         assert "py-set!" in ref
         assert "py-exec" in ref
         assert "py-eval" in ref

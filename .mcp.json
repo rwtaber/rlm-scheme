@@ -5,7 +5,6 @@
       "args": ["C:/code/rlm-scheme/mcp_server.py"],
       "cwd": "C:/code/rlm-scheme",
       "env": {
-        "RLM_SUB_MODEL": "gpt-4o",
         "PATH": "C:/Program Files/Racket;C:/Windows/system32;C:/Windows;C:/Windows/System32/Wbem"
       }
     }

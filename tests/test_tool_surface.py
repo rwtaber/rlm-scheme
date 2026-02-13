@@ -238,7 +238,7 @@ class TestModelGuide:
     def test_parameter_guide_present(self):
         """API reference includes parameter usage guidance."""
         import mcp_server
-        api_ref = mcp_server.get_code_generation_api_reference()
+        api_ref = mcp_server.get_codegen_reference()
         assert "#:temperature" in api_ref
         assert "#:max-tokens" in api_ref
         assert "#:json" in api_ref

@@ -224,9 +224,9 @@ class TestDocumentationUpdates:
         assert "automatic" in _CODE_GEN_API_REF.lower() or "bridge" in _CODE_GEN_API_REF
 
     def test_api_reference_accessible_via_tool(self):
-        """get_code_generation_api_reference returns updated docs."""
-        from mcp_server import get_code_generation_api_reference
-        api_ref = get_code_generation_api_reference()
+        """get_codegen_reference returns updated docs."""
+        from mcp_server import get_codegen_reference
+        api_ref = get_codegen_reference()
         assert "py-exec" in api_ref
         assert "py-eval" in api_ref
 

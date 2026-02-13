@@ -19,6 +19,9 @@ The planner is designed to generate **creative, novel strategies** - not just sa
 - data_characteristics: Optional data details (size, structure, format)
 - constraints: Optional constraints (latency/cost/quality requirements)
 - priority: "speed", "cost", "quality", or "balanced" (default)
+- **scale**: "minimal", "small", "medium" (default), "large", or "comprehensive" (Phase 1)
+- **min_outputs**: Minimum number of output artifacts required (Phase 1)
+- **coverage_target**: Coverage requirement, e.g., "all files", "100%", "public APIs only" (Phase 1)
 
 **Output:**
 JSON with:
@@ -34,32 +37,75 @@ The creative_options field contains EXPERIMENTAL strategies - not just variation
 - High-upside ideas that could outperform safe patterns
 - Strategies designed for exploration, not production
 
-**Cost:** $0.01-0.10 per planning call (uses gpt-4o-mini or gpt-4o)
+**Cost:** $0.10-0.40 per planning call (uses gpt-4o with 16K max tokens)
 **ROI:** Typically saves 10-200× planning cost by choosing optimal strategy
+**Why max tokens:** Thoroughness matters more than token cost - better strategies save far more than a few extra tokens
+
+**Phase 1 Improvements (Scale Parameters):**
+- Explicit **scale** parameter prevents under-scoping
+- **min_outputs** ensures strategy produces enough artifacts
+- **coverage_target** clarifies what "comprehensive" means
+- Increased token limits (15K-20K) allow thorough planning
+- Upgraded default model to gpt-4o for better quality
+
+**Phase 2 Alternative (Multi-turn Workflow) - RECOMMENDED for Ambiguous Tasks:**
+For vague task descriptions, use `plan_strategy_clarify()` → collect user answers → `plan_strategy_finalize()` instead.
+
+**When to use two-phase planning:**
+- Task description is vague ("document the large repo")
+- Unclear how many items to process or outputs to generate
+- Quality and accuracy are critical
+- Risk of under-scoping (processing 20 files when you wanted 500)
+
+See **"Planning Workflows"** section in usage guide for detailed comparison.
 
 **Examples:**
+
+**Example 1: Document analysis with explicit scale (Phase 1)**
 ```python
-# Example 1: Document analysis
 plan_strategy(
     "Analyze 200 research papers and extract key findings",
     data_characteristics="~5KB per paper, ~1MB total",
+    scale="large",  # NEW
+    min_outputs=200,  # NEW: Ensure 200 analyses
+    coverage_target="all papers",  # NEW
     priority="balanced"
 )
 
-# Example 2: Code generation
+# Example 2: Code generation with coverage
 plan_strategy(
     "Generate test cases for REST API with 20 endpoints",
-    constraints="Highest quality needed",
+    scale="medium",
+    min_outputs=20,  # At least one test per endpoint
+    coverage_target="all endpoints",
     priority="quality"
 )
 
-# Example 3: Large dataset processing
+# Example 3: Comprehensive documentation
 plan_strategy(
-    "Process 500KB CSV of genomic data for AMR analysis",
-    data_characteristics="CSV, 10K rows × 50 columns",
+    "Document large repository",
+    data_characteristics="500 Python files",
+    scale="comprehensive",  # Process ALL files
+    min_outputs=500,  # One doc per file
+    coverage_target="all files",
+    priority="balanced"
+)
+
+# Example 4: Quick overview (minimal scale)
+plan_strategy(
+    "Summarize key modules in codebase",
+    scale="minimal",  # Just highlights
+    min_outputs=5,  # Top 5 modules
     priority="speed"
 )
 ```
+
+**Scale Guidelines:**
+- **minimal**: Proof of concept, ~5-10 outputs
+- **small**: ~10-30 outputs, major components
+- **medium**: ~30-100 outputs, comprehensive but selective (default)
+- **large**: ~100-500 outputs, near-complete coverage
+- **comprehensive**: Complete coverage, no gaps
 
 **Workflow:**
 1. Call plan_strategy() to get recommendations
