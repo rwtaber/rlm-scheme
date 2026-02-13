@@ -196,8 +196,6 @@ _TOOL_DESCRIPTIONS = {
     "get_combinator_reference": _load_tool_desc("get_combinator_reference"),
     "get_codegen_reference": _load_tool_desc("get_codegen_reference"),
     "plan_strategy": _load_tool_desc("plan_strategy"),
-    "plan_strategy_clarify": _load_tool_desc("plan_strategy_clarify"),
-    "plan_strategy_finalize": _load_tool_desc("plan_strategy_finalize"),
     "execute_scheme": _load_tool_desc("execute_scheme"),
     "load_context": _load_tool_desc("load_context"),
     "get_execution_trace": _load_tool_desc("get_execution_trace"),
@@ -210,8 +208,6 @@ _TOOL_DESCRIPTIONS = {
 
 _CODE_GEN_API_REF = _load_doc("api-reference.md")
 _PLANNER_PROMPT_TEMPLATE = _load_doc("planner-prompt.md")
-_PLANNER_CLARIFY_PROMPT_TEMPLATE = _load_doc("planner-clarify-prompt.md")
-_PLANNER_FINALIZE_PROMPT_TEMPLATE = _load_doc("planner-finalize-prompt.md")
 
 
 
@@ -1364,155 +1360,6 @@ plan_strategy.__doc__ = _TOOL_DESCRIPTIONS["plan_strategy"]
 
 
 @mcp.tool(description="Analyze task and identify clarifying questions before planning.")
-def plan_strategy_clarify(
-    task_description: str,
-    data_characteristics: str | None = None,
-    constraints: str | None = None,
-    priority: str = "balanced",
-) -> str:
-    """Analyze task and identify clarifying questions before planning (Phase 2: Multi-turn planning).
-
-    Returns clarity assessment, ambiguities found, and recommended clarifying questions to ask the user.
-    Use this when task description is vague about scale, scope, or requirements.
-    Follow up with plan_strategy_finalize() after collecting user answers.
-    """
-    # Construct clarification analysis prompt
-    prompt = _PLANNER_CLARIFY_PROMPT_TEMPLATE.format(
-        task_description=task_description,
-        data_characteristics=data_characteristics or "Not specified",
-        constraints=constraints or "None specified",
-        priority=priority,
-    )
-
-    # Use gpt-4o for analysis - quality over cost
-    planner_model = "gpt-4o"
-    max_tokens_analysis = 16000  # Always use max - thoroughness matters more than token cost
-
-    try:
-        backend = get_backend()
-        result = backend._call_llm(
-            instruction=prompt,
-            data="",
-            model=planner_model,
-            temperature=0.5,  # Lower temp for analysis
-            max_tokens=max_tokens_analysis,
-            json_mode=True,
-        )
-
-        # Extract JSON from markdown fences if present
-        response_text = result["text"].strip()
-        json_match = re.search(r'```(?:json)?\s*\n(.*?)```', response_text, re.DOTALL)
-        if json_match:
-            response_text = json_match.group(1).strip()
-
-        parsed = json.loads(response_text)
-
-        if not isinstance(parsed, dict):
-            raise ValueError(f"LLM returned valid JSON but not an object/dict. Got {type(parsed).__name__}")
-
-        # Add metadata
-        parsed["_meta"] = {
-            "planner_model": planner_model,
-            "analysis_cost": f"${result['prompt_tokens'] + result['completion_tokens']} tokens (~$0.10-0.20)",
-            "task_analyzed": task_description[:100] + "..." if len(task_description) > 100 else task_description,
-        }
-
-        return json.dumps(parsed, indent=2)
-
-    except json.JSONDecodeError as e:
-        return json.dumps({
-            "error": f"Failed to parse LLM response as JSON: {str(e)}",
-            "clarity_assessment": {"is_clear": False, "confidence": 0.0, "reasoning": "Analysis failed"},
-            "raw_output": result["text"][:500] if 'result' in locals() else "No output generated"
-        }, indent=2)
-    except Exception as e:
-        return json.dumps({
-            "error": f"Analysis failed: {type(e).__name__}: {str(e)}",
-            "clarity_assessment": {"is_clear": False, "confidence": 0.0, "reasoning": "Analysis failed"}
-        }, indent=2)
-
-plan_strategy_clarify.__doc__ = _TOOL_DESCRIPTIONS["plan_strategy_clarify"]
-
-
-@mcp.tool(description="Generate final orchestration strategy with user clarifications incorporated.")
-def plan_strategy_finalize(
-    task_description: str,
-    clarifications: str,
-    data_characteristics: str | None = None,
-    constraints: str | None = None,
-    priority: str = "balanced",
-    scale: str = "medium",
-    min_outputs: int | None = None,
-    coverage_target: str | None = None,
-) -> str:
-    """Generate final orchestration strategy with user clarifications incorporated (Phase 2: Multi-turn planning).
-
-    Second stage of two-phase planning workflow. Takes user's answers to clarifying questions
-    and generates a strategy aligned with their requirements. Use after plan_strategy_clarify().
-    """
-    # Construct finalization prompt with clarifications
-    prompt = _PLANNER_FINALIZE_PROMPT_TEMPLATE.format(
-        task_description=task_description,
-        data_characteristics=data_characteristics or "Not specified",
-        constraints=constraints or "None specified",
-        priority=priority,
-        clarifications=clarifications,
-        scale=scale,
-        min_outputs=min_outputs if min_outputs is not None else "Not specified",
-        coverage_target=coverage_target or "Not specified",
-    )
-
-    # Same model selection logic as plan_strategy
-    # Always use gpt-4o for planning - quality over cost
-    planner_model = "gpt-4o"
-    max_tokens_planning = 16000  # Always use max - thoroughness matters more than token cost
-
-    try:
-        backend = get_backend()
-        result = backend._call_llm(
-            instruction=prompt,
-            data="",
-            model=planner_model,
-            temperature=0.7,  # Encourage creative strategies
-            max_tokens=max_tokens_planning,
-        )
-
-        # Extract JSON from markdown fences if present
-        response_text = result["text"].strip()
-        json_match = re.search(r'```(?:json)?\s*\n(.*?)```', response_text, re.DOTALL)
-        if json_match:
-            response_text = json_match.group(1).strip()
-
-        parsed = json.loads(response_text)
-
-        if not isinstance(parsed, dict):
-            raise ValueError(f"LLM returned valid JSON but not an object/dict. Got {type(parsed).__name__}")
-
-        # Add metadata
-        parsed["_meta"] = {
-            "planner_model": planner_model,
-            "planning_cost": f"${result['prompt_tokens'] + result['completion_tokens']} tokens (~$0.10-0.40)",
-            "task_analyzed": task_description[:100] + "..." if len(task_description) > 100 else task_description,
-            "clarifications_incorporated": True,
-        }
-
-        return json.dumps(parsed, indent=2)
-
-    except json.JSONDecodeError as e:
-        return json.dumps({
-            "error": f"Failed to parse LLM response as JSON: {str(e)}",
-            "fallback_recommendation": "Start with fan-out-aggregate. Call get_combinator_reference() for full combinator docs.",
-            "raw_output": result["text"][:500] if 'result' in locals() else "No output generated"
-        }, indent=2)
-    except Exception as e:
-        return json.dumps({
-            "error": f"Planning failed: {type(e).__name__}: {str(e)}",
-            "fallback_recommendation": "Call get_usage_guide() to see pattern overview and choose manually."
-        }, indent=2)
-
-plan_strategy_finalize.__doc__ = _TOOL_DESCRIPTIONS["plan_strategy_finalize"]
-
-
 @mcp.tool(description="Execute Scheme code in the sandbox and return results.")
 async def execute_scheme(code: str, timeout: int | None = None, ctx: Context = None) -> str:
     """Execute Scheme code in the sandbox and return results.

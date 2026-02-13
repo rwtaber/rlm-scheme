@@ -62,64 +62,44 @@ result = execute_scheme(plan["alternatives"][0]["code_template"])
 result = execute_scheme(plan["creative_options"][0]["code_template"])
 ```
 
-### Option 1b: Complex/Ambiguous Tasks - Two-Phase Planning (Recommended for Quality)
+### Option 1b: Complex/Ambiguous Tasks - Iterative Refinement
 
-**Use when:** Task description is vague, scope unclear, or quality is critical.
+**Use when:** Task description is vague, scope unclear, or initial plan doesn't match expectations.
 
 ```python
-# STEP 1: Check what's ambiguous
-clarity = plan_strategy_clarify(
+# STEP 1: Start with initial understanding
+plan = plan_strategy(
     task_description="Generate comprehensive documentation for the repository",
     data_characteristics="Large Python codebase",
     priority="quality"
 )
 
-# STEP 2: Check if clarification needed
-clarity_result = json.loads(clarity)
-if not clarity_result["clarity_assessment"]["is_clear"]:
-    # Task is ambiguous - ask user the recommended questions
-    questions = clarity_result["recommended_clarifications"]
-    # Example questions returned:
-    # - "How many files are in your repository?"
-    # - "What format of documentation do you need?"
-    # - "Do you want all files documented or just public APIs?"
+# STEP 2: Review the plan
+plan_result = json.loads(plan)
+print(plan_result["recommended"]["description"])
 
-    # STEP 3: Get user's answers (you provide these)
-    user_answers = """
-    File count: 500 Python files
-    Format: API reference documentation with examples
-    Coverage: All files (comprehensive documentation)
-    """
+# STEP 3: If plan doesn't match expectations, refine with more details
+# For example, if the plan only processes 20 files but you want all 500:
+plan = plan_strategy(
+    task_description="Generate API reference documentation for all Python modules",
+    data_characteristics="500 Python files, ~50KB each, 25MB total",
+    scale="comprehensive",      # Explicitly request full coverage
+    min_outputs=500,           # One doc per file
+    coverage_target="all files",
+    priority="quality"
+)
 
-    # STEP 4: Generate strategy with clarifications
-    plan = plan_strategy_finalize(
-        task_description="Generate comprehensive documentation for the repository",
-        clarifications=user_answers,
-        scale="comprehensive",  # Based on user's answer
-        min_outputs=500,         # One doc per file
-        coverage_target="all files",
-        priority="quality"
-    )
-else:
-    # Task is clear - skip straight to planning
-    plan = plan_strategy(
-        task_description="Generate comprehensive documentation for the repository",
-        scale="comprehensive",
-        priority="quality"
-    )
-
-# STEP 5: Load your data and execute
+# STEP 4: Load your data and execute
 load_context(repo_files)
-result = execute_scheme(plan["recommended"]["code_template"])
+result = execute_scheme(plan_result["recommended"]["code_template"])
 ```
 
-**Why use two-phase planning?**
-- ✅ Ensures strategy matches your actual intent
-- ✅ Prevents under-scoping (e.g., processing 20 files when you wanted 500)
-- ✅ Explicitly surfaces assumptions before expensive execution
-- ✅ Higher quality plans through clarification
-- 💰 Cost: ~$0.20-0.40 total (clarity + finalize) vs. ~$0.10-0.30 (single-shot)
-- ⏱️ Time: +5-10 seconds for extra LLM call
+**Why iterative refinement works:**
+- ✅ Each call provides fresh perspective with refined inputs
+- ✅ Adjust scale/min_outputs/coverage_target based on review
+- ✅ Simple and flexible - no multi-phase workflow
+- 💰 Cost: ~$0.10-0.40 per call (inexpensive to iterate)
+- ⏱️ Time: ~5-10 seconds per call
 
 ### Option 2: Compose Manually
 
@@ -840,40 +820,38 @@ plan = plan_strategy(
 
 ---
 
-### Two-Phase Planning: `plan_strategy_clarify()` → `plan_strategy_finalize()`
+### Iterative Refinement: Call `plan_strategy()` Multiple Times
 
 **Use when:**
 - ✅ Task description is vague ("document the large repo")
 - ✅ Unclear how many items/outputs
-- ✅ Quality and accuracy are critical
+- ✅ Initial plan doesn't match expectations
 - ✅ Risk of under-scoping or over-scoping
 
-**Cost:** ~$0.20-0.40 | **Time:** 10-15 seconds
+**Cost:** ~$0.10-0.40 per call | **Time:** 5-10 seconds per call
 
 **Workflow:**
 ```python
-# Phase 1: Identify ambiguities
-clarity = plan_strategy_clarify("Document the large repository")
-result = json.loads(clarity)
+# First call with initial understanding
+plan1 = plan_strategy("Document the large repository")
+result = json.loads(plan1)
 
-if not result["clarity_assessment"]["is_clear"]:
-    # Phase 2: Ask user, then finalize
-    questions = result["recommended_clarifications"]
-    answers = get_user_answers(questions)  # Your code to ask user
-
-    plan = plan_strategy_finalize(
-        "Document the large repository",
-        clarifications=answers,
-        scale="comprehensive",
-        min_outputs=500
-    )
+# Review output - does it match expectations?
+# If not, refine with more specific parameters:
+plan2 = plan_strategy(
+    "Generate API reference for all Python modules in repository",
+    data_characteristics="500 Python files, ~25MB total",
+    scale="comprehensive",  # Explicitly request full coverage
+    min_outputs=500,        # One doc per file
+    coverage_target="all files"
+)
 ```
 
-**Why this is better:**
-- Prevents expensive mistakes (wrong scale/scope)
-- Surfaces assumptions explicitly
-- Higher quality plans through clarification
-- Worth the extra $0.10 and 5 seconds
+**Why iterative refinement works:**
+- Simple and flexible - just call again with refined inputs
+- Each call provides fresh perspective
+- Inexpensive to iterate (~$0.10-0.40 per call)
+- Adjust parameters based on what you learn
 
 ---
 
@@ -894,10 +872,10 @@ if not result["clarity_assessment"]["is_clear"]:
 ```
 Is your task description clear and specific?
 ├─ YES → Use plan_strategy() (simple, fast)
-└─ NO → Use plan_strategy_clarify() + plan_strategy_finalize()
-         (better quality, prevents mistakes)
+└─ NO → Call plan_strategy() iteratively with refined parameters
+         until the plan matches expectations
 
-Did the generated strategies fail?
+Did the generated strategies fail after multiple refinements?
 └─ YES → Manual composition with get_combinator_reference()
 ```
 
@@ -906,9 +884,7 @@ Did the generated strategies fail?
 ## Available Tools
 
 **Planning & Reference:**
-- `plan_strategy(task, data, priority, scale)` - Single-shot planning, 3 strategy variants
-- `plan_strategy_clarify(task, data, priority)` - Identify ambiguities and generate clarifying questions
-- `plan_strategy_finalize(task, clarifications, scale, min_outputs)` - Generate strategy with clarifications incorporated
+- `plan_strategy(task, data, priority, scale, min_outputs, coverage_target)` - Generate orchestration strategy with 3 variants (recommended, alternatives, creative). Call multiple times to refine.
 - `get_usage_guide()` - This guide
 - `get_combinator_reference()` - Full docs for all 17 combinators
 - `get_codegen_reference()` - API reference
@@ -963,33 +939,30 @@ Did the generated strategies fail?
    result2 = execute_scheme(plan["creative_options"][0]["code_template"])
    ```
 
-### For Ambiguous Tasks (Better Quality)
+### For Ambiguous Tasks (Iterative Refinement)
 
-1. **Check clarity:**
+1. **Start with initial call:**
    ```python
-   clarity = plan_strategy_clarify("Your vague task here")
-   result = json.loads(clarity)
+   plan = plan_strategy("Your initial task description")
+   result = json.loads(plan)
    ```
 
-2. **If ambiguous, clarify then plan:**
+2. **Review and refine if needed:**
    ```python
-   if not result["clarity_assessment"]["is_clear"]:
-       # Show questions to user, collect answers
-       questions = result["recommended_clarifications"]
-       answers = "..." # User's answers
-
-       plan = plan_strategy_finalize(
-           "Your vague task here",
-           clarifications=answers,
-           scale="large",  # Based on user's answers
-           min_outputs=100
-       )
+   # If the plan doesn't match expectations, call again with more details
+   plan = plan_strategy(
+       "More specific task description",
+       data_characteristics="500 items, ~25MB",
+       scale="large",
+       min_outputs=100,
+       coverage_target="all items"
+   )
    ```
 
 3. **Execute:**
    ```python
    load_context(your_data)
-   result = execute_scheme(plan["recommended"]["code_template"])
+   result = execute_scheme(json.loads(plan)["recommended"]["code_template"])
    ```
 
 ### General Tips

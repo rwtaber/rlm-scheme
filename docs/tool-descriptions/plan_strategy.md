@@ -48,16 +48,30 @@ The creative_options field contains EXPERIMENTAL strategies - not just variation
 - Increased token limits (15K-20K) allow thorough planning
 - Upgraded default model to gpt-4o for better quality
 
-**Phase 2 Alternative (Multi-turn Workflow) - RECOMMENDED for Ambiguous Tasks:**
-For vague task descriptions, use `plan_strategy_clarify()` → collect user answers → `plan_strategy_finalize()` instead.
+**Iterative Refinement:**
+For ambiguous or complex tasks, call plan_strategy() multiple times with refined inputs:
+1. Start with initial task description
+2. Review the recommendations
+3. If the strategy doesn't match expectations, call again with:
+   - More specific task_description
+   - Adjusted scale/min_outputs/coverage_target parameters
+   - Additional constraints or data_characteristics
+4. Each call provides fresh perspective with ~$0.10-0.40 cost
 
-**When to use two-phase planning:**
-- Task description is vague ("document the large repo")
-- Unclear how many items to process or outputs to generate
-- Quality and accuracy are critical
-- Risk of under-scoping (processing 20 files when you wanted 500)
+**Example iterative workflow:**
+```python
+# First call with initial understanding
+result1 = plan_strategy("Document the repository", scale="medium")
 
-See **"Planning Workflows"** section in usage guide for detailed comparison.
+# After reviewing output, refine with specifics
+result2 = plan_strategy(
+    "Document all Python modules in repository",
+    data_characteristics="500 Python files, ~50KB each",
+    scale="comprehensive",
+    min_outputs=500,
+    coverage_target="all files"
+)
+```
 
 **Examples:**
 
