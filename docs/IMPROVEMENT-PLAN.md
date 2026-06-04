@@ -811,45 +811,105 @@ Paired { count > 50 }
 
 ### Changes to mcp_server.py
 
+**New classes (add near line 210):**
+
+The dry-run system uses two key classes identified by critique review:
+
+1. **`DryRunContext`** — isolated metrics collector that does NOT touch `_register_call` / `_complete_call` or any real execution accounting:
+
+```python
+class ExecutionMode(Enum):
+    REAL = "real"
+    DRY_RUN = "dry_run"
+
+class DryRunContext:
+    """Isolated metrics collector for dry-run execution.
+    
+    Critical: does NOT call _register_call/_complete_call, which would
+    contaminate the real _call_registry, cumulative token counters, and
+    execution history.
+    """
+    def __init__(self):
+        self.calls = []
+        self.total_sync = 0
+        self.total_async = 0
+        self.max_concurrent = 0
+        self.models = {}  # model -> count
+        self._current_pending = 0
+    
+    def record_call(self, call_type: str, model: str, instruction: str, depth: int):
+        self.calls.append({
+            "instruction_preview": instruction[:80],
+            "model": model,
+            "type": call_type,
+            "depth": depth,
+        })
+        self.models[model] = self.models.get(model, 0) + 1
+        if call_type == "sync":
+            self.total_sync += 1
+        else:
+            self.total_async += 1
+            self._current_pending += 1
+            self.max_concurrent = max(self.max_concurrent, self._current_pending)
+    
+    def complete_async(self):
+        self._current_pending = max(0, self._current_pending - 1)
+    
+    @property
+    def total_calls(self):
+        return self.total_sync + self.total_async
+```
+
+2. **`DryRunScheduler`** — creates futures with controlled timing instead of pre-resolved futures. Pre-resolved futures break `await-any`'s rolling window (see Critique Response #1):
+
+```python
+class DryRunScheduler:
+    """Simulates async execution timing for structural analysis.
+    
+    Why not pre-resolved futures: map-async (racket_server.rkt lines 857-912)
+    uses await-any for rolling windows. The Python-side await-any
+    (mcp_server.py lines 717-820) uses concurrent.futures.wait(..., FIRST_COMPLETED).
+    If all futures are pre-resolved, wait() returns ALL of them in `done`, not
+    just one. The rolling window scheduler then thinks all slots are free
+    simultaneously, launching all remaining items at once instead of one-at-a-time.
+    This undercounts calls in pipelined executions where items > max-concurrent.
+    """
+    def __init__(self, ctx: DryRunContext):
+        self._resolve_delay = 0.001  # 1ms simulated latency
+        self._ctx = ctx
+    
+    def create_future(self, mock_result: dict) -> concurrent.futures.Future:
+        """Create a future that resolves after a small delay."""
+        future = concurrent.futures.Future()
+        
+        def resolve():
+            time.sleep(self._resolve_delay)
+            future.set_result(mock_result)
+            self._ctx.complete_async()
+        
+        threading.Thread(target=resolve, daemon=True).start()
+        return future
+```
+
 **RacketREPL.__init__ (line 221):** Add instance variables:
 ```python
-self._dry_run = False
-self._dry_run_metrics = {
-    "total_calls": 0,
-    "sync_calls": 0,
-    "async_calls": 0,
-    "max_concurrent_pending": 0,
-    "call_tree": [],  # [{instruction_preview, model, type, depth}]
-    "models_used": {},  # model -> count
-}
+self._execution_mode = ExecutionMode.REAL
+self._dry_run_ctx = None       # DryRunContext, set only during dry-run
+self._dry_run_scheduler = None  # DryRunScheduler, set only during dry-run
 ```
 
 **RacketREPL.send(), `op == "llm-query"` branch (line 510):** Insert dry-run bypass at the top of the branch, before the existing `_call_llm()` call:
 ```python
 if op == "llm-query":
-    if self._dry_run:
-        # Generate deterministic mock response
+    if self._execution_mode == ExecutionMode.DRY_RUN:
         instruction = msg.get("instruction", "")
         data = msg.get("data", "")
         model = msg.get("model", "") or os.environ.get("RLM_SUB_MODEL", "gpt-4o")
         mock_hash = hashlib.md5((instruction + data[:100]).encode()).hexdigest()[:8]
         mock_text = f"[DRY-RUN:{mock_hash}] Mock response for: {instruction[:60]}"
         
-        # Track metrics
-        self._dry_run_metrics["total_calls"] += 1
-        self._dry_run_metrics["sync_calls"] += 1
-        self._dry_run_metrics["models_used"][model] = self._dry_run_metrics["models_used"].get(model, 0) + 1
-        self._dry_run_metrics["call_tree"].append({
-            "instruction_preview": instruction[:80],
-            "model": model,
-            "type": "sync",
-            "depth": self._current_depth,
-        })
-        
-        # Still register in call_registry for stats
-        call_id = self._next_call_id()
-        self._register_call(call_id, "sync-dry", model, instruction, depth=self._current_depth)
-        self._complete_call(call_id, 0, 0.0)
+        # Record in isolated DryRunContext (NOT _register_call/_complete_call)
+        self._dry_run_ctx.record_call("sync", model, instruction, self._current_depth)
         
         # Write mock response back to Racket stdin
         self.proc.stdin.write(json.dumps({
@@ -858,40 +918,29 @@ if op == "llm-query":
             "completion_tokens": 0,
         }) + "\n")
         self.proc.stdin.flush()
-        continue  # or equivalent control flow to skip the real call
+        continue  # skip the real _call_llm()
     
     # ... existing real call code ...
 ```
 
-**RacketREPL.send(), `op == "llm-query-async"` branch (line 559):** Similar bypass:
+**RacketREPL.send(), `op == "llm-query-async"` branch (line 559):** Use DryRunScheduler instead of pre-resolved futures:
 ```python
 elif op == "llm-query-async":
-    if self._dry_run:
+    if self._execution_mode == ExecutionMode.DRY_RUN:
         instruction = msg.get("instruction", "")
         data = msg.get("data", "")
         model = msg.get("model", "") or os.environ.get("RLM_SUB_MODEL", "gpt-4o")
         mock_hash = hashlib.md5((instruction + data[:100]).encode()).hexdigest()[:8]
         mock_text = f"[DRY-RUN:{mock_hash}] Mock async for: {instruction[:60]}"
         
-        self._dry_run_metrics["total_calls"] += 1
-        self._dry_run_metrics["async_calls"] += 1
-        self._dry_run_metrics["models_used"][model] = self._dry_run_metrics["models_used"].get(model, 0) + 1
-        self._dry_run_metrics["call_tree"].append({
-            "instruction_preview": instruction[:80],
-            "model": model,
-            "type": "async",
-            "depth": self._current_depth,
-        })
+        # Record in isolated DryRunContext
+        self._dry_run_ctx.record_call("async", model, instruction, self._current_depth)
         
-        # Create pre-resolved future
-        future = concurrent.futures.Future()
-        future.set_result({"text": mock_text, "prompt_tokens": 0, "completion_tokens": 0})
+        # Use DryRunScheduler to create delayed future (NOT pre-resolved).
+        # This preserves await-any's rolling window scheduling behavior.
+        mock_result = {"text": mock_text, "prompt_tokens": 0, "completion_tokens": 0}
+        future = self._dry_run_scheduler.create_future(mock_result)
         self._pending[msg["id"]] = future
-        
-        # Track max concurrent pending
-        current_pending = len(self._pending)
-        if current_pending > self._dry_run_metrics["max_concurrent_pending"]:
-            self._dry_run_metrics["max_concurrent_pending"] = current_pending
         
         # No response to Racket (same as real async -- Racket continues immediately)
         continue
@@ -904,13 +953,16 @@ elif op == "llm-query-async":
 @mcp.tool(description="Simulate orchestration without real LLM calls. Returns structural analysis.")
 async def dry_run_scheme(code: str, ctx: Context = None) -> str:
     backend = get_backend()
-    backend._dry_run = True
-    backend._dry_run_metrics = {
-        "total_calls": 0, "sync_calls": 0, "async_calls": 0,
-        "max_concurrent_pending": 0, "call_tree": [], "models_used": {},
-    }
-    backend.reset_call_stats()
-    _call_registry.reset_stats()
+    
+    # Set up isolated dry-run state
+    dry_ctx = DryRunContext()
+    scheduler = DryRunScheduler(dry_ctx)
+    backend._execution_mode = ExecutionMode.DRY_RUN
+    backend._dry_run_ctx = dry_ctx
+    backend._dry_run_scheduler = scheduler
+    # NOTE: do NOT call backend.reset_call_stats() or _call_registry.reset_stats()
+    # — the whole point of DryRunContext is to leave real accounting untouched.
+    
     loop = asyncio.get_event_loop()
     t_start = time.monotonic()
     
@@ -921,10 +973,12 @@ async def dry_run_scheme(code: str, ctx: Context = None) -> str:
     except Exception as e:
         return json.dumps({"status": "error", "message": str(e)})
     finally:
-        backend._dry_run = False
+        # Always reset to real mode, even on error
+        backend._execution_mode = ExecutionMode.REAL
+        backend._dry_run_ctx = None
+        backend._dry_run_scheduler = None
     
     elapsed = round(time.monotonic() - t_start, 3)
-    metrics = backend._dry_run_metrics
     
     # Estimate cost from model usage
     MODEL_COSTS = {
@@ -933,29 +987,38 @@ async def dry_run_scheme(code: str, ctx: Context = None) -> str:
     }
     estimated_cost = sum(
         count * MODEL_COSTS.get(model, 0.01)
-        for model, count in metrics["models_used"].items()
+        for model, count in dry_ctx.models.items()
     )
     
     # Compute max depth from call tree
-    max_depth = max((c["depth"] for c in metrics["call_tree"]), default=0)
+    max_depth = max((c["depth"] for c in dry_ctx.calls), default=0)
+    
+    # Nesting depth warning (see Literature section: cap at 3 levels)
+    warnings = []
+    if max_depth > 3:
+        warnings.append(
+            f"Nesting depth {max_depth} exceeds recommended maximum of 3. "
+            f"Consider using recursive-spawn for additional depth."
+        )
     
     return json.dumps({
         "status": resp["status"],
         "value": resp.get("result", ""),
         "dry_run_elapsed": elapsed,
         "structure": {
-            "total_calls": metrics["total_calls"],
-            "sync_calls": metrics["sync_calls"],
-            "async_calls": metrics["async_calls"],
-            "max_fan_out": metrics["max_concurrent_pending"],
+            "total_calls": dry_ctx.total_calls,
+            "sync_calls": dry_ctx.total_sync,
+            "async_calls": dry_ctx.total_async,
+            "max_fan_out": dry_ctx.max_concurrent,
             "max_depth": max_depth,
-            "models_used": metrics["models_used"],
+            "models_used": dry_ctx.models,
         },
         "estimates": {
             "cost": f"${estimated_cost:.2f}",
-            "latency_range": f"{metrics['sync_calls'] * 2}s - {metrics['sync_calls'] * 5}s (sync calls dominate)",
+            "latency_range": f"{dry_ctx.total_sync * 2}s - {dry_ctx.total_sync * 5}s (sync calls dominate)",
         },
-        "call_tree": metrics["call_tree"][:50],  # truncate for readability
+        "warnings": warnings,
+        "call_tree": dry_ctx.calls[:50],  # truncate for readability
     }, indent=2)
 ```
 
@@ -987,41 +1050,56 @@ Add new section before the combinator listings:
 
 Types used in combinator signatures:
 
-    Item          = a single string (LLM response text, document text, etc.)
-    [Item]        = list of items
+    SyntaxObject  = opaque wrapped LLM response (from llm-query). MUST unwrap with (syntax-e result) before string operations.
+    AsyncHandle   = opaque handle from llm-query-async. NOT a string — must be awaited by a combinator (map-async, race, etc.)
+    String        = plain unwrapped string (result of syntax-e, or auto-unwrapped by map-async/fan-out-aggregate)
+    [A]           = list of A
     Fn<A, B>      = function from A to B
     Fn<A, B, C>   = function from (A, B) to C
-    AsyncHandle   = opaque handle from llm-query-async (NOT a string -- must be awaited)
     Thunk<A>      = () -> A (zero-argument function)
-    SyntaxObject  = wrapped LLM response (must unwrap with syntax-e before string operations)
+    Acc           = accumulator type (typically String)
 
 Key rules:
-- llm-query returns SyntaxObject, must unwrap with (syntax-e result)
-- llm-query-async returns AsyncHandle, awaited by map-async/fan-out-aggregate
-- map-async/fan-out-aggregate auto-unwrap: results are plain strings (no syntax-e needed)
+- llm-query returns SyntaxObject → must unwrap with (syntax-e result)
+- llm-query-async returns AsyncHandle → must be awaited by a combinator
+- map-async/fan-out-aggregate auto-unwrap: results are plain Strings (no syntax-e needed)
+- Whether a combinator awaits internally or just calls thunks matters for type correctness
 ```
 
-Add type signature to each combinator's `**Signature:**` line:
+Add type signature to each combinator's `**Signature:**` line. Signatures are grouped by async behavior (verified against racket_server.rkt):
 
 ```
+;; Combinators that AWAIT internally (return unwrapped values):
+map-async         : (Fn<Item, AsyncHandle>, [Item], #:max-concurrent Int) -> [String]
+fan-out-aggregate : (Fn<Item, AsyncHandle>, Fn<[String], B>, [Item], #:max-concurrent Int) -> B
+race              : [Thunk<AsyncHandle>] -> String
+
+;; Combinators that DON'T await (return whatever thunks return):
 parallel          : ([Thunk<A>], #:max-concurrent Int) -> [A]
-race              : [Thunk<AsyncHandle>] -> Item
-sequence          : (Fn<A,B>, Fn<B,C>, ...) -> Fn<A, ...last output>
-fold-sequential   : (Fn<Acc, Item, Acc>, Acc, [Item]) -> Acc
-tree-reduce       : (Fn<Item..., Item>, [Item], #:branch-factor Int) -> Item
-fan-out-aggregate : (Fn<Item, AsyncHandle>, Fn<[Item], B>, [Item]) -> B
-recursive-spawn   : (Thunk<String>, #:depth Int) -> Fn<Item, Item>
-iterate-until     : (Fn<A, A>, Fn<A, Bool>, A, #:max-iter Int) -> A
-critique-refine   : (Thunk<Item>, Fn<Item, Item>, Fn<Item, Item, Item>) -> Item
-with-validation   : (Fn<A, B>, Fn<B, Bool>) -> Fn<A, B>
 vote              : ([Thunk<A>], #:method Symbol) -> A
 ensemble          : ([Thunk<A>], #:aggregator Fn<[A], B>) -> B
-tiered            : (Fn<Item, A>, Fn<[A], B>, [Item]) -> B
-active-learning   : (Fn<Item, A>, Fn<Item, A>, Fn<A, Float>, [Item]) -> [A]
-memoized          : (Fn<A, B>, #:key-fn Fn<A, String>) -> Fn<A, B>
-choose            : (Fn<A, Bool>, Fn<A, B>, Fn<A, B>) -> Fn<A, B>
+
+;; Combinators that are synchronous (no async involvement):
+tiered            : (Fn<Item, A>, Fn<[A], B>, [Item]) -> B       ;; NOTE: uses sequential map, NOT map-async
+fold-sequential   : (Fn<Acc, Item, Acc>, Acc, [Item]) -> Acc
+tree-reduce       : (Fn<Item..., Item>, [Item], #:branch-factor Int) -> Item
+sequence          : (Fn<A,B>, Fn<B,C>, ...) -> Fn<A, ...last output>
+iterate-until     : (Fn<A, A>, Fn<A, Bool>, A, #:max-iter Int) -> A
+critique-refine   : (Thunk<Item>, Fn<Item, Item>, Fn<Item, Item, Item>, #:max-iter Int) -> Item
+
+;; Wrappers (preserve inner type):
+memoized          : Fn<A, B> -> Fn<A, B>
+with-validation   : (Fn<A, B>, Fn<B, Bool>) -> Fn<A, B>
 try-fallback      : (Fn<A, B>, Fn<A, B>) -> Fn<A, B>
+choose            : (Fn<A, Bool>, Fn<A, B>, Fn<A, B>) -> Fn<A, B>
+
+;; Delegation:
+recursive-spawn   : (Thunk<String>, #:depth Int) -> Fn<Item, Item>
+;;   NOTE: #:depth keyword is accepted but currently dead (racket_server.rkt lines 1103-1108).
+;;   Actual depth enforcement is global in Python (MAX_RECURSION_DEPTH = 3).
 ```
+
+**Critical distinction: `tiered` is sequential.** It uses `map` (not `map-async`) to apply the cheap function. For 500+ items this is dramatically slower than parallel alternatives. For parallel tiered processing, use `fan-out-aggregate` with a cheap model in the map-fn and an expensive model in the reduce-fn.
 
 Add "Common Type Errors" section:
 
@@ -1078,6 +1156,7 @@ One markdown file per shape, each ~80-100 lines (vs 275 for the monolithic promp
 5. Output format (same JSON structure as current)
 
 Files:
+- `direct.md` -- no combinator needed; single llm-query or llm-query + py-exec
 - `batch.md` -- fan-out-aggregate, map-async, tiered, active-learning, memoized
 - `synthesize.md` -- tree-reduce, fold-sequential, ensemble
 - `search.md` -- race, vote, iterate-until
@@ -1094,52 +1173,135 @@ Files:
 ### Changes to mcp_server.py
 
 **New internal function `_classify_task()` (add near line 1285):**
+
+The classification is a three-phase process (see Critique Response #5). The decision tree is implemented as deterministic code, NOT as a soft LLM classifier. The LLM is used ONLY to fill missing structured fields when they can't be parsed from the caller's input.
+
 ```python
-_CLASSIFICATION_PROMPT = """Classify this task into exactly one TaskShape.
+def _deterministic_classify(fields: dict) -> dict:
+    """Pure-code decision tree. No LLM calls.
+    
+    fields must contain: item_count (int|None), independent (bool|None),
+    output_type ("one"|"list"|None), operation (str|None), has_second_phase (bool).
+    """
+    item_count = fields.get("item_count")
+    independent = fields.get("independent")
+    output_type = fields.get("output_type")
+    operation = fields.get("operation", "")
+    has_second_phase = fields.get("has_second_phase", False)
+    
+    # Q0: Is this trivially simple? (Direct shape)
+    if (item_count is not None and item_count <= 1
+            and output_type == "one"
+            and not has_second_phase):
+        return {"shape": "direct", "confidence": 1.0, "reasoning": "single input, single output, no orchestration needed"}
+    
+    # Q1: Many input items?
+    if item_count is not None and item_count > 1:
+        if independent:
+            # Q3: What's the per-item operation?
+            if operation in ("label", "categorize", "classify"):
+                shape = "classify"
+            elif operation in ("check", "grade", "validate", "audit"):
+                shape = "validate"
+            else:
+                shape = "batch"  # default for independent items: transform/extract
+        else:
+            # Q4: Does information accumulate?
+            if operation in ("accumulate", "fold", "running"):
+                shape = "synthesize"  # fold-sequential
+            else:
+                shape = "pipeline"
+    elif item_count == 1 or item_count is None:
+        if operation in ("improve", "refine", "edit", "polish"):
+            shape = "refine"
+        elif operation in ("decompose", "break", "split", "parse"):
+            shape = "decompose"
+        elif operation in ("generate", "create", "write", "produce"):
+            shape = "generate"
+        elif operation in ("compare", "choose", "evaluate", "rank"):
+            if output_type == "one":
+                shape = "search"
+            else:
+                shape = "compare"
+        elif operation in ("aggregate", "count", "statistics", "metric"):
+            shape = "aggregate"
+        elif output_type == "one":
+            shape = "synthesize"
+        else:
+            shape = "direct"  # fallback for unknown single-input tasks
+    else:
+        shape = "direct"
+    
+    # Q9: Second phase?
+    if has_second_phase:
+        return {"shape": "composite", "confidence": 0.9,
+                "reasoning": f"multi-phase task, primary shape: {shape}",
+                "primary_shape": shape}
+    
+    return {"shape": shape, "confidence": 0.9, "reasoning": f"deterministic classification from structured fields"}
 
-Shapes:
-- Batch: Apply same operation to many independent items
-- Synthesize: Combine/summarize many inputs into one output
-- Search: Explore solution space, find best answer
-- Refine: Iteratively improve a single artifact
-- Compare: Evaluate alternatives against criteria
-- Classify: Categorize/label items
-- Pipeline: Multi-stage sequential transformation
-- Generate: Create new content from scratch (no input items to transform)
-- Decompose: Break one complex thing into structured parts
-- Validate: Check items against criteria, produce pass/fail assessments
-- Aggregate: Gather structured/numeric metrics across items
-- Composite: Task clearly has multiple phases (e.g., extract THEN synthesize)
 
-If Composite, identify the 2-3 constituent shapes in order.
+_FIELD_EXTRACTION_PROMPT = """Extract structured fields from this task description.
 
 Task: {task_description}
 Data: {data_characteristics}
 
-Return ONLY JSON: {{"shape": "...", "confidence": 0.0-1.0, "reasoning": "one sentence", "sub_shapes": ["shape1", "shape2"] (only if Composite)}}"""
+Return ONLY JSON with these fields:
+{{
+  "item_count": <integer or null if unknown>,
+  "independent": <true if items can be processed independently, false if order matters, null if unclear>,
+  "output_type": "one" or "list" (does the task produce a single result or a list?),
+  "operation": <one word: "extract", "label", "check", "improve", "decompose", "generate", "compare", "aggregate", or other>,
+  "has_second_phase": <true if task clearly has two phases like "extract THEN synthesize">
+}}"""
 
-def _classify_task(task_description: str, data_characteristics: str) -> dict:
-    backend = get_backend()
-    result = backend._call_llm(
-        instruction=_CLASSIFICATION_PROMPT.format(
-            task_description=task_description,
-            data_characteristics=data_characteristics or "Not specified",
-        ),
-        data="",
-        model="gpt-4o-mini",
-        temperature=0.0,
-        max_tokens=200,
-    )
-    try:
-        text = result["text"].strip()
-        # Extract JSON from markdown fences if present
-        json_match = re.search(r'```(?:json)?\s*\n(.*?)```', text, re.DOTALL)
-        if json_match:
-            text = json_match.group(1).strip()
-        return json.loads(text)
-    except (json.JSONDecodeError, KeyError):
-        return {"shape": "unknown", "confidence": 0.0, "reasoning": "classification failed"}
+
+def _classify_task(task_description: str, data_characteristics: str,
+                   structured_fields: dict | None = None) -> dict:
+    """Classify task using deterministic rules first, LLM only for gaps.
+    
+    Three phases:
+    1. Use caller-provided structured_fields if available
+    2. Use LLM to fill any missing fields (NOT to classify directly)
+    3. Run deterministic decision tree on complete fields
+    """
+    required_fields = ["item_count", "independent", "output_type", "operation", "has_second_phase"]
+    fields = dict(structured_fields or {})
+    
+    # Phase 1: Check which fields are already provided
+    missing = [f for f in required_fields if f not in fields or fields[f] is None]
+    
+    # Phase 2: Use LLM only to fill missing fields
+    if missing:
+        backend = get_backend()
+        result = backend._call_llm(
+            instruction=_FIELD_EXTRACTION_PROMPT.format(
+                task_description=task_description,
+                data_characteristics=data_characteristics or "Not specified",
+            ),
+            data="",
+            model="gpt-4o-mini",
+            temperature=0.0,
+            max_tokens=200,
+        )
+        try:
+            text = result["text"].strip()
+            json_match = re.search(r'```(?:json)?\s*\n(.*?)```', text, re.DOTALL)
+            if json_match:
+                text = json_match.group(1).strip()
+            llm_fields = json.loads(text)
+            # Only fill gaps — caller-provided fields take precedence
+            for f in missing:
+                if f in llm_fields:
+                    fields[f] = llm_fields[f]
+        except (json.JSONDecodeError, KeyError):
+            pass  # proceed with whatever fields we have
+    
+    # Phase 3: Deterministic classification
+    return _deterministic_classify(fields)
 ```
+
+This means: `plan_strategy` gains optional structured parameters (`item_count`, `independent`, `output_type`, `operation`). If provided, classification is pure code with zero LLM calls. If missing, the LLM fills gaps (~$0.001), then classification is still pure code.
 
 **Load shape prompts at module level (add near line 210):**
 ```python
@@ -1153,7 +1315,7 @@ if os.path.isdir(_SHAPE_PROMPT_DIR):
                 _SHAPE_PROMPTS[shape_name] = f.read()
 ```
 
-**Modify `plan_strategy` (line 1285):** Add `task_shape` parameter, two-phase flow:
+**Modify `plan_strategy` (line 1285):** Add `task_shape` and structured field parameters, two-phase flow with plan_id:
 ```python
 @mcp.tool(description="Design an optimal orchestration strategy for your task.")
 def plan_strategy(
@@ -1164,15 +1326,32 @@ def plan_strategy(
     scale: str = "medium",
     min_outputs: int | None = None,
     coverage_target: str | None = None,
-    task_shape: str | None = None,  # NEW: override classification
+    task_shape: str | None = None,  # override classification
+    # Structured fields for deterministic classification (Critique Response #5):
+    item_count: int | None = None,
+    independent: bool | None = None,
+    output_type: str | None = None,  # "one" or "list"
+    operation: str | None = None,    # "extract", "label", "check", etc.
 ) -> str:
+    # Generate unique plan_id for history keying (Critique Response #7)
+    plan_id = str(uuid.uuid4())
+    
     # Phase 1: Classify task shape
-    classification = None
     if task_shape:
         shape = task_shape.lower()
         classification = {"shape": shape, "confidence": 1.0, "reasoning": "user-specified"}
     else:
-        classification = _classify_task(task_description, data_characteristics)
+        # Build structured_fields from caller-provided parameters
+        structured_fields = {}
+        if item_count is not None: structured_fields["item_count"] = item_count
+        if independent is not None: structured_fields["independent"] = independent
+        if output_type is not None: structured_fields["output_type"] = output_type
+        if operation is not None: structured_fields["operation"] = operation
+        
+        classification = _classify_task(
+            task_description, data_characteristics,
+            structured_fields=structured_fields if structured_fields else None,
+        )
         shape = classification.get("shape", "unknown")
     
     # Phase 2: Select prompt
@@ -1182,7 +1361,7 @@ def plan_strategy(
         # Fall back to monolithic prompt
         prompt_template = _PLANNER_PROMPT_TEMPLATE
     
-    # Inject history if available (Improvement 5)
+    # Inject history if available (Improvement 6, keyed by plan_id)
     history_section = _load_relevant_history(task_description, shape)
     
     # Format prompt
@@ -1198,10 +1377,19 @@ def plan_strategy(
     )
     
     # ... rest of existing plan_strategy (model call, JSON parsing, metadata) ...
-    # Add to _meta:
+    # Add to _meta (plan_id replaces _last_plan_context global):
+    parsed["_meta"]["plan_id"] = plan_id
     parsed["_meta"]["task_shape"] = shape
     parsed["_meta"]["classification_confidence"] = classification["confidence"]
     parsed["_meta"]["classification_reasoning"] = classification.get("reasoning", "")
+    # Store plan context keyed by plan_id for history recording
+    _plan_contexts[plan_id] = {
+        "task_description": task_description,
+        "task_shape": shape,
+        "strategy_name": parsed.get("recommended", {}).get("strategy_name", ""),
+        "template_used": parsed.get("recommended", {}).get("template_name", ""),
+        "scale": scale,
+    }
 ```
 
 ### New file: tests/test_task_classification.py
@@ -1225,85 +1413,153 @@ Tests:
 
 ### Template format
 
-Each template is a markdown file in `docs/templates/` with:
+Templates are stored as **JSON manifests** in `docs/templates/` (see Critique Response #6). This replaces the earlier markdown-based template proposal. JSON manifests enable:
+- Typed slot validation (string, model enum, int with min/max)
+- Proper Scheme string escaping via `json.dumps()` instead of fragile `f'"{value}"'`
+- Machine-readable expected_calls_formula for dry-run cross-checking
 
-```markdown
-# Template: Batch Extract and Synthesize
+Example: `docs/templates/batch-extract-synthesize.json`:
 
-**Shape:** Batch (with synthesis phase)
-**Trigger:** Processing many items with extraction then combining results
-**Produces:** Single synthesized output from all items
-
-## Slots
-
-| Slot | Type | Default | Description |
-|------|------|---------|-------------|
-| EXTRACTION_INSTRUCTION | string | (required) | Prompt for extracting from each item |
-| SYNTHESIS_INSTRUCTION | string | (required) | Prompt for combining extractions |
-| EXTRACT_MODEL | model | gpt-4o-mini | Model for per-item extraction |
-| SYNTH_MODEL | model | gpt-4o | Model for synthesis |
-| MAX_CONCURRENT | int (5-50) | 20 | Concurrent extraction limit |
-| BRANCH_FACTOR | int (3-10) | 5 | Tree-reduce branching factor |
-
-## Code
-
-    (define results
-      (fan-out-aggregate
-        (lambda (item)
-          (llm-query-async #:instruction <<EXTRACTION_INSTRUCTION>>
-                           #:data item
-                           #:model <<EXTRACT_MODEL>>))
-        (lambda (extractions)
-          (tree-reduce
-            (lambda args
-              (syntax-e (llm-query #:instruction <<SYNTHESIS_INSTRUCTION>>
-                                   #:data (string-join args "\n---\n")
-                                   #:model <<SYNTH_MODEL>>)))
-            extractions
-            #:branch-factor <<BRANCH_FACTOR>>))
-        context
-        #:max-concurrent <<MAX_CONCURRENT>>))
-    (finish results)
-
-## Structural Profile (from dry-run)
-- For 100 items: 100 async + 25 reduce = 125 total calls
-- For 500 items: 500 async + 125 reduce = 625 total calls
-- Cost formula: (N * extract_cost) + (N/branch_factor * synth_cost)
+```json
+{
+  "name": "batch-extract-synthesize",
+  "shape": "batch",
+  "trigger": "Processing many items with extraction then combining results",
+  "produces": "Single synthesized output from all items",
+  "slots": {
+    "EXTRACTION_INSTRUCTION": {
+      "type": "string",
+      "required": true,
+      "description": "Prompt for extracting from each item"
+    },
+    "SYNTHESIS_INSTRUCTION": {
+      "type": "string",
+      "required": true,
+      "description": "Prompt for combining extractions"
+    },
+    "EXTRACT_MODEL": {
+      "type": "model",
+      "default": "gpt-4o-mini",
+      "enum": ["gpt-4.1-nano", "gpt-4o-mini", "gpt-4o", "gpt-4.5"],
+      "description": "Model for per-item extraction"
+    },
+    "SYNTH_MODEL": {
+      "type": "model",
+      "default": "gpt-4o",
+      "enum": ["gpt-4o-mini", "gpt-4o", "gpt-4.5"],
+      "description": "Model for synthesis"
+    },
+    "MAX_CONCURRENT": {
+      "type": "int",
+      "default": 20,
+      "min": 1,
+      "max": 50,
+      "description": "Concurrent extraction limit"
+    },
+    "BRANCH_FACTOR": {
+      "type": "int",
+      "default": 5,
+      "min": 2,
+      "max": 15,
+      "description": "Tree-reduce branching factor"
+    }
+  },
+  "code": "(define results\n  (fan-out-aggregate\n    (lambda (item)\n      (llm-query-async #:instruction <<EXTRACTION_INSTRUCTION>>\n                       #:data item\n                       #:model <<EXTRACT_MODEL>>))\n    (lambda (extractions)\n      (tree-reduce\n        (lambda args\n          (syntax-e (llm-query #:instruction <<SYNTHESIS_INSTRUCTION>>\n                               #:data (string-join args \"\\n---\\n\")\n                               #:model <<SYNTH_MODEL>>)))\n        extractions\n        #:branch-factor <<BRANCH_FACTOR>>))\n    context\n    #:max-concurrent <<MAX_CONCURRENT>>))\n(finish results)",
+  "expected_calls_formula": "N + ceil(N / BRANCH_FACTOR)",
+  "structural_profile": {
+    "100_items": "100 async + 25 reduce = 125 total calls",
+    "500_items": "500 async + 125 reduce = 625 total calls"
+  }
+}
 ```
 
 ### Templates to create
 
 | File | Shape | Description |
 |------|-------|-------------|
-| `batch-extract-synthesize.md` | Batch | fan-out-aggregate + tree-reduce. The workhorse. |
-| `batch-extract-only.md` | Batch | map-async, return list of results. No synthesis phase. |
-| `batch-tiered.md` | Batch/Classify | Cheap model on all, expensive on uncertain. active-learning pattern. |
-| `iterative-refinement.md` | Refine | critique-refine loop with configurable max iterations. |
-| `multi-model-vote.md` | Compare | Vote across 3 models, majority/plurality selection. |
-| `sequential-pipeline.md` | Pipeline | sequence of 2-4 stages with validation gates. |
-| `hierarchical-synthesis.md` | Synthesize | tree-reduce only (items already extracted, just need combining). |
-| `generate-n-items.md` | Generate | Parallel generation with deduplication. |
-| `decompose-and-process.md` | Decompose | Break input into parts, then process each. |
-| `validate-all.md` | Validate | fan-out-aggregate with structured pass/fail output. |
+| `direct-single-call.json` | Direct | Single llm-query, no combinator. Simplest possible strategy. |
+| `batch-extract-synthesize.json` | Batch | fan-out-aggregate + tree-reduce. The workhorse. |
+| `batch-extract-only.json` | Batch | map-async, return list of results. No synthesis phase. |
+| `batch-tiered.json` | Batch/Classify | Cheap model on all, expensive on uncertain. active-learning pattern. |
+| `iterative-refinement.json` | Refine | critique-refine loop with configurable max iterations. |
+| `multi-model-vote.json` | Compare | Vote across 3 models, majority/plurality selection. |
+| `sequential-pipeline.json` | Pipeline | sequence of 2-4 stages with validation gates. |
+| `hierarchical-synthesis.json` | Synthesize | tree-reduce only (items already extracted, just need combining). |
+| `generate-n-items.json` | Generate | Parallel generation with deduplication. |
+| `decompose-and-process.json` | Decompose | Break input into parts, then process each. |
+| `validate-all.json` | Validate | fan-out-aggregate with structured pass/fail output. |
 
 ### Changes to mcp_server.py
 
-**Add `_fill_template()` helper:**
+**Add `_fill_template()` helper (with proper validation and Scheme string escaping):**
 ```python
-def _fill_template(template_code: str, slots: dict[str, str]) -> str:
-    """Replace <<SLOT_NAME>> markers with provided values."""
-    result = template_code
-    for slot_name, value in slots.items():
+def _fill_template(template_manifest: dict, slot_values: dict) -> str:
+    """Fill a JSON-manifest template with validated slot values.
+    
+    Uses json.dumps() for Scheme string encoding instead of fragile f-string
+    quoting (see Critique Response #6).
+    """
+    slots_spec = template_manifest["slots"]
+    code = template_manifest["code"]
+    
+    # Validate all required slots are provided
+    for slot_name, spec in slots_spec.items():
+        if spec.get("required") and slot_name not in slot_values:
+            if "default" not in spec:
+                raise ValueError(f"Required slot missing: {slot_name}")
+    
+    # Merge defaults
+    merged = {}
+    for slot_name, spec in slots_spec.items():
+        if slot_name in slot_values:
+            merged[slot_name] = slot_values[slot_name]
+        elif "default" in spec:
+            merged[slot_name] = spec["default"]
+    
+    # Validate types and constraints
+    for slot_name, value in merged.items():
+        spec = slots_spec.get(slot_name, {})
+        slot_type = spec.get("type", "string")
+        
+        if slot_type == "int":
+            value = int(value)
+            if "min" in spec and value < spec["min"]:
+                raise ValueError(f"Slot {slot_name}: {value} < min {spec['min']}")
+            if "max" in spec and value > spec["max"]:
+                raise ValueError(f"Slot {slot_name}: {value} > max {spec['max']}")
+            merged[slot_name] = value
+        
+        if slot_type == "model" and "enum" in spec:
+            if value not in spec["enum"]:
+                raise ValueError(f"Slot {slot_name}: '{value}' not in {spec['enum']}")
+    
+    # Replace markers in code
+    result = code
+    for slot_name, value in merged.items():
         marker = f"<<{slot_name}>>"
         if marker not in result:
             raise ValueError(f"Unknown slot: {slot_name}")
-        # Quote string values for Scheme
-        if isinstance(value, str) and not value.startswith('"'):
-            value = f'"{value}"'
-        result = result.replace(marker, value)
+        
+        spec = slots_spec.get(slot_name, {})
+        slot_type = spec.get("type", "string")
+        
+        if slot_type == "string" or slot_type == "model":
+            # Use json.dumps for safe Scheme string encoding
+            # json.dumps("hello \"world\"") -> '"hello \\"world\\""'
+            # This is valid Scheme string syntax.
+            replacement = json.dumps(str(value))
+        elif slot_type == "int":
+            replacement = str(int(value))
+        else:
+            replacement = json.dumps(str(value))
+        
+        result = result.replace(marker, replacement)
+    
+    # Check for unfilled slots
     remaining = re.findall(r'<<(\w+)>>', result)
     if remaining:
         raise ValueError(f"Unfilled slots: {remaining}")
+    
     return result
 ```
 
@@ -1399,33 +1655,40 @@ File: `~/.rlm-scheme/strategy-history.jsonl` (one JSON object per line).
 
 **Module-level state (near line 210):**
 ```python
-_last_plan_context = {}  # Set by plan_strategy, read by execute_scheme
+import uuid
+
+# Plan contexts keyed by plan_id (UUID), not a single global.
+# This is safe under concurrent MCP tool calls (Critique Response #7).
+_plan_contexts = {}  # {plan_id: {task_description, task_shape, strategy_name, ...}}
 _HISTORY_DIR = os.path.expanduser("~/.rlm-scheme")
 _HISTORY_FILE = os.path.join(_HISTORY_DIR, "strategy-history.jsonl")
 ```
 
-**In `plan_strategy`, after successful JSON parse (line 1344):**
-```python
-_last_plan_context.update({
-    "task_description": task_description,
-    "task_shape": shape,
-    "strategy_name": parsed.get("recommended", {}).get("strategy_name", ""),
-    "template_used": parsed.get("recommended", {}).get("template_name", ""),
-    "scale": scale,
-})
-```
+**In `plan_strategy`, after successful JSON parse:** (already updated in Improvement 3 above — `plan_strategy` now generates `plan_id = str(uuid.uuid4())` and stores context in `_plan_contexts[plan_id]`).
 
 **New helper `_record_strategy_history()` (add after execute_scheme):**
 ```python
-def _record_strategy_history(code: str, outcome: str, execution_summary: dict):
+def _record_strategy_history(code: str, outcome: str, execution_summary: dict,
+                             plan_id: str | None = None):
+    """Record execution history, keyed by plan_id instead of global state.
+    
+    plan_id is the UUID returned by plan_strategy in _meta.plan_id.
+    If not provided (e.g., execute_scheme called without prior plan_strategy),
+    records with "unknown" context.
+    """
     try:
         os.makedirs(_HISTORY_DIR, exist_ok=True)
+        
+        # Look up plan context by plan_id (not from a mutable global)
+        ctx = _plan_contexts.get(plan_id, {}) if plan_id else {}
+        
         entry = {
             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            "task_shape": _last_plan_context.get("task_shape", "unknown"),
-            "task_description_preview": _last_plan_context.get("task_description", "")[:100],
-            "strategy_name": _last_plan_context.get("strategy_name", ""),
-            "template_used": _last_plan_context.get("template_used", ""),
+            "plan_id": plan_id,
+            "task_shape": ctx.get("task_shape", "unknown"),
+            "task_description_preview": ctx.get("task_description", "")[:100],
+            "strategy_name": ctx.get("strategy_name", ""),
+            "template_used": ctx.get("template_used", ""),
             "code_hash": hashlib.md5(code.encode()).hexdigest()[:8],
             "outcome": outcome,
             "metrics": {
@@ -1434,12 +1697,23 @@ def _record_strategy_history(code: str, outcome: str, execution_summary: dict):
                 "total_tokens": execution_summary.get("tokens", 0),
                 "total_cost": execution_summary.get("total_cost_estimate", ""),
             },
-            "scale": _last_plan_context.get("scale", ""),
+            "scale": ctx.get("scale", ""),
         }
         with open(_HISTORY_FILE, "a") as f:
             f.write(json.dumps(entry) + "\n")
+        
+        # Clean up plan context after recording (avoid unbounded growth)
+        if plan_id and plan_id in _plan_contexts:
+            del _plan_contexts[plan_id]
     except Exception:
         pass  # Never fail the execution
+```
+
+**Modify `execute_scheme` signature (line 1364):** Add optional `plan_id` parameter:
+```python
+@mcp.tool(description="Execute Scheme orchestration code in the sandbox.")
+async def execute_scheme(code: str, plan_id: str | None = None, ctx: Context = None) -> str:
+    # ... existing execution logic ...
 ```
 
 **In `execute_scheme`, before the return (line 1469):**
@@ -1448,6 +1722,7 @@ _record_strategy_history(
     code,
     "success" if resp["status"] == "finished" else "error",
     exec_summary,
+    plan_id=plan_id,  # links execution to the plan that produced it
 )
 ```
 
@@ -1611,38 +1886,82 @@ Answer ONLY these questions as JSON:
 
 ---
 
-## Improvement 8: Progressive Summarization
+## Improvement 8: Progressive Summarization via `fold-summarizing`
 
 **Priority:** Medium-low. Addresses memory pressure in long fold-sequential chains.
 
-**Goal:** When intermediate context in a fold-sequential exceeds a token threshold, automatically summarize before the next step using a cheap model.
+**Goal:** Provide a way to automatically summarize accumulating context when it exceeds a token threshold, without silently changing `fold-sequential`'s semantics.
+
+**Design decision (Critique Response #8):** The original plan silently modified `fold-sequential` behavior based on accumulator length. This is dangerous because it:
+- Adds LLM calls that change cost and latency characteristics unpredictably
+- Changes semantics (the accumulator is now an LLM-compressed approximation, not the actual fold result)
+- Assumes the accumulator is always a string (breaks for structured data)
+
+Instead, create `fold-summarizing` as an **explicit, separate combinator** that users opt into when they know they're folding text.
 
 ### Changes to racket_server.rkt
 
-Add `summary-horizon` parameter (default: disabled):
-```scheme
-(define summary-horizon (make-parameter #f))  ; #f = disabled, number = token threshold
-```
+**Add new combinator `fold-summarizing`** (do NOT modify `fold-sequential`):
 
-In `fold-sequential`, after each accumulator update, check if the accumulator string length exceeds the horizon (approximating tokens as chars/4):
 ```scheme
-(define (fold-sequential fn init items)
+(define (fold-summarizing fn init items
+          #:horizon [horizon 8000]
+          #:summary-model [summary-model "gpt-4o-mini"]
+          #:summary-instruction [summary-instruction
+            "Compress this running summary, preserving all key facts and findings."])
+  "Like fold-sequential, but compresses the accumulator when it exceeds #:horizon tokens.
+   Use this when folding large numbers of items where context would exceed the model's window.
+   WARNING: The accumulator is periodically summarized by an LLM, so information may be lost.
+   For exact accumulation, use fold-sequential instead."
   (foldl
     (lambda (item acc)
       (let ([new-acc (fn acc item)])
-        (if (and (summary-horizon)
-                 (> (string-length new-acc) (* (summary-horizon) 4)))
-            ;; Auto-summarize
+        (if (> (string-length new-acc) (* horizon 4))  ; approx tokens as chars/4
+            ;; Explicit summarization step
             (syntax-e (llm-query
-              #:instruction "Compress this running summary, preserving all key facts and findings."
+              #:instruction summary-instruction
               #:data new-acc
-              #:model "gpt-4o-mini"))
+              #:model summary-model))
             new-acc)))
     init
     items))
 ```
 
-This is opt-in via `(parameterize ([summary-horizon 8000]) ...)`.
+**Type signature:**
+```
+fold-summarizing : (Fn<Acc, Item, String>, String, [Item],
+                    #:horizon Int, #:summary-model String, #:summary-instruction String) -> String
+```
+
+Note: Unlike `fold-sequential` which is polymorphic over accumulator type, `fold-summarizing` requires `String` accumulators because it feeds them to an LLM for compression.
+
+### Changes to docs/combinators.md
+
+Add `fold-summarizing` to the Sequential section, clearly marked as a variant of `fold-sequential`:
+
+```markdown
+### fold-summarizing
+
+Like fold-sequential, but automatically compresses the running accumulator when it exceeds
+a token threshold. Use for processing many items where context would grow beyond model limits.
+
+**Trade-off:** Periodic LLM summarization prevents context overflow but may lose detail.
+For exact accumulation (e.g., building a data structure), use fold-sequential instead.
+
+**Signature:** `(Fn<String, Item, String>, String, [Item], #:horizon Int, #:summary-model String) -> String`
+```
+
+### Impact on decision trees
+
+In the Synthesize and Batch decision trees, add `fold-summarizing` as an option:
+
+```
+Q2: Is synthesis order-sensitive?
+    YES → Is the item list large (50+ items)?
+        YES → fold-summarizing (prevents context overflow)
+        NO  → fold-sequential (exact accumulation)
+    NO  → tree-reduce
+```
 
 ---
 
@@ -1773,19 +2092,64 @@ def compile_strategy(spec: str) -> str:
 
 ## Implementation Order
 
+Revised per critique review. The key reordering: fix docs/code consistency first (cheap, reduces downstream errors), then build dry-run with correct async semantics, then verification, then templates, then classification, then history last (only after execution metadata is reliable).
+
 ```
-Phase 1: Dry Run Mode              [no dependencies, highest leverage]
-Phase 2: Combinator Type Signatures [no dependencies, documentation only]
-Phase 3: Task Classification        [benefits from Phase 2 types in prompts]
-Phase 4: Slot-Based Templates       [depends on Phase 3 for shape-specific prompts]
-Phase 5: Strategy Replay Database   [depends on Phase 1 for structural data, Phase 3 for shapes]
-Phase 6: Self-Verification Tool     [depends on Phase 1 dry-run]
-Phase 7: Progressive Summarization  [independent, touches racket_server.rkt]
+Phase 1: Docs/Code Consistency      [no dependencies, zero risk]
+          - Correct model names in docs (deprecated names → current)
+          - Add type signatures with async/sync distinction (Improvement 2)
+          - Document dead recursive-spawn #:depth parameter
+          - Document tiered's sequential behavior
+          - Add Direct shape to taxonomy
+
+Phase 2: Dry Run Mode               [no dependencies, highest leverage]
+          - DryRunScheduler with delayed futures (not pre-resolved)
+          - DryRunContext for isolated metrics (not _register_call)
+          - Nesting depth warning at >3 levels
+          - Improvement 1
+
+Phase 3: Self-Verification Tool     [depends on Phase 2 dry-run]
+          - Structural checks (deterministic lints, no LLM needed)
+          - Semantic check (cheap LLM call for deeper analysis)
+          - Improvement 7
+
+Phase 4: Machine-Readable Templates [no dependency on classification]
+          - JSON manifests with typed/validated slots
+          - Top 4 templates: Direct, Batch extract, Batch extract+synthesize, Refine
+          - _fill_template with json.dumps string encoding
+          - Improvement 4
+
+Phase 5: Task Classification        [benefits from Phase 1 types, Phase 4 templates]
+          - Deterministic decision tree (_deterministic_classify)
+          - LLM only fills missing structured fields
+          - structured_fields parameter on plan_strategy
+          - Shape-specific planner prompts (13 shapes incl. Direct)
+          - Improvement 3
+
+Phase 6: Strategy Replay Database   [depends on Phases 2+5 for reliable metadata]
+          - plan_id (UUID) keying, not _last_plan_context global
+          - execute_scheme gains plan_id parameter
+          - History rotation at 1000 entries
+          - Improvement 6
+
+Phase 7: fold-summarizing           [independent, touches racket_server.rkt]
+          - New explicit combinator (not silent fold-sequential mod)
+          - Improvement 8
+
 Phase 8: Checkpoint-Aware Retry     [independent, touches racket_server.rkt]
+          - Improvement 9
+
 Phase 9: Multi-Model Routing        [independent, touches racket_server.rkt]
+          - Improvement 10
+
 Phase 10: Reasoning Annotations     [independent, touches racket_server.rkt]
-Phase 11: Strategy Spec Compiler    [depends on Phases 3-4 for templates]
-Phase 12: Guided Plan Tool          [depends on Phases 3-4 for shapes + templates]
+           - Improvement 11
+
+Phase 11: Guided Plan Tool          [depends on Phases 4-5 for shapes + templates]
+           - Improvement 5 (Execution Simulation)
+
+Phase 12: Strategy Spec Compiler    [depends on Phases 4-5 for templates]
+           - Improvement 12
 ```
 
 Phases 1-6 are Python-side changes to mcp_server.py and documentation.
@@ -1807,9 +2171,9 @@ Phases 11-12 are the culmination: the LLM writes YAML specs, not Scheme.
 
 | File | Phase | Purpose |
 |------|-------|---------|
-| `docs/task-shapes.md` | 3 | Full taxonomy of TaskShape + DataShape + decision tree |
-| `docs/shape-prompts/*.md` (12 files) | 3 | Per-shape planner prompts |
-| `docs/templates/*.md` (10 files) | 4 | Slot-based strategy templates |
+| `docs/task-shapes.md` | 5 | Full taxonomy of TaskShape + DataShape + decision tree |
+| `docs/shape-prompts/*.md` (13 files incl. direct.md) | 5 | Per-shape planner prompts |
+| `docs/templates/*.json` (11 files incl. direct-single-call.json) | 4 | JSON manifest strategy templates |
 | `docs/tool-descriptions/dry_run_scheme.md` | 1 | Dry-run tool docs |
 | `docs/tool-descriptions/verify_strategy.md` | 6 | Verification tool docs |
 | `docs/tool-descriptions/guided_plan.md` | 12 | Guided planning tool docs |
