@@ -51,7 +51,7 @@ Each stage has a clear responsibility:
 |---|---|
 | `context_id` | Stored input data plus metadata: shape, item count, modality, independence, size estimates, and optional names. |
 | `plan_id` | Task intent and planning record: objective, constraints, inferred TaskShape/DataShape, selected template, and rationale. |
-| `artifact_id` | Compiled executable strategy: template invocation with filled typed slots, generated internal Scheme, compiler version, and code hash. |
+| `artifact_id` | Compiled executable strategy: template with filled typed slots (Scheme code after safe substitution), compiler version, and code hash. |
 | `dry_run_id` | Structural simulation for an artifact: expected calls, fan-out, recursive depth, model mix, token/cost estimates, warnings, and failure risks. |
 | `verification_id` | Verification decision: deterministic checks, dry-run interpretation, optional semantic review, pass/warn/fail status, and reasons. |
 | `execution_id` | One real execution attempt: result, stdout, trace, call metrics, token usage, errors, checkpoints, and status history. |
@@ -63,7 +63,8 @@ Normal agent flow:
 2. `plan_strategy(task, context_id, hints)` classifies the work and returns a
    `plan_id` plus a template invocation.
 3. `compile_strategy(plan_id | template_invocation)` validates typed
-   slots and returns an `artifact_id`.
+   slots, substitutes them into the template Scheme, and returns an
+   `artifact_id`.
 4. `estimate_strategy(artifact_id)` gives a static estimate.
 5. `dry_run_strategy(artifact_id)` simulates execution and returns a
    `dry_run_id`.
@@ -85,30 +86,38 @@ to the public MCP API.
 Templates are the bridge between high-level planning and executable Scheme.
 They should be data, not prompts that ask an LLM to write code.
 
-There are three levels in the compilation pipeline:
+There are two levels in the compilation pipeline:
 
 ```text
-Template (reusable pattern with $slots holes)
-    ↓  planner fills slots with concrete values
-Resolved Template (concrete computation graph, all values known)
-    ↓  compiler generates Racket code
-Scheme (executable artifact run by the Racket sandbox)
+Template (Scheme code with {{slot}} markers)
+    ↓  compiler validates slots, substitutes values, hashes result
+Artifact (executable Scheme run by the Racket sandbox)
 ```
 
-A **template** is a reusable pattern — it defines the structure of a
-computation but leaves content-specific values as typed slots (holes). For
-example, a `batch_extract_reduce` template knows that the computation is
-"map over items, then tree-reduce the results" but doesn't know what
-instruction to give the LLM, which model to use, or how many items to
-process concurrently. Those are slots.
+A **template** is a `.rkt` file containing real Scheme code that uses
+primitive runtime bindings directly. Content-specific values are represented
+as `{{slot_name}}` markers — typed holes that the compiler fills with
+concrete values. For example, a `batch_extract_reduce` template contains
+`map-async` and `tree-reduce` calls but uses `{{map_instruction}}`,
+`{{map_model}}`, and `{{max_concurrent}}` markers where content-specific
+values belong.
 
-A **resolved template** is what you get after the planner fills the slots
-with concrete values. It is a fully concrete computation graph — no holes
-remain. The compiler takes a resolved template as input and deterministically
-generates Scheme code from it. Agents never see resolved templates; they are
-an internal intermediate representation.
+Templates are Scheme, not JSON node graphs. There is no intermediate
+representation between the template and the executable artifact. The compiler
+validates slot values against the template's slot schema, performs safe
+substitution of `{{slot}}` markers with concrete values, and hashes the
+result. The output is executable Scheme that runs directly in the Racket
+sandbox.
 
-A template stores:
+A template file contains two parts:
+
+1. **Frontmatter** (structured YAML or JSON in a comment block at the top):
+   metadata, supported shapes, trigger/reject conditions, slot schema,
+   structural profile, verification rules, and examples.
+2. **Body** (Scheme code): the actual computation using primitive runtime
+   bindings with `{{slot}}` markers for content-specific values.
+
+The frontmatter stores:
 
 - `name` and `version`,
 - supported TaskShape/DataShape combinations,
@@ -118,20 +127,25 @@ A template stores:
 - model requirements such as JSON mode or image support,
 - output shape and schema expectations,
 - expected call formulas and structural profiles,
-- a node graph with `$slots` references (the template body — becomes a
-  resolved template after slot filling),
 - verification rules and dry-run warnings.
 
-The planner reads template metadata and fills slots. The compiler resolves
-the `$slots` references, validates the result, and generates Scheme. Agents
-interact only with templates (via `plan_strategy` and `compile_strategy`).
+The Scheme body uses only:
+
+- primitive runtime bindings (section 9),
+- compiler-owned helper bindings (prefixed with `__`),
+- `{{slot_name}}` markers that the compiler substitutes before execution.
+
+The planner reads template frontmatter and fills slots. The compiler
+validates slot values, substitutes them into the template body, and stores
+the result as an immutable artifact. Agents interact only with templates
+(via `plan_strategy` and `compile_strategy`).
 
 This division is important:
 
 - LLMs choose strategy intent and content slots (template selection + slot
   filling).
-- Deterministic code resolves slots, chooses syntax, composes primitives,
-  and checks safety (compilation).
+- Deterministic code validates slots and substitutes them safely
+  (compilation). No code generation or IR translation is involved.
 - Verification checks the compiled artifact before real model calls happen.
 
 ---
@@ -147,7 +161,7 @@ The greenfield server should start with a small artifact-based MCP surface.
 | `list_templates(filters=None)` | Show available templates and selection metadata. |
 | `get_template(template_name, version=None)` | Return template schema and structural profile. |
 | `plan_strategy(task, context_id=None, hints=None)` | Classify task/data and return `plan_id` plus proposed template invocation. |
-| `compile_strategy(plan_id=None, template_invocation=None)` | Produce a compiled artifact and return `artifact_id`. |
+| `compile_strategy(plan_id=None, template_invocation=None)` | Validate slots, substitute into template Scheme, and return `artifact_id`. |
 | `get_artifact(artifact_id)` | Inspect artifact metadata, generated Scheme, hash, and compiler version. |
 | `estimate_strategy(artifact_id)` | Static estimate without executing the Racket runtime. |
 | `dry_run_strategy(artifact_id)` | Simulate runtime structure without real LLM calls. |
@@ -196,7 +210,6 @@ def compile_strategy(
 def get_artifact(
     artifact_id: str,
     include_scheme: bool = False,
-    include_source_map: bool = True,
 ) -> str: ...
 
 def estimate_strategy(
@@ -406,7 +419,7 @@ Response:
       "task_shapes": ["Batch", "Synthesize"],
       "data_shapes": ["FlatList", "ChunkedSingular"],
       "summary": "Extract independently, then synthesize with tree reduction.",
-      "primitive_nodes": ["map-async", "tree-reduce"],
+      "primitives_used": ["map-async", "tree-reduce"],
       "slot_count": 9
     }
   ]
@@ -440,8 +453,9 @@ Response:
 }
 ```
 
-Do not return compiler-owned Scheme from `get_template` by default. Template
-metadata is public; generated Scheme is artifact metadata.
+By default, `get_template` returns frontmatter metadata only. The template's
+Scheme body (with `{{slot}}` markers) can optionally be included for
+debugging but is not needed for normal agent workflows.
 
 ### 4.5 `plan_strategy`
 
@@ -515,14 +529,15 @@ Response:
 }
 ```
 
-Planner output must not include raw Scheme or raw node graphs. If no
-template fits, the planner should return `status: "no_template"` with a
-recommendation that the user create a new template, including the inferred
-TaskShape/DataShape and a description of what the template would need.
+Planner output must not include raw Scheme. If no template fits, the planner
+should return `status: "no_template"` with a recommendation that the user
+create a new template, including the inferred TaskShape/DataShape and a
+description of what the template would need.
 
 ### 4.6 `compile_strategy`
 
-Purpose: turn a template invocation into an immutable compiled artifact.
+Purpose: validate slot values, substitute them into a template, and store the
+result as an immutable compiled artifact.
 
 Request:
 
@@ -535,7 +550,6 @@ Request:
     "slot_values": {}
   },
   "options": {
-    "store_generated_scheme": true,
     "strict": true
   }
 }
@@ -544,6 +558,16 @@ Request:
 At least one of `plan_id` or `template_invocation` is required. If `plan_id`
 is provided and already contains a recommended template invocation,
 `compile_strategy` can use it directly.
+
+Compilation steps:
+
+1. Load the template `.rkt` file and parse its frontmatter.
+2. Validate `slot_values` against the template's `slot_schema`.
+3. Substitute all `{{slot}}` markers with concrete values (safe substitution).
+4. Verify the result contains no remaining `{{...}}` markers.
+5. Verify the result uses only allowed primitive bindings.
+6. Hash the resulting Scheme code.
+7. Store the artifact record.
 
 Response:
 
@@ -558,7 +582,7 @@ Response:
     "template_version": "1.0.0",
     "compiler_version": "0.1.0",
     "code_hash": "sha256:...",
-    "primitive_nodes": ["map-async", "tree-reduce", "llm-query-async", "llm-query"],
+    "primitives_used": ["map-async", "tree-reduce", "llm-query-async", "llm-query"],
     "context_ids": ["ctx_01HX..."],
     "static_profile": {
       "min_calls": 1,
@@ -581,8 +605,7 @@ Request:
 ```json
 {
   "artifact_id": "art_01HX...",
-  "include_scheme": false,
-  "include_source_map": true
+  "include_scheme": false
 }
 ```
 
@@ -599,19 +622,14 @@ Response:
     "slot_values": {},
     "compiler_version": "0.1.0",
     "code_hash": "sha256:...",
-    "generated_scheme": null,
-    "source_map": [
-      {
-        "template_node_path": "$.nodes[0]",
-        "scheme_symbol": "map-phase",
-        "primitive": "map-async"
-      }
-    ]
+    "generated_scheme": null
   }
 }
 ```
 
-`include_scheme=true` is an inspection option, not an execution path.
+`include_scheme=true` is an inspection option, not an execution path. Since
+templates are already Scheme, the compiled artifact is human-readable — it
+is the template with slots filled in.
 
 ### 4.8 `estimate_strategy`
 
@@ -1004,7 +1022,6 @@ replay are reliable.
   "template_name": "batch_extract_reduce",
   "template_version": "1.0.0",
   "slot_values": {},
-  "resolved_template": {},
   "compiler": {
     "name": "rlm-scheme-template-compiler",
     "version": "0.1.0"
@@ -1013,17 +1030,19 @@ replay are reliable.
     "path": "artifacts/art_01HX/program.rkt",
     "hash": "sha256:..."
   },
-  "primitive_nodes": ["map-async", "tree-reduce"],
+  "primitives_used": ["map-async", "tree-reduce"],
   "static_profile": {
     "expected_calls_formula": "N + ceil(N/B) + ... + 1",
     "max_concurrency": 20,
     "recursive_depth": 0
-  },
-  "source_map": []
+  }
 }
 ```
 
-Artifacts should be immutable. Any edit creates a new `artifact_id`.
+Artifacts should be immutable. Any edit creates a new `artifact_id`. Since
+templates are Scheme, the artifact's `generated_scheme_ref` points to the
+template with all `{{slot}}` markers replaced — no intermediate
+representation is stored.
 
 ### 5.4 Dry-Run Record
 
@@ -1099,171 +1118,95 @@ Artifacts should be immutable. Any edit creates a new `artifact_id`.
 
 ---
 
-## 6. Resolved Template Schema (Internal)
+## 6. Slot Substitution Model
 
-A resolved template is the internal structured representation produced when
-the compiler fills a template's `$slots` references with concrete values. It
-is NOT exposed to agents through the MCP API — agents interact only with
-templates via `plan_strategy` and `compile_strategy`. The resolved template
-exists so the compiler has a fully concrete, machine-readable computation
-graph to validate and convert to Scheme deterministically.
+Templates are Scheme files with `{{slot_name}}` markers. The compiler fills
+these markers with concrete values to produce executable artifacts. There is
+no intermediate node graph or resolved template representation.
 
-The schema below defines the node graph format. In a template file, this
-appears as the `template_body` field with `$slots` references. After slot
-filling, it becomes a resolved template with all values concrete.
+### Slot Markers
 
-Top-level schema:
+Slots use double-brace syntax: `{{slot_name}}`. The compiler substitutes
+each marker with the corresponding value from the template invocation's
+`slot_values`. Markers can appear anywhere in the Scheme body where a
+literal value would be valid:
 
-```json
-{
-  "schema_version": "1",
-  "name": "ace2_batch_synthesis",
-  "description": "Extract from papers, then synthesize.",
-  "context_refs": [
-    {
-      "context_id": "ctx_01HX...",
-      "binding": "papers"
-    }
-  ],
-  "inputs": {
-    "items": {
-      "from_context": "ctx_01HX...",
-      "path": "$.items"
-    }
-  },
-  "nodes": [
-    {
-      "id": "extract",
-      "op": "map_async",
-      "input": "$inputs.items",
-      "max_concurrent": 20,
-      "body": {
-        "op": "llm_call",
-        "mode": "async",
-        "model": "fast_text_model",
-        "instruction": "Extract ACE2 mentions as JSON.",
-        "data": "$item",
-        "json_mode": true,
-        "output_schema": "Ace2Extraction"
-      }
-    },
-    {
-      "id": "synthesize",
-      "op": "tree_reduce",
-      "input": "$nodes.extract.output",
-      "branch_factor": 5,
-      "body": {
-        "op": "llm_call",
-        "mode": "sync",
-        "model": "quality_text_model",
-        "instruction": "Combine extractions into one synthesis.",
-        "data": "$group",
-        "json_mode": false
-      }
-    }
-  ],
-  "output": "$nodes.synthesize.output",
-  "policies": {
-    "max_llm_calls": 500,
-    "max_concurrency": 20,
-    "max_recursive_depth": 0,
-    "token_budget": 200000
-  }
-}
+- String positions: `#:instruction {{map_instruction}}` → `#:instruction "Extract ACE2 mentions..."`
+- Numeric positions: `#:max-concurrent {{max_concurrent}}` → `#:max-concurrent 20`
+- Boolean positions: `#:json {{json_mode}}` → `#:json #t`
+- Identifier positions: `#:model {{map_model}}` → `#:model "fast_text_model"`
+
+### Substitution Rules
+
+1. All `{{slot}}` markers must have corresponding values in `slot_values`.
+   Missing required slots are compile errors.
+2. Slot values are type-checked against the template's `slot_schema` before
+   substitution.
+3. String values are escaped and quoted. Numeric and boolean values are
+   inserted as Scheme literals. Context IDs are inserted as quoted strings.
+4. Substitution is safe — values cannot inject arbitrary Scheme code. The
+   compiler rejects slot values that contain unbalanced parentheses, Scheme
+   keywords, or other code injection attempts.
+5. After substitution, the result must be syntactically valid Scheme that
+   uses only primitive runtime bindings and compiler-owned helpers.
+
+### Context References
+
+Templates access loaded context data via the `__context-ref` helper:
+
+```scheme
+(define items (__context-ref "{{context_id}}" "{{items_path}}"))
 ```
 
-Allowed node operations:
+`__context-ref` takes a context ID and a JSONPath expression
+([RFC 9535](https://www.rfc-editor.org/rfc/rfc9535)) and returns the
+extracted data at runtime. The compiler validates that `context_id` slots
+contain valid context ID patterns and that `items_path` slots contain valid
+JSONPath expressions.
 
-| Node op | Compiles to |
-|---|---|
-| `llm_call` | `llm-query` or `llm-query-async`. |
-| `map_async` | `map-async`. |
-| `parallel` | `parallel`. |
-| `race` | `race`. |
-| `tree_reduce` | `tree-reduce`. |
-| `fold_sequential` | `fold-sequential`. |
-| `sequence` | `sequence` or explicit `let*`. |
-| `choose` | `choose` or `cond`. |
-| `iterate_until` | `iterate-until`. |
-| `validate` | `with-validation`. |
-| `fallback` | `try-fallback`. |
-| `memoize` | `memoized`. |
-| `python_compute` | controlled `py-set!`, `py-exec`, `py-eval`. |
-| `checkpoint` | `checkpoint`. |
-| `restore` | `restore`. |
-| `recursive` | `recursive-spawn` with artifact-aware sub-plan. |
+### Allowed Primitives In Templates
 
-Explicitly disallowed node operations:
+Template bodies may only use the primitive runtime bindings listed in
+section 9. Specifically:
 
-- raw Scheme,
-- string eval,
+- LLM calls: `llm-query`, `llm-query-async`
+- Await: `await`, `await-all`, `await-any`
+- Parallel: `map-async`, `parallel`, `race`
+- Reduction: `tree-reduce`, `fold-sequential`
+- Control: `sequence`, `choose`, `iterate-until`
+- Delegation: `recursive-spawn`
+- Modifiers: `memoized`, `with-validation`, `try-fallback`
+- State: `checkpoint`, `restore`, `tokens-used`, `rate-limits`, `heartbeat`
+- Compute: `py-exec`, `py-eval`, `py-call`, `py-set!`
+- Helpers: `__context-ref`, `__join-json`, `finish`, `syntax-e`, `datum->syntax`
+
+Explicitly disallowed in templates:
+
+- removed compound combinator names (`fan-out-aggregate`, `critique-refine`,
+  `ensemble`, `vote`, `tiered`, `active-learning`, `fold-summarizing`),
+- string `eval`,
 - shell commands,
 - filesystem access outside declared context/artifact/checkpoint stores,
-- removed compound combinator names,
-- unsafe interpolation/overwrite/eval.
-
-### Reference Resolution
-
-Templates use `$`-prefixed references in their `template_body` to bind data
-between nodes, slots, and contexts. References are resolved by the compiler
-when filling slots to produce a resolved template, then converted to Scheme.
-They are NOT runtime expressions — they are compile-time substitutions.
-
-**Grammar:**
-
-| Prefix | Meaning | Resolved from |
-|---|---|---|
-| `$inputs.<name>` | Named input declared in `inputs` block. | Template body `inputs` section. |
-| `$context.<path>` | JSONPath into a loaded context's data. | Context store, using `context_refs` binding. |
-| `$nodes.<id>.output` | Output of a previously declared node. | Compiler dependency graph. |
-| `$slots.<name>` | Template slot value. | Filled `slot_values` from template invocation. |
-| `$item` | Current iteration variable inside `map_async` body. | Compiler-generated lambda parameter. |
-| `$group` | Current group variable inside `tree_reduce` body. | Compiler-generated lambda parameter. |
-| `$acc` | Accumulator variable inside `fold_sequential` body. | Compiler-generated lambda parameter. |
-
-**Path extraction uses JSONPath** ([RFC 9535](https://www.rfc-editor.org/rfc/rfc9535)).
-The compiler resolves `$context.<path>` and `$inputs.<name>` references using
-JSONPath queries against the stored context data. Examples:
-
-- `$context.items` → `$.items` (shorthand: bare property access)
-- `$inputs.papers` → resolves the `papers` binding from `inputs.papers.from_context` + `inputs.papers.path`
-
-**Resolution rules:**
-
-1. All references must resolve at compile time. Unresolvable references are
-   compile errors.
-2. `$nodes.<id>.output` creates an implicit dependency — the compiler must
-   order nodes so that producers execute before consumers.
-3. `$item`, `$group`, and `$acc` are only valid inside their respective node
-   bodies (`map_async`, `tree_reduce`, `fold_sequential`). Using them outside
-   is a compile error.
-4. `$slots.<name>` values are type-checked against the template's `slot_schema`
-   before substitution.
-5. Nested JSONPath (e.g., `$context.papers[0].title`) is supported for context
-   references but not for node outputs — node outputs are opaque until the
-   next node processes them.
-
-**Compiler output:** References become concrete Racket bindings. For example,
-`$nodes.extract.output` becomes a `let`-bound variable; `$item` becomes a
-lambda parameter; `$slots.max_concurrent` becomes a literal value inlined
-into the generated Scheme.
+- `unsafe-interpolate`, `unsafe-overwrite`, `unsafe-exec-sub-output`.
 
 ---
 
 ## 7. Example Template
 
-Templates can be JSON or YAML. JSON is shown because it is unambiguous and easy
-to validate in tests.
+Templates are `.rkt` files with structured frontmatter and Scheme code.
+Frontmatter is a JSON block in a Racket block comment (`#| ... |#`) at the
+top of the file. The Scheme body follows.
 
 File:
 
 ```text
-templates/batch_extract_reduce.json
+templates/batch_extract_reduce.rkt
 ```
 
 Template:
 
-```json
+```scheme
+#|
 {
   "schema_version": "1",
   "template_name": "batch_extract_reduce",
@@ -1333,10 +1276,6 @@ Template:
         "type": "boolean",
         "default": false
       },
-      "map_output_schema": {
-        "type": ["object", "null"],
-        "default": null
-      },
       "checkpoint_every": {
         "type": ["integer", "null"],
         "minimum": 1,
@@ -1344,44 +1283,10 @@ Template:
       }
     }
   },
-  "template_body": {
-    "nodes": [
-      {
-        "id": "extract",
-        "op": "map_async",
-        "input": "$context.items",
-        "max_concurrent": "$slots.max_concurrent",
-        "body": {
-          "op": "llm_call",
-          "mode": "async",
-          "model": "$slots.map_model",
-          "instruction": "$slots.map_instruction",
-          "data": "$item",
-          "json_mode": "$slots.json_mode",
-          "output_schema": "$slots.map_output_schema"
-        }
-      },
-      {
-        "id": "synthesize",
-        "op": "tree_reduce",
-        "input": "$nodes.extract.output",
-        "branch_factor": "$slots.branch_factor",
-        "body": {
-          "op": "llm_call",
-          "mode": "sync",
-          "model": "$slots.reduce_model",
-          "instruction": "$slots.reduce_instruction",
-          "data": "$group",
-          "json_mode": false
-        }
-      }
-    ],
-    "output": "$nodes.synthesize.output"
-  },
   "structural_profile": {
     "expected_calls_formula": "N + ceil(N/B) + ceil(ceil(N/B)/B) + ... + 1",
     "critical_path_formula": "1 + ceil(log_B(N))",
-    "max_concurrency": "$slots.max_concurrent",
+    "max_concurrency_slot": "max_concurrent",
     "recursive_depth": 0,
     "uses_python_bridge": false,
     "uses_multimodal": false
@@ -1406,9 +1311,39 @@ Template:
     }
   ]
 }
+|#
+
+;; Template body — Scheme code with {{slot}} markers.
+;; The compiler substitutes slot values to produce the executable artifact.
+
+(define items (__context-ref "{{context_id}}" "{{items_path}}"))
+
+(define extracted
+  (map-async
+    (lambda (item)
+      (llm-query-async
+        #:instruction {{map_instruction}}
+        #:data item
+        #:model {{map_model}}
+        #:json {{json_mode}}))
+    items
+    #:max-concurrent {{max_concurrent}}))
+
+(define synthesized
+  (tree-reduce
+    (lambda group
+      (syntax-e
+        (llm-query
+          #:instruction {{reduce_instruction}}
+          #:data (__join-json group)
+          #:model {{reduce_model}})))
+    extracted
+    #:branch-factor {{branch_factor}}))
+
+(finish synthesized)
 ```
 
-Example template invocation:
+Example template invocation (what the planner produces):
 
 ```json
 {
@@ -1428,10 +1363,10 @@ Example template invocation:
 }
 ```
 
-Example compiler-owned Scheme shape:
+Example compiled artifact (after slot substitution):
 
 ```scheme
-(define papers (__context-ref "ctx_01HX..." "$.papers"))
+(define items (__context-ref "ctx_01HX..." "$.papers"))
 
 (define extracted
   (map-async
@@ -1441,7 +1376,7 @@ Example compiler-owned Scheme shape:
         #:data item
         #:model "fast_text_model"
         #:json #t))
-    papers
+    items
     #:max-concurrent 20))
 
 (define synthesized
@@ -1458,8 +1393,9 @@ Example compiler-owned Scheme shape:
 (finish synthesized)
 ```
 
-The exact generated Scheme can differ, but it must use only primitive runtime
-bindings and compiler-owned helper bindings.
+The compiled artifact is the template with all `{{slot}}` markers replaced
+by concrete values. It uses only primitive runtime bindings and
+compiler-owned helper bindings.
 
 ---
 
@@ -1763,7 +1699,7 @@ Semantics:
 Semantics:
 
 - left-to-right function composition,
-- used by compiler for multi-phase specs,
+- used by compiler for multi-phase templates,
 - can be generated as `let*` when simpler.
 
 #### `choose`
@@ -1884,7 +1820,7 @@ Semantics:
 - receives values over JSON, not string interpolation,
 - can access declared context values,
 - cannot access MCP server internals or Racket scaffold bindings,
-- should be generated only by trusted templates/specs.
+- should be used only by trusted templates.
 
 Allowed Python bridge use cases:
 
@@ -1907,9 +1843,10 @@ Disallowed by default:
 ### Error Propagation Model
 
 Each primitive must define how errors are handled. Templates declare an error
-policy per node; the compiler generates the corresponding Scheme error handling.
+policy per primitive usage in their frontmatter; the compiler validates the
+corresponding error handling in the template body.
 
-**Error policies** (declared per-node in templates/specs):
+**Error policies** (declared per-node in templates):
 
 | Policy | Behavior |
 |---|---|
@@ -2135,27 +2072,26 @@ existing artifacts.
 Checkpoints are scoped to their execution but survive `"sandbox"` resets so
 that failed long-running workflows can be resumed.
 
-### 11.2 Resolved Template Schema
+### 11.2 Slot Substitution
 
-See section 6 for the full resolved template schema definition, allowed node
-operations, and disallowed operations. The compiler uses this schema as its
-input format. Templates store node graphs with `$slots` references in their
-`template_body` field (see section 7). The compiler fills slots and produces
-a resolved template, then generates Scheme from it.
+See section 6 for the slot substitution model, allowed primitives, and
+disallowed operations. The compiler fills `{{slot}}` markers in template
+Scheme code with concrete values — there is no intermediate node graph or
+resolved template representation.
 
 ### 11.3 Template Catalog
 
 See section 7 for the full template schema, and section 15 for the initial
-template catalog. Templates live as structured JSON files:
+template catalog. Templates live as `.rkt` files with JSON frontmatter:
 
 ```text
 templates/
-  batch_extract_reduce.json
-  batch_map.json
-  ordered_synthesis_fold.json
-  compare_candidates.json
-  refine_until_valid.json
-  tiered_review.json
+  batch_extract_reduce.rkt
+  batch_map.rkt
+  ordered_synthesis_fold.rkt
+  compare_candidates.rkt
+  refine_until_valid.rkt
+  tiered_review.rkt
   ...
 ```
 
@@ -2164,20 +2100,28 @@ trusted templates are structurally valid, but still verifies filled artifacts.
 
 ### 11.4 Compiler
 
-The compiler converts template invocations into internal Scheme artifacts.
+The compiler validates slot values and substitutes them into template Scheme
+code to produce immutable artifacts.
 
 Responsibilities:
 
-- validate slots and types,
-- reject unsupported shapes,
-- select primitive compositions,
-- generate Racket code,
-- attach source maps from template nodes to Scheme fragments,
-- calculate static structural profiles,
-- hash generated code,
+- parse template frontmatter and Scheme body,
+- validate slot values against the template's `slot_schema`,
+- substitute `{{slot}}` markers with safe, type-appropriate values,
+- reject values that could inject arbitrary Scheme code,
+- verify all markers are resolved and only allowed primitives are used,
+- calculate static structural profiles from template frontmatter,
+- hash the resulting Scheme code,
 - store artifact metadata.
 
 The compiler should be deterministic: same inputs, same artifact hash.
+
+The compiler does NOT:
+
+- generate Scheme code from a node graph,
+- translate between an IR and Scheme,
+- produce source maps (the artifact IS the template with filled slots,
+  so line numbers correspond directly).
 
 ### 11.5 Racket Runtime
 
@@ -2384,10 +2328,9 @@ Planning output should be one of:
 - a `no_template` recommendation describing the needed template for the user
   to create.
 
-Planning output must not include raw Scheme or raw node graphs. If no
-template matches the classified task, the planner returns a structured
-recommendation for a new template rather than attempting to generate an
-ad-hoc computation graph.
+Planning output must not include raw Scheme. If no template matches the
+classified task, the planner returns a structured recommendation for a new
+template rather than attempting to generate ad-hoc Scheme code.
 
 ---
 
@@ -2439,7 +2382,7 @@ These are template slot values, not structural decisions. The template's
 | `Decompose` | Break one input into structured parts. | `llm-query` JSON, `python_compute`, or `recursive`. |
 | `Validate` | Produce pass/fail/score assessments. | `map-async`, validation, aggregation. |
 | `Aggregate` | Extract metrics and compute report. | `map-async` plus `python_compute`. |
-| `Composite` | Multi-phase task. | compiled `sequence` of phase specs. |
+| `Composite` | Multi-phase task. | compiled `sequence` of phase templates. |
 
 TaskShape decision tree:
 
@@ -2748,7 +2691,7 @@ Every template should include:
 - model capability requirements,
 - verification rules,
 - at least one example invocation,
-- one compiler fixture showing generated primitive nodes.
+- one compiler fixture showing the artifact after slot substitution.
 
 ---
 
@@ -2767,7 +2710,6 @@ rlm_scheme/
   template_store.py
   planner.py
   classifier.py
-  resolved_template.py
   compiler.py
   dry_run.py
   verifier.py
@@ -2782,7 +2724,9 @@ rlm_scheme/
     sandbox.rkt
     callbacks.rkt
 templates/
-  batch_extract_reduce.json
+  batch_extract_reduce.rkt
+  batch_map.rkt
+  ordered_synthesis_fold.rkt
   ...
 docs/
   GREENFIELD-REWRITE-PLAN.md
@@ -2808,11 +2752,10 @@ Module responsibilities:
 | `ids.py` | ID generation and validation for `ctx_`, `plan_`, `art_`, `dry_`, `ver_`, `exec_`, `call_`. |
 | `store.py` | Durable JSON or SQLite/PGlite storage abstraction. |
 | `context_store.py` | Large context storage, previews, metadata, and path extraction. |
-| `template_store.py` | Load, validate, list, and retrieve templates. |
+| `template_store.py` | Load, validate, list, and retrieve `.rkt` templates (parse frontmatter + body). |
 | `classifier.py` | Deterministic TaskShape/DataShape rules. |
 | `planner.py` | Template selection and plan record creation. |
-| `resolved_template.py` | Resolved template validation and normalization. |
-| `compiler.py` | Template to Scheme artifact compilation (slot resolution + code generation). |
+| `compiler.py` | Slot validation and safe substitution into template Scheme code. |
 | `dry_run.py` | Deterministic structural simulation. |
 | `verifier.py` | Artifact checks and execution gate. |
 | `executor.py` | Racket runtime lifecycle, progress, cancellation, and execution records. |
@@ -2829,10 +2772,10 @@ Module responsibilities:
 
 - Freeze public MCP API names.
 - Define ID record schemas.
-- Define resolved template schema (section 6).
-- Define template schema.
+- Define template frontmatter schema and slot substitution rules (section 6).
+- Define template file format (`.rkt` with JSON frontmatter).
 - Decide initial store backend.
-- Decide which Python bridge operations are allowed in compiler output.
+- Decide which Python bridge operations are allowed in templates.
 
 Exit criteria:
 
@@ -2896,17 +2839,17 @@ Exit criteria:
 
 ### Phase 5: Template Catalog And Compiler
 
-- Create initial templates for common shapes.
-- Implement template validation.
-- Implement template compiler (slot resolution + Scheme generation).
-- Store compiled artifacts with source maps and hashes.
-- Generate primitive-only Scheme.
+- Create initial `.rkt` templates for common shapes (see section 15).
+- Implement template frontmatter parsing and validation.
+- Implement slot validation and safe substitution.
+- Store compiled artifacts with hashes.
 
 Exit criteria:
 
 - planner can select at least one template per common shape,
-- compiler output is deterministic,
-- artifacts are inspectable.
+- compiler output is deterministic (same slots → same hash),
+- artifacts are inspectable,
+- no `{{slot}}` markers remain in compiled artifacts.
 
 ### Phase 6: Planner
 
@@ -2959,7 +2902,7 @@ Exit criteria:
 Exit criteria:
 
 - large-context workflows can use chunking and recursion,
-- Python bridge is generated only by trusted templates/specs,
+- Python bridge is used only by trusted templates,
 - planner can use execution history without copying raw traces into prompts.
 
 ### Phase 10: Documentation And Migration
@@ -3082,8 +3025,8 @@ is fully deterministic (Level 1 only, no LLM call needed).
 
 ### Step 3: Compile strategy
 
-Agent accepts the recommended template. Compilation validates slots, generates
-primitive-only Scheme, and stores an immutable artifact.
+Agent accepts the recommended template. Compilation validates slots,
+substitutes them into the template Scheme, and stores an immutable artifact.
 
 ```
 → compile_strategy(plan_id: "plan_b2c1")
@@ -3098,7 +3041,7 @@ primitive-only Scheme, and stores an immutable artifact.
       "template_version": "1.0.0",
       "compiler_version": "0.1.0",
       "code_hash": "sha256:a1b2c3...",
-      "primitive_nodes": ["map-async","tree-reduce","llm-query-async","llm-query"],
+      "primitives_used": ["map-async","tree-reduce","llm-query-async","llm-query"],
       "context_ids": ["ctx_7f3a"],
       "static_profile": {
         "min_calls": 1,
