@@ -42,7 +42,7 @@ execution system.
 An agent interacts with durable objects:
 
 ```text
-context_id -> plan_id -> artifact_id -> dry_run_id -> verification_id -> execution_id
+context_id -> plan_id -> dry_run_id -> execution_id
 ```
 
 Each stage has a clear responsibility:
@@ -51,10 +51,13 @@ Each stage has a clear responsibility:
 |---|---|
 | `context_id` | Stored input data plus metadata: shape, item count, modality, independence, size estimates, and optional names. |
 | `plan_id` | Task intent and planning record: objective, constraints, inferred TaskShape/DataShape, selected template, and rationale. |
-| `artifact_id` | Compiled executable strategy: template with filled typed slots (Scheme code after safe substitution), compiler version, and code hash. |
-| `dry_run_id` | Structural simulation for an artifact: expected calls, fan-out, recursive depth, model mix, token/cost estimates, warnings, and failure risks. |
-| `verification_id` | Verification decision: deterministic checks, dry-run interpretation, optional semantic review, pass/warn/fail status, and reasons. |
+| `dry_run_id` | Structural simulation: expected calls, fan-out, recursive depth, model mix, token/cost estimates, warnings, and failure risks. |
 | `execution_id` | One real execution attempt: result, stdout, trace, call metrics, token usage, errors, checkpoints, and status history. |
+
+Internally, the system also creates `artifact_id` (compiled Scheme with
+code hash) and `verification_id` (pre-execution checks) records. These
+appear in responses for audit and debugging but are not agent-managed
+concepts — agents do not create or pass them between tools.
 
 Normal agent flow:
 
@@ -62,22 +65,22 @@ Normal agent flow:
    `context_id`.
 2. `plan_strategy(task, context_id, hints)` classifies the work and returns a
    `plan_id` plus a template invocation.
-3. `compile_strategy(plan_id | template_invocation)` validates typed
-   slots, substitutes them into the template Scheme, and returns an
-   `artifact_id`.
-4. `estimate_strategy(artifact_id)` gives a static estimate.
-5. `dry_run_strategy(artifact_id)` simulates execution and returns a
-   `dry_run_id`.
-6. `verify_strategy(artifact_id, dry_run_id)` gates execution and returns a
-   `verification_id`.
-7. `execute_strategy(artifact_id, verification_id, plan_id, timeout)` executes
-   the compiled artifact and returns an `execution_id`.
-8. `get_execution_trace(execution_id)`, `get_status`, and `cancel_call` inspect
+3. `dry_run_strategy(plan_id)` compiles, simulates, and returns a
+   `dry_run_id` with call estimates and cost projections.
+4. `execute_strategy(plan_id, dry_run_id, timeout)` compiles (or reuses
+   the cached artifact), verifies, and executes. Returns an `execution_id`.
+5. `get_execution_trace(execution_id)`, `get_status`, and `cancel_call` inspect
    or control long-running work.
 
-Scheme is internal compiled code. It may be inspectable through artifact
-metadata for debugging, but agents should not submit arbitrary Scheme strings
-to the public MCP API.
+Compilation (slot validation + safe substitution + hashing) and verification
+(policy checks) happen automatically inside `dry_run_strategy` and
+`execute_strategy`. If either step fails, the tool returns a structured
+error. There are no separate tools for compilation, estimation, or
+verification.
+
+Scheme is internal compiled code. It may be inspectable through dry-run or
+execution responses for debugging, but agents should not submit arbitrary
+Scheme strings to the public MCP API.
 
 ---
 
@@ -138,7 +141,8 @@ The Scheme body uses only:
 The planner reads template frontmatter and fills slots. The compiler
 validates slot values, substitutes them into the template body, and stores
 the result as an immutable artifact. Agents interact only with templates
-(via `plan_strategy` and `compile_strategy`).
+(via `plan_strategy`); compilation happens internally when they call
+`dry_run_strategy` or `execute_strategy`.
 
 This division is important:
 
@@ -152,26 +156,36 @@ This division is important:
 
 ## 3. Public MCP API
 
-The greenfield server should start with a small artifact-based MCP surface.
+The greenfield server should expose a small, artifact-based MCP surface.
+Compilation, estimation, and verification happen internally — agents do not
+need separate tools for these steps.
 
 | Tool | Purpose |
 |---|---|
 | `load_context(data, name=None, metadata=None)` | Store input data and metadata; return `context_id`. |
 | `get_context(context_id)` | Inspect metadata and optionally preview stored data. |
-| `list_templates(filters=None)` | Show available templates and selection metadata. |
-| `get_template(template_name, version=None)` | Return template schema and structural profile. |
 | `plan_strategy(task, context_id=None, hints=None)` | Classify task/data and return `plan_id` plus proposed template invocation. |
-| `compile_strategy(plan_id=None, template_invocation=None)` | Validate slots, substitute into template Scheme, and return `artifact_id`. |
-| `get_artifact(artifact_id)` | Inspect artifact metadata, generated Scheme, hash, and compiler version. |
-| `estimate_strategy(artifact_id)` | Static estimate without executing the Racket runtime. |
-| `dry_run_strategy(artifact_id)` | Simulate runtime structure without real LLM calls. |
-| `verify_strategy(artifact_id, dry_run_id=None, options=None)` | Gate artifact execution. |
-| `execute_strategy(artifact_id, verification_id=None, plan_id=None, timeout=None)` | Execute a verified artifact. |
+| `dry_run_strategy(plan_id=None, template_invocation=None)` | Compile, simulate, and estimate without real LLM calls. Return `dry_run_id`. |
+| `execute_strategy(plan_id=None, template_invocation=None, dry_run_id=None, timeout=None)` | Compile, verify, and execute. Return `execution_id`. |
 | `get_execution_trace(execution_id)` | Return call hierarchy, data flow, stdout, errors, token usage, and checkpoints. |
 | `get_status(execution_id=None)` | Return server/runtime/call status. |
 | `cancel_call(call_id=None, execution_id=None)` | Cancel one call or an entire execution. |
-| `reset_runtime(scope="session")` | Reset sandbox state without deleting durable artifacts by default. |
+| `reset_runtime(scope="session")` | Reset sandbox state without deleting durable records by default. |
 
+Removed tools (folded into `dry_run_strategy` and `execute_strategy`):
+
+- `compile_strategy` — compilation is trivial (slot validation + substitution).
+  Done automatically inside `dry_run_strategy` and `execute_strategy`.
+- `estimate_strategy` — static estimates are included in the `dry_run_strategy`
+  response.
+- `verify_strategy` — verification runs automatically inside
+  `execute_strategy`. If verification fails, `execute_strategy` returns a
+  structured error with the failed checks.
+- `get_artifact` — artifact metadata (hash, slot values, compiled Scheme) is
+  included in `dry_run_strategy` and `execute_strategy` responses.
+- `list_templates` — the planner handles template selection internally. Agents
+  do not pick templates.
+- `get_template` — same reason as `list_templates`.
 
 Target FastMCP function signatures:
 
@@ -188,50 +202,22 @@ def get_context(
     include_data: bool = False,
 ) -> str: ...
 
-def list_templates(filters_json: str | None = None) -> str: ...
-
-def get_template(
-    template_name: str,
-    version: str | None = None,
-) -> str: ...
-
 def plan_strategy(
     task: str,
     context_id: str | None = None,
     hints_json: str | None = None,
 ) -> str: ...
 
-def compile_strategy(
+def dry_run_strategy(
     plan_id: str | None = None,
     template_invocation_json: str | None = None,
     options_json: str | None = None,
 ) -> str: ...
 
-def get_artifact(
-    artifact_id: str,
-    include_scheme: bool = False,
-) -> str: ...
-
-def estimate_strategy(
-    artifact_id: str,
-    assumptions_json: str | None = None,
-) -> str: ...
-
-def dry_run_strategy(
-    artifact_id: str,
-    options_json: str | None = None,
-) -> str: ...
-
-def verify_strategy(
-    artifact_id: str,
-    dry_run_id: str | None = None,
-    policy_json: str | None = None,
-) -> str: ...
-
 async def execute_strategy(
-    artifact_id: str,
-    verification_id: str | None = None,
     plan_id: str | None = None,
+    template_invocation_json: str | None = None,
+    dry_run_id: str | None = None,
     timeout_seconds: int | None = None,
     runtime_options_json: str | None = None,
     ctx: Context = None,
@@ -258,6 +244,11 @@ def reset_runtime(scope: str = "session") -> str: ...
 `*_json` parameters are JSON strings because MCP clients vary in how reliably
 they support nested structured arguments. The server should parse and validate
 them into typed internal models immediately.
+
+At least one of `plan_id` or `template_invocation_json` is required for
+`dry_run_strategy` and `execute_strategy`. If `plan_id` is provided and
+already contains a recommended template invocation, the tool uses it
+directly.
 
 Do not expose these as public tools:
 
@@ -392,72 +383,7 @@ Response:
 `include_data=true` should be allowed only for small contexts or explicit debug
 settings. Large context retrieval should default to previews and metadata.
 
-### 4.3 `list_templates`
-
-Request:
-
-```json
-{
-  "filters": {
-    "task_shape": "Batch",
-    "data_shape": "FlatList",
-    "requires_multimodal": false,
-    "max_expected_calls": 200
-  }
-}
-```
-
-Response:
-
-```json
-{
-  "status": "ok",
-  "templates": [
-    {
-      "template_name": "batch_extract_reduce",
-      "version": "1.0.0",
-      "task_shapes": ["Batch", "Synthesize"],
-      "data_shapes": ["FlatList", "ChunkedSingular"],
-      "summary": "Extract independently, then synthesize with tree reduction.",
-      "primitives_used": ["map-async", "tree-reduce"],
-      "slot_count": 9
-    }
-  ]
-}
-```
-
-### 4.4 `get_template`
-
-Request:
-
-```json
-{
-  "template_name": "batch_extract_reduce",
-  "version": "1.0.0"
-}
-```
-
-Response:
-
-```json
-{
-  "status": "ok",
-  "template": {
-    "template_name": "batch_extract_reduce",
-    "version": "1.0.0",
-    "summary": "...",
-    "slot_schema": {},
-    "structural_profile": {},
-    "verification_rules": []
-  }
-}
-```
-
-By default, `get_template` returns frontmatter metadata only. The template's
-Scheme body (with `{{slot}}` markers) can optionally be included for
-debugging but is not needed for normal agent workflows.
-
-### 4.5 `plan_strategy`
+### 4.3 `plan_strategy`
 
 Purpose: classify task/data, choose a template, and persist a planning record.
 
@@ -524,7 +450,8 @@ Response:
     }
   ],
   "next_actions": [
-    "Call compile_strategy(plan_id=plan_01HX...)"
+    "Call dry_run_strategy(plan_id=plan_01HX...)",
+    "Call execute_strategy(plan_id=plan_01HX...)"
   ]
 }
 ```
@@ -534,124 +461,60 @@ should return `status: "no_template"` with a recommendation that the user
 create a new template, including the inferred TaskShape/DataShape and a
 description of what the template would need.
 
-### 4.6 `compile_strategy`
+### 4.4 `dry_run_strategy`
 
-Purpose: validate slot values, substitute them into a template, and store the
-result as an immutable compiled artifact.
+Purpose: compile a plan or template invocation into an artifact, simulate
+execution, and return the dry-run results along with cost estimates and
+artifact details — all in one call.
+
+Internally, this tool:
+
+1. Compiles the template invocation (validates slots, substitutes `{{slot}}`
+   markers, hashes, stores the artifact record).
+2. Computes a static cost estimate from the structural profile.
+3. Simulates execution with mock LLM responses.
+
+If compilation fails (invalid slots, unknown template, remaining markers),
+the tool returns a structured error. The agent does not need to handle
+compilation as a separate step.
 
 Request:
 
 ```json
 {
   "plan_id": "plan_01HX...",
-  "template_invocation": {
-    "template_name": "batch_extract_reduce",
-    "template_version": "1.0.0",
-    "slot_values": {}
-  },
+  "template_invocation": null,
   "options": {
-    "strict": true
+    "mock_prefix": "[dry-run]",
+    "deterministic_await_any": true,
+    "max_simulated_items": 1000,
+    "assumptions": {
+      "item_count": 100,
+      "avg_input_tokens": 800,
+      "avg_output_tokens": 250
+    }
   }
 }
 ```
 
 At least one of `plan_id` or `template_invocation` is required. If `plan_id`
-is provided and already contains a recommended template invocation,
-`compile_strategy` can use it directly.
-
-Compilation steps:
-
-1. Load the template `.rkt` file and parse its frontmatter.
-2. Validate `slot_values` against the template's `slot_schema`.
-3. Substitute all `{{slot}}` markers with concrete values (safe substitution).
-4. Verify the result contains no remaining `{{...}}` markers.
-5. Verify the result uses only allowed primitive bindings.
-6. Hash the resulting Scheme code.
-7. Store the artifact record.
+is provided and already contains a recommended template invocation, the tool
+uses it directly. `template_invocation` overrides the plan's recommendation.
 
 Response:
 
 ```json
 {
   "status": "ok",
-  "artifact_id": "art_01HX...",
+  "dry_run_id": "dry_01HX...",
   "plan_id": "plan_01HX...",
   "artifact": {
-    "source_type": "template_invocation",
+    "artifact_id": "art_01HX...",
     "template_name": "batch_extract_reduce",
     "template_version": "1.0.0",
-    "compiler_version": "0.1.0",
     "code_hash": "sha256:...",
-    "primitives_used": ["map-async", "tree-reduce", "llm-query-async", "llm-query"],
-    "context_ids": ["ctx_01HX..."],
-    "static_profile": {
-      "min_calls": 1,
-      "expected_calls_formula": "N + ceil(N/B) + ... + 1",
-      "max_concurrency": 20,
-      "recursive_depth": 0
-    }
+    "primitives_used": ["map-async", "tree-reduce", "llm-query-async", "llm-query"]
   },
-  "next_actions": [
-    "Call estimate_strategy(artifact_id=art_01HX...)",
-    "Call dry_run_strategy(artifact_id=art_01HX...)"
-  ]
-}
-```
-
-### 4.7 `get_artifact`
-
-Request:
-
-```json
-{
-  "artifact_id": "art_01HX...",
-  "include_scheme": false
-}
-```
-
-Response:
-
-```json
-{
-  "status": "ok",
-  "artifact": {
-    "artifact_id": "art_01HX...",
-    "plan_id": "plan_01HX...",
-    "source_type": "template_invocation",
-    "template_name": "batch_extract_reduce",
-    "slot_values": {},
-    "compiler_version": "0.1.0",
-    "code_hash": "sha256:...",
-    "generated_scheme": null
-  }
-}
-```
-
-`include_scheme=true` is an inspection option, not an execution path. Since
-templates are already Scheme, the compiled artifact is human-readable — it
-is the template with slots filled in.
-
-### 4.8 `estimate_strategy`
-
-Request:
-
-```json
-{
-  "artifact_id": "art_01HX...",
-  "assumptions": {
-    "item_count": 100,
-    "avg_input_tokens": 800,
-    "avg_output_tokens": 250
-  }
-}
-```
-
-Response:
-
-```json
-{
-  "status": "ok",
-  "artifact_id": "art_01HX...",
   "estimate": {
     "expected_llm_calls": 125,
     "critical_path_calls": 4,
@@ -670,33 +533,7 @@ Response:
       "high": 3.50
     }
   },
-  "warnings": []
-}
-```
-
-### 4.9 `dry_run_strategy`
-
-Request:
-
-```json
-{
-  "artifact_id": "art_01HX...",
-  "options": {
-    "mock_prefix": "[dry-run]",
-    "deterministic_await_any": true,
-    "max_simulated_items": 1000
-  }
-}
-```
-
-Response:
-
-```json
-{
-  "status": "ok",
-  "dry_run_id": "dry_01HX...",
-  "artifact_id": "art_01HX...",
-  "summary": {
+  "simulation": {
     "llm_calls": 125,
     "max_concurrency": 20,
     "recursive_depth": 0,
@@ -722,78 +559,52 @@ Response:
   ],
   "warnings": [],
   "next_actions": [
-    "Call verify_strategy(artifact_id=art_01HX..., dry_run_id=dry_01HX...)"
+    "Call execute_strategy(plan_id=plan_01HX..., dry_run_id=dry_01HX...)"
   ]
 }
 ```
 
-### 4.10 `verify_strategy`
+### 4.5 `execute_strategy`
+
+Purpose: compile (if not already compiled), verify against policy, and execute
+the strategy — all in one call.
+
+Internally, this tool:
+
+1. If `dry_run_id` is provided, reuses the artifact from that dry run.
+   Otherwise, compiles the template invocation (same as dry_run_strategy).
+2. Runs verification checks automatically (hash integrity, primitive
+   allowlist, policy limits). If verification fails, returns a structured
+   error — the agent does not call a separate verify tool.
+3. Executes the compiled Scheme in the sandbox.
 
 Request:
 
 ```json
 {
-  "artifact_id": "art_01HX...",
-  "dry_run_id": "dry_01HX...",
-  "policy": {
-    "max_llm_calls": 500,
-    "max_concurrency": 50,
-    "max_recursive_depth": 3,
-    "allow_python_bridge": true,
-    "allow_multimodal": true,
-    "semantic_review": "off | cheap | required"
-  }
-}
-```
-
-Response:
-
-```json
-{
-  "status": "ok",
-  "verification_id": "ver_01HX...",
-  "decision": "pass",
-  "artifact_id": "art_01HX...",
-  "dry_run_id": "dry_01HX...",
-  "checks": [
-    {
-      "name": "artifact_hash",
-      "status": "pass",
-      "message": "Generated code hash matches stored artifact."
-    },
-    {
-      "name": "primitive_allowlist",
-      "status": "pass",
-      "message": "Only primitive runtime names are used."
-    }
-  ],
-  "warnings": [],
-  "next_actions": [
-    "Call execute_strategy(artifact_id=art_01HX..., verification_id=ver_01HX...)"
-  ]
-}
-```
-
-If verification fails, return `status: "error"` and still store a
-`verification_id` with `decision: "fail"` so the user can inspect the reasons.
-
-### 4.11 `execute_strategy`
-
-Request:
-
-```json
-{
-  "artifact_id": "art_01HX...",
-  "verification_id": "ver_01HX...",
   "plan_id": "plan_01HX...",
+  "template_invocation": null,
+  "dry_run_id": "dry_01HX...",
   "timeout_seconds": 900,
   "runtime_options": {
     "progress_interval_seconds": 2,
     "checkpoint_prefix": "ace2-run",
     "max_stdout_chars": 4000
+  },
+  "policy": {
+    "max_llm_calls": 500,
+    "max_concurrency": 50,
+    "max_recursive_depth": 3,
+    "allow_python_bridge": true,
+    "allow_multimodal": true
   }
 }
 ```
+
+At least one of `plan_id`, `template_invocation`, or `dry_run_id` is required.
+`dry_run_id` is the most efficient path — it reuses the already-compiled
+artifact and skips re-compilation. If `policy` is omitted, server defaults
+apply.
 
 Response:
 
@@ -802,7 +613,27 @@ Response:
   "status": "ok",
   "execution_id": "exec_01HX...",
   "artifact_id": "art_01HX...",
-  "verification_id": "ver_01HX...",
+  "verification": {
+    "verification_id": "ver_01HX...",
+    "decision": "pass",
+    "checks": [
+      {
+        "name": "artifact_hash",
+        "status": "pass",
+        "message": "Generated code hash matches stored artifact."
+      },
+      {
+        "name": "primitive_allowlist",
+        "status": "pass",
+        "message": "Only primitive runtime names are used."
+      },
+      {
+        "name": "policy_limits",
+        "status": "pass",
+        "message": "Estimated calls (125) within limit (500)."
+      }
+    ]
+  },
   "result": {
     "value": "final answer or JSON value",
     "stdout": "optional truncated stdout"
@@ -824,12 +655,11 @@ Response:
 }
 ```
 
-If `verification_id` is omitted, execution should look up the latest passing
-verification for the artifact. If no passing verification exists, execution
-must fail with a structured error directing the agent to run
-`verify_strategy` first.
+If verification fails, the response has `status: "verification_failed"` with
+the failing checks and no execution is attempted. The agent can adjust
+policy limits or the template invocation and retry.
 
-### 4.12 `get_execution_trace`
+### 4.6 `get_execution_trace`
 
 Request:
 
@@ -873,7 +703,7 @@ Response:
 }
 ```
 
-### 4.13 `get_status`
+### 4.7 `get_status`
 
 Request:
 
@@ -918,7 +748,7 @@ Response:
 }
 ```
 
-### 4.14 `cancel_call`
+### 4.8 `cancel_call`
 
 Request:
 
@@ -952,6 +782,13 @@ execution and mark the execution as `cancelled`.
 The API schemas above are request/response contracts. The server should also
 store durable records with explicit schemas so history, verification, and
 replay are reliable.
+
+**Note on internal records:** Artifact records (5.3) and verification records
+(5.5) are created internally by `dry_run_strategy` and `execute_strategy` —
+there are no dedicated MCP tools for creating them. The `artifact_id` and
+`verification_id` appear in tool responses for traceability and are stored
+durably for audit/replay, but agents never create or pass them as primary
+inputs.
 
 ### 5.1 Context Record
 
@@ -2098,10 +1935,12 @@ templates/
 Template validation is a developer/CI concern. Runtime verification assumes
 trusted templates are structurally valid, but still verifies filled artifacts.
 
-### 11.4 Compiler
+### 11.4 Compiler (internal library)
 
 The compiler validates slot values and substitutes them into template Scheme
-code to produce immutable artifacts.
+code to produce immutable artifacts. It is invoked internally by
+`dry_run_strategy` and `execute_strategy` — there is no dedicated
+`compile_strategy` MCP tool.
 
 Responsibilities:
 
@@ -2710,10 +2549,9 @@ rlm_scheme/
   template_store.py
   planner.py
   classifier.py
-  compiler.py
-  dry_run.py
-  verifier.py
-  executor.py
+  compiler.py          # internal library, used by dry_run.py and executor.py
+  dry_run.py           # compiles + simulates + estimates in one call
+  executor.py          # compiles + verifies + executes in one call
   trace.py
   llm_provider.py
   image_inputs.py
@@ -2739,9 +2577,8 @@ tests/
   test_template_validation.py
   test_compiler.py
   test_runtime_primitives.py
-  test_dry_run.py
-  test_verifier.py
-  test_executor.py
+  test_dry_run.py      # also covers compilation and estimation
+  test_executor.py     # also covers verification
 ```
 
 Module responsibilities:
@@ -2755,10 +2592,9 @@ Module responsibilities:
 | `template_store.py` | Load, validate, list, and retrieve `.rkt` templates (parse frontmatter + body). |
 | `classifier.py` | Deterministic TaskShape/DataShape rules. |
 | `planner.py` | Template selection and plan record creation. |
-| `compiler.py` | Slot validation and safe substitution into template Scheme code. |
-| `dry_run.py` | Deterministic structural simulation. |
-| `verifier.py` | Artifact checks and execution gate. |
-| `executor.py` | Racket runtime lifecycle, progress, cancellation, and execution records. |
+| `compiler.py` | Internal library: slot validation and safe substitution into template Scheme code. Called by `dry_run.py` and `executor.py`. |
+| `dry_run.py` | Compiles template invocation, simulates execution, computes cost estimates. |
+| `executor.py` | Compiles (or reuses artifact from dry run), verifies against policy, executes in Racket sandbox. |
 | `trace.py` | Trace event schema and aggregation. |
 | `llm_provider.py` | Provider calls, retry, rate limits, token accounting. |
 | `image_inputs.py` | Image resolution, MIME sniffing, size limits. |
@@ -2837,18 +2673,19 @@ Exit criteria:
 - primitive tests cover success, failure, cancellation, and ordering semantics,
 - no compound combinator names are exported.
 
-### Phase 5: Template Catalog And Compiler
+### Phase 5: Template Catalog And Compiler Library
 
 - Create initial `.rkt` templates for common shapes (see section 15).
 - Implement template frontmatter parsing and validation.
-- Implement slot validation and safe substitution.
+- Implement slot validation and safe substitution as an internal library
+  (`compiler.py`) — no dedicated MCP tool.
 - Store compiled artifacts with hashes.
 
 Exit criteria:
 
 - planner can select at least one template per common shape,
 - compiler output is deterministic (same slots → same hash),
-- artifacts are inspectable,
+- artifacts are inspectable via dry-run and execute responses,
 - no `{{slot}}` markers remain in compiled artifacts.
 
 ### Phase 6: Planner
@@ -2864,18 +2701,20 @@ Exit criteria:
 - composite classification preserves phases,
 - tests cover ambiguous and multi-phase inputs.
 
-### Phase 7: Estimate, Dry-Run, Verify
+### Phase 7: Dry-Run (with estimation) and Verification
 
-- Implement static estimates from artifact profiles.
-- Implement dry-run execution mode with per-call context.
-- Special-case `await-any` and batch await semantics.
-- Implement `verify_strategy`.
+- Implement `dry_run_strategy` tool: compiles internally, computes static
+  estimates from artifact profiles, and simulates execution — all in one call.
+- Special-case `await-any` and batch await semantics in simulation.
+- Implement verification logic as an internal step within `execute_strategy`
+  (no separate `verify_strategy` tool).
 
 Exit criteria:
 
 - dry-run has no global mode leak,
+- dry-run response includes both simulation results and cost estimates,
 - tree-reduce formula is correct,
-- failed verification blocks execution by default.
+- failed verification in execute returns structured error (no execution attempted).
 
 ### Phase 8: Execute And Trace
 
@@ -2947,7 +2786,9 @@ Minimum test coverage:
 - image validation,
 - Python bridge value transfer,
 - recursive depth enforcement,
-- verification pass/warn/fail behavior,
+- verification pass/warn/fail behavior (tested through `execute_strategy`),
+- compilation tested through `dry_run_strategy` and `execute_strategy` paths,
+- estimation tested through `dry_run_strategy` response,
 - execution trace persistence.
 
 ---
@@ -2956,6 +2797,9 @@ Minimum test coverage:
 
 This section shows every MCP call in sequence for a realistic task: "Extract
 ACE2 protein mentions from 100 research papers and synthesize a report."
+
+The happy path requires only 3 tool calls after loading context:
+`plan_strategy` → `dry_run_strategy` → `execute_strategy`.
 
 ### Step 1: Load context
 
@@ -3019,53 +2863,39 @@ is fully deterministic (Level 1 only, no LLM call needed).
     "alternatives": [
       {"template_name":"batch_extract_fold","tradeoff":"Preserves paper order but higher latency."}
     ],
-    "next_actions": ["Call compile_strategy(plan_id=plan_b2c1)"]
+    "next_actions": ["Call dry_run_strategy(plan_id=plan_b2c1)"]
   }
 ```
 
-### Step 3: Compile strategy
+### Step 3: Dry run
 
-Agent accepts the recommended template. Compilation validates slots,
-substitutes them into the template Scheme, and stores an immutable artifact.
-
-```
-→ compile_strategy(plan_id: "plan_b2c1")
-
-← {
-    "status": "ok",
-    "artifact_id": "art_e4d9",
-    "plan_id": "plan_b2c1",
-    "artifact": {
-      "source_type": "template_invocation",
-      "template_name": "batch_extract_reduce",
-      "template_version": "1.0.0",
-      "compiler_version": "0.1.0",
-      "code_hash": "sha256:a1b2c3...",
-      "primitives_used": ["map-async","tree-reduce","llm-query-async","llm-query"],
-      "context_ids": ["ctx_7f3a"],
-      "static_profile": {
-        "min_calls": 1,
-        "expected_calls_formula": "100 + 20 + 4 + 1 = 125",
-        "max_concurrency": 20,
-        "recursive_depth": 0
-      }
-    },
-    "next_actions": ["Call dry_run_strategy(artifact_id=art_e4d9)"]
-  }
-```
-
-### Step 4: Dry run
-
-Agent runs a structural simulation. No real LLM calls are made.
+Agent runs a dry run. Internally, this compiles the template (validates slots,
+substitutes markers, hashes, stores artifact), computes cost estimates, and
+simulates execution — all in one call. No real LLM calls are made.
 
 ```
-→ dry_run_strategy(artifact_id: "art_e4d9")
+→ dry_run_strategy(plan_id: "plan_b2c1")
 
 ← {
     "status": "ok",
     "dry_run_id": "dry_1a2b",
-    "artifact_id": "art_e4d9",
-    "summary": {
+    "plan_id": "plan_b2c1",
+    "artifact": {
+      "artifact_id": "art_e4d9",
+      "template_name": "batch_extract_reduce",
+      "template_version": "1.0.0",
+      "code_hash": "sha256:a1b2c3...",
+      "primitives_used": ["map-async","tree-reduce","llm-query-async","llm-query"]
+    },
+    "estimate": {
+      "expected_llm_calls": 125,
+      "critical_path_calls": 4,
+      "max_concurrency": 20,
+      "models": {"fast_text_model":100,"quality_text_model":25},
+      "estimated_tokens": {"prompt":100000,"completion":31250,"total":131250},
+      "estimated_cost_usd": {"low":1.20,"high":3.50}
+    },
+    "simulation": {
       "llm_calls": 125,
       "max_concurrency": 20,
       "recursive_depth": 0,
@@ -3078,51 +2908,23 @@ Agent runs a structural simulation. No real LLM calls are made.
       {"node_id":"synthesize","primitive":"tree-reduce","calls":25,"model":"quality_text_model","branch_factor":5}
     ],
     "warnings": [],
-    "next_actions": ["Call verify_strategy(artifact_id=art_e4d9, dry_run_id=dry_1a2b)"]
+    "next_actions": ["Call execute_strategy(plan_id=plan_b2c1, dry_run_id=dry_1a2b)"]
   }
 ```
 
-### Step 5: Verify
+### Step 4: Execute
 
-Agent gates execution. Verification checks the artifact against policy limits.
-
-```
-→ verify_strategy(
-    artifact_id: "art_e4d9",
-    dry_run_id: "dry_1a2b",
-    policy_json: "{\"max_llm_calls\":500,\"max_concurrency\":50,\"max_recursive_depth\":3}"
-  )
-
-← {
-    "status": "ok",
-    "verification_id": "ver_3c4d",
-    "decision": "pass",
-    "artifact_id": "art_e4d9",
-    "dry_run_id": "dry_1a2b",
-    "checks": [
-      {"name":"artifact_hash","status":"pass","message":"Code hash matches."},
-      {"name":"primitive_allowlist","status":"pass","message":"Only primitives used."},
-      {"name":"call_count_limit","status":"pass","message":"125 <= 500."},
-      {"name":"concurrency_limit","status":"pass","message":"20 <= 50."},
-      {"name":"model_capabilities","status":"pass","message":"fast_text_model supports json mode."},
-      {"name":"context_exists","status":"pass","message":"ctx_7f3a exists."}
-    ],
-    "warnings": [],
-    "next_actions": ["Call execute_strategy(artifact_id=art_e4d9, verification_id=ver_3c4d)"]
-  }
-```
-
-### Step 6: Execute
-
-Agent runs the verified artifact. Real LLM calls happen here.
+Agent runs the strategy. Internally, this reuses the artifact from the dry
+run (no re-compilation), runs verification checks automatically, and executes
+the compiled Scheme. Real LLM calls happen here.
 
 ```
 → execute_strategy(
-    artifact_id: "art_e4d9",
-    verification_id: "ver_3c4d",
     plan_id: "plan_b2c1",
+    dry_run_id: "dry_1a2b",
     timeout_seconds: 900,
-    runtime_options_json: "{\"progress_interval_seconds\":5}"
+    runtime_options_json: "{\"progress_interval_seconds\":5}",
+    policy_json: "{\"max_llm_calls\":500,\"max_concurrency\":50}"
   )
 
   ... (progress notifications arrive every 5 seconds) ...
@@ -3131,7 +2933,17 @@ Agent runs the verified artifact. Real LLM calls happen here.
     "status": "ok",
     "execution_id": "exec_5e6f",
     "artifact_id": "art_e4d9",
-    "verification_id": "ver_3c4d",
+    "verification": {
+      "verification_id": "ver_3c4d",
+      "decision": "pass",
+      "checks": [
+        {"name":"artifact_hash","status":"pass","message":"Code hash matches."},
+        {"name":"primitive_allowlist","status":"pass","message":"Only primitives used."},
+        {"name":"call_count_limit","status":"pass","message":"125 <= 500."},
+        {"name":"concurrency_limit","status":"pass","message":"20 <= 50."},
+        {"name":"context_exists","status":"pass","message":"ctx_7f3a exists."}
+      ]
+    },
     "result": {
       "value": "ACE2 (Angiotensin-Converting Enzyme 2) findings across 100 papers...",
       "stdout": ""
@@ -3148,7 +2960,7 @@ Agent runs the verified artifact. Real LLM calls happen here.
   }
 ```
 
-### Step 7: Inspect trace (optional)
+### Step 5: Inspect trace (optional)
 
 Agent reviews what happened during execution.
 
@@ -3179,13 +2991,16 @@ Agent reviews what happened during execution.
 ### Summary of ID chain
 
 ```text
-ctx_7f3a (data) → plan_b2c1 (classification + template) → art_e4d9 (compiled Scheme)
-  → dry_1a2b (structural simulation) → ver_3c4d (gate) → exec_5e6f (result + trace)
+ctx_7f3a (data) → plan_b2c1 (classification + template) → dry_1a2b (compile + simulate + estimate) → exec_5e6f (verify + execute)
 ```
 
-Each ID is durable and inspectable. The same artifact can be re-executed with
-different data by creating a new context and re-compiling with updated
-`context_id` in the slot values.
+Internal IDs created along the way: `art_e4d9` (artifact, created by dry-run),
+`ver_3c4d` (verification, created by execute). These appear in responses and
+durable records for audit/replay but are not passed between tools by the agent.
+
+Each ID is durable and inspectable. The same plan can be re-executed with
+different data by creating a new context and updating `context_id` in the
+template invocation's slot values.
 
 ---
 
@@ -3196,11 +3011,9 @@ These should be decided before implementation begins:
 1. **Store backend.** Start with filesystem JSON (decided in section 11.1).
    Migrate to SQLite/PGlite if queryable history or concurrent access becomes
    a bottleneck. *(Partially decided — revisit if needed.)*
-2. **Artifact mutability.** Prefer immutable artifacts. Edits create new
-   artifact IDs. *(Decided.)*
-3. **Recursive planning.** Decide whether recursive sub-plans are compiled
+2. **Recursive planning.** Decide whether recursive sub-plans are compiled
    ahead of time or generated at runtime under verification constraints.
-4. **History feedback.** Decide which execution metrics influence future
+3. **History feedback.** Decide which execution metrics influence future
    planning and how to avoid leaking sensitive data into planner prompts.
 
 ---
@@ -3210,8 +3023,13 @@ These should be decided before implementation begins:
 The rewrite is successful when:
 
 - agents never need to write Scheme,
-- agents can still inspect generated Scheme for debugging,
-- all execution goes through compiled artifacts,
+- agents can still inspect generated Scheme for debugging (via dry-run and
+  execute responses),
+- all execution goes through compiled artifacts (created internally),
+- the happy-path agent flow is 3 tool calls: plan → dry-run → execute,
+- the public MCP API surface is 8 tools (down from 15),
+- compilation, estimation, and verification are internal — no separate
+  agent-facing tools for these steps,
 - dry-run and verification happen before expensive calls,
 - templates cover common orchestration shapes,
 - compound combinators are gone from the runtime,
