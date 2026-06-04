@@ -85,6 +85,29 @@ to the public MCP API.
 Templates are the bridge between high-level planning and executable Scheme.
 They should be data, not prompts that ask an LLM to write code.
 
+There are three levels in the compilation pipeline:
+
+```text
+Template (reusable pattern with $slots holes)
+    ↓  planner fills slots with concrete values
+Resolved Template (concrete computation graph, all values known)
+    ↓  compiler generates Racket code
+Scheme (executable artifact run by the Racket sandbox)
+```
+
+A **template** is a reusable pattern — it defines the structure of a
+computation but leaves content-specific values as typed slots (holes). For
+example, a `batch_extract_reduce` template knows that the computation is
+"map over items, then tree-reduce the results" but doesn't know what
+instruction to give the LLM, which model to use, or how many items to
+process concurrently. Those are slots.
+
+A **resolved template** is what you get after the planner fills the slots
+with concrete values. It is a fully concrete computation graph — no holes
+remain. The compiler takes a resolved template as input and deterministically
+generates Scheme code from it. Agents never see resolved templates; they are
+an internal intermediate representation.
+
 A template stores:
 
 - `name` and `version`,
@@ -95,16 +118,20 @@ A template stores:
 - model requirements such as JSON mode or image support,
 - output shape and schema expectations,
 - expected call formulas and structural profiles,
-- primitive-only Strategy Spec fragment (the internal representation compiled to Scheme),
+- a node graph with `$slots` references (the template body — becomes a
+  resolved template after slot filling),
 - verification rules and dry-run warnings.
 
-The planner reads template metadata and fills slots. The compiler owns all
-Scheme generation.
+The planner reads template metadata and fills slots. The compiler resolves
+the `$slots` references, validates the result, and generates Scheme. Agents
+interact only with templates (via `plan_strategy` and `compile_strategy`).
 
 This division is important:
 
-- LLMs choose strategy intent and content slots.
-- Deterministic code chooses syntax, primitive composition, and safety checks.
+- LLMs choose strategy intent and content slots (template selection + slot
+  filling).
+- Deterministic code resolves slots, chooses syntax, composes primitives,
+  and checks safety (compilation).
 - Verification checks the compiled artifact before real model calls happen.
 
 ---
@@ -119,7 +146,7 @@ The greenfield server should start with a small artifact-based MCP surface.
 | `get_context(context_id)` | Inspect metadata and optionally preview stored data. |
 | `list_templates(filters=None)` | Show available templates and selection metadata. |
 | `get_template(template_name, version=None)` | Return template schema and structural profile. |
-| `plan_strategy(task, context_id=None, hints=None)` | Classify task/data and return `plan_id` plus proposed template/spec. |
+| `plan_strategy(task, context_id=None, hints=None)` | Classify task/data and return `plan_id` plus proposed template invocation. |
 | `compile_strategy(plan_id=None, template_invocation=None)` | Produce a compiled artifact and return `artifact_id`. |
 | `get_artifact(artifact_id)` | Inspect artifact metadata, generated Scheme, hash, and compiler version. |
 | `estimate_strategy(artifact_id)` | Static estimate without executing the Racket runtime. |
@@ -418,8 +445,7 @@ metadata is public; generated Scheme is artifact metadata.
 
 ### 4.5 `plan_strategy`
 
-Purpose: classify task/data, choose template/spec alternatives, and persist a
-planning record.
+Purpose: classify task/data, choose a template, and persist a planning record.
 
 Request:
 
@@ -489,7 +515,7 @@ Response:
 }
 ```
 
-Planner output must not include raw Scheme or raw Strategy Specs. If no
+Planner output must not include raw Scheme or raw node graphs. If no
 template fits, the planner should return `status: "no_template"` with a
 recommendation that the user create a new template, including the inferred
 TaskShape/DataShape and a description of what the template would need.
@@ -576,7 +602,7 @@ Response:
     "generated_scheme": null,
     "source_map": [
       {
-        "spec_path": "$.nodes[0]",
+        "template_node_path": "$.nodes[0]",
         "scheme_symbol": "map-phase",
         "primitive": "map-async"
       }
@@ -974,13 +1000,13 @@ replay are reliable.
   "created_at": "2026-06-03T12:02:00Z",
   "plan_id": "plan_01HX...",
   "context_ids": ["ctx_01HX..."],
-  "source_type": "template_invocation | strategy_spec",
+  "source_type": "template_invocation",
   "template_name": "batch_extract_reduce",
   "template_version": "1.0.0",
   "slot_values": {},
-  "strategy_spec": {},
+  "resolved_template": {},
   "compiler": {
-    "name": "rlm-scheme-spec-compiler",
+    "name": "rlm-scheme-template-compiler",
     "version": "0.1.0"
   },
   "generated_scheme_ref": {
@@ -1073,13 +1099,18 @@ Artifacts should be immutable. Any edit creates a new `artifact_id`.
 
 ---
 
-## 6. Strategy Spec Schema (Internal)
+## 6. Resolved Template Schema (Internal)
 
-Strategy Spec is the internal structured representation used by templates and
-the compiler. It is NOT exposed to agents through the MCP API — agents interact
-only with templates via `plan_strategy` and `compile_strategy`. The Strategy
-Spec exists so that templates can declare their structure in a machine-readable
-format that the compiler can validate and convert to Scheme deterministically.
+A resolved template is the internal structured representation produced when
+the compiler fills a template's `$slots` references with concrete values. It
+is NOT exposed to agents through the MCP API — agents interact only with
+templates via `plan_strategy` and `compile_strategy`. The resolved template
+exists so the compiler has a fully concrete, machine-readable computation
+graph to validate and convert to Scheme deterministically.
+
+The schema below defines the node graph format. In a template file, this
+appears as the `template_body` field with `$slots` references. After slot
+filling, it becomes a resolved template with all values concrete.
 
 Top-level schema:
 
@@ -1143,7 +1174,7 @@ Top-level schema:
 
 Allowed node operations:
 
-| Spec op | Compiles to |
+| Node op | Compiles to |
 |---|---|
 | `llm_call` | `llm-query` or `llm-query-async`. |
 | `map_async` | `map-async`. |
@@ -1162,7 +1193,7 @@ Allowed node operations:
 | `restore` | `restore`. |
 | `recursive` | `recursive-spawn` with artifact-aware sub-plan. |
 
-Explicitly disallowed spec operations:
+Explicitly disallowed node operations:
 
 - raw Scheme,
 - string eval,
@@ -1173,16 +1204,16 @@ Explicitly disallowed spec operations:
 
 ### Reference Resolution
 
-Strategy Specs and templates use `$`-prefixed references to bind data between
-nodes, slots, and contexts. References are resolved by the compiler before
-Scheme generation. They are NOT runtime expressions — they are compile-time
-substitutions.
+Templates use `$`-prefixed references in their `template_body` to bind data
+between nodes, slots, and contexts. References are resolved by the compiler
+when filling slots to produce a resolved template, then converted to Scheme.
+They are NOT runtime expressions — they are compile-time substitutions.
 
 **Grammar:**
 
 | Prefix | Meaning | Resolved from |
 |---|---|---|
-| `$inputs.<name>` | Named input declared in `inputs` block. | Spec `inputs` section. |
+| `$inputs.<name>` | Named input declared in `inputs` block. | Template body `inputs` section. |
 | `$context.<path>` | JSONPath into a loaded context's data. | Context store, using `context_refs` binding. |
 | `$nodes.<id>.output` | Output of a previously declared node. | Compiler dependency graph. |
 | `$slots.<name>` | Template slot value. | Filled `slot_values` from template invocation. |
@@ -1313,7 +1344,7 @@ Template:
       }
     }
   },
-  "strategy_spec_fragment": {
+  "template_body": {
     "nodes": [
       {
         "id": "extract",
@@ -1644,7 +1675,7 @@ Semantics:
 - reports progress and heartbeats during long fan-outs,
 - propagates per-item errors according to compiler-selected error policy.
 
-Error policy should be explicit in the Strategy Spec/template:
+Error policy should be explicit in the template:
 
 ```json
 {
@@ -2104,12 +2135,13 @@ existing artifacts.
 Checkpoints are scoped to their execution but survive `"sandbox"` resets so
 that failed long-running workflows can be resumed.
 
-### 11.2 Strategy Spec Schema
+### 11.2 Resolved Template Schema
 
-See section 6 for the full Strategy Spec schema definition, allowed node
+See section 6 for the full resolved template schema definition, allowed node
 operations, and disallowed operations. The compiler uses this schema as its
-input format. Templates store Strategy Spec fragments (see section 7) that
-the compiler instantiates with filled slot values.
+input format. Templates store node graphs with `$slots` references in their
+`template_body` field (see section 7). The compiler fills slots and produces
+a resolved template, then generates Scheme from it.
 
 ### 11.3 Template Catalog
 
@@ -2140,7 +2172,7 @@ Responsibilities:
 - reject unsupported shapes,
 - select primitive compositions,
 - generate Racket code,
-- attach source maps from spec nodes to Scheme fragments,
+- attach source maps from template nodes to Scheme fragments,
 - calculate static structural profiles,
 - hash generated code,
 - store artifact metadata.
@@ -2286,7 +2318,7 @@ Check:
 
 - artifact was compiler-generated,
 - artifact hash matches stored code,
-- template/spec version is known,
+- template version is known,
 - all required slots are filled,
 - model names and capabilities are valid,
 - JSON-mode instructions are compatible,
@@ -2352,10 +2384,10 @@ Planning output should be one of:
 - a `no_template` recommendation describing the needed template for the user
   to create.
 
-Planning output must not include raw Scheme or raw Strategy Specs. If no
+Planning output must not include raw Scheme or raw node graphs. If no
 template matches the classified task, the planner returns a structured
 recommendation for a new template rather than attempting to generate an
-ad-hoc strategy.
+ad-hoc computation graph.
 
 ---
 
@@ -2735,7 +2767,7 @@ rlm_scheme/
   template_store.py
   planner.py
   classifier.py
-  spec_schema.py
+  resolved_template.py
   compiler.py
   dry_run.py
   verifier.py
@@ -2778,9 +2810,9 @@ Module responsibilities:
 | `context_store.py` | Large context storage, previews, metadata, and path extraction. |
 | `template_store.py` | Load, validate, list, and retrieve templates. |
 | `classifier.py` | Deterministic TaskShape/DataShape rules. |
-| `planner.py` | Template/spec selection and plan record creation. |
-| `spec_schema.py` | Strategy Spec validation and normalization. |
-| `compiler.py` | Template/spec to Scheme artifact compilation. |
+| `planner.py` | Template selection and plan record creation. |
+| `resolved_template.py` | Resolved template validation and normalization. |
+| `compiler.py` | Template to Scheme artifact compilation (slot resolution + code generation). |
 | `dry_run.py` | Deterministic structural simulation. |
 | `verifier.py` | Artifact checks and execution gate. |
 | `executor.py` | Racket runtime lifecycle, progress, cancellation, and execution records. |
@@ -2797,7 +2829,7 @@ Module responsibilities:
 
 - Freeze public MCP API names.
 - Define ID record schemas.
-- Define Strategy Spec schema.
+- Define resolved template schema (section 6).
 - Define template schema.
 - Decide initial store backend.
 - Decide which Python bridge operations are allowed in compiler output.
@@ -2866,7 +2898,7 @@ Exit criteria:
 
 - Create initial templates for common shapes.
 - Implement template validation.
-- Implement Strategy Spec compiler.
+- Implement template compiler (slot resolution + Scheme generation).
 - Store compiled artifacts with source maps and hashes.
 - Generate primitive-only Scheme.
 
@@ -2885,7 +2917,7 @@ Exit criteria:
 
 Exit criteria:
 
-- plan output is template/spec only,
+- plan output is template invocations only,
 - composite classification preserves phases,
 - tests cover ambiguous and multi-phase inputs.
 
