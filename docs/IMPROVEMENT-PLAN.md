@@ -34,6 +34,336 @@ Tasks the framework handles, each mapping to a canonical set of combinators.
 | **Classify** | Categorize/label items | tiered, active-learning, choose, fan-out-aggregate |
 | **Pipeline** | Multi-stage sequential transformation | sequence, with-validation, try-fallback |
 
+### Per-shape combinator selection (internal decision trees)
+
+The TaskShape determines the *candidate* combinators. These internal decision trees determine the *specific* combinator within a shape. Each tree produces a single concrete strategy — no LLM judgment needed for structural decisions.
+
+#### Batch
+
+```
+Q1: Do results need to be COMBINED into one output, or returned as a LIST?
+    COMBINED → Q2
+    LIST     → Q3
+
+Q2 (combined output):
+    Is combination order-sensitive? (e.g., chronological narrative)
+        YES → fan-out-aggregate with fold-sequential as reduce-fn
+        NO  → fan-out-aggregate with tree-reduce as reduce-fn
+              (set branch-factor = 5 for <=500 items, 10 for >500)
+
+Q3 (list output):
+    Is quality uniform across items, or are some items harder?
+        UNIFORM  → map-async (plain parallel, all same model)
+        VARIABLE → active-learning
+                   (cheap model on all, expensive model re-processes items
+                    where cheap model's confidence is low)
+
+Q4 (always, modifier): Is cost a primary concern AND items > 100?
+    YES → wrap with tiered: cheap model for per-item extraction,
+          expensive model ONLY for synthesis/aggregation phase
+    NO  → use single model tier
+
+Q5 (always, modifier): Could items be duplicated or near-duplicated?
+    YES → wrap inner fn with memoized (hash on first 200 chars)
+    NO  → skip
+
+Result combinator:    fan-out-aggregate | map-async | active-learning
+Result modifiers:     + tiered wrapper | + memoized wrapper
+Result reduce-fn:     tree-reduce (parallel) | fold-sequential (ordered)
+```
+
+**Concrete examples:**
+- "Extract entities from 500 papers, synthesize findings" → fan-out-aggregate + tree-reduce, branch-factor=10
+- "Translate 200 documents, return list" → map-async
+- "Grade 300 essays, some are ambiguous" → active-learning (cheap pass, expensive on uncertain)
+- "Extract from 2000 docs, cost matters" → tiered (nano extract, gpt-4o-mini synth) + memoized
+
+#### Synthesize
+
+```
+Q1: How many source items?
+    2-5 items   → single llm-query with all items concatenated in data
+                   (no combinator needed, fits in one context window)
+    6-50 items  → tree-reduce, branch-factor = min(items, 5)
+    50+ items   → tree-reduce, branch-factor = 5-10
+
+Q2: Is synthesis order-sensitive? (e.g., maintaining narrative arc)
+    YES → fold-sequential (items processed one at a time, accumulating)
+    NO  → tree-reduce (parallel, log-depth, faster)
+
+Q3: Do you want multiple PERSPECTIVES on the same sources?
+    YES → ensemble (run 2-3 models, aggregate their syntheses)
+    NO  → single-model tree-reduce or fold-sequential
+
+Result combinator:    tree-reduce | fold-sequential | ensemble
+Result parameter:     branch-factor (for tree-reduce) | model-list (for ensemble)
+```
+
+#### Search
+
+```
+Q1: Is the solution space ENUMERABLE (finite candidates) or OPEN-ENDED?
+    ENUMERABLE → Q2
+    OPEN-ENDED → Q3
+
+Q2 (finite candidates):
+    How many candidates?
+        2-5   → parallel + vote (run all, pick winner)
+        5-20  → parallel + vote with plurality
+        20+   → tournament bracket: tree-reduce with pairwise comparison
+
+Q3 (open-ended search):
+    Is there a quality signal you can check programmatically?
+        YES → iterate-until (generate, check, repeat until passing)
+        NO  → iterate-until with LLM-as-judge predicate
+              (generate, critique, check if critique says "acceptable")
+
+Q4: Is latency critical? (need answer ASAP, quality secondary)
+    YES → race (launch multiple approaches, first to finish wins)
+    NO  → parallel + vote (launch all, pick best)
+
+Result combinator:    vote | iterate-until | race
+```
+
+#### Refine
+
+```
+Q1: Do you have EXPLICIT quality criteria (rubric, checklist)?
+    YES → critique-refine
+          (critique-fn checks against criteria, refine-fn addresses gaps)
+          Set max-iter based on criteria count: 2 for simple, 3-4 for complex
+    NO  → Q2
+
+Q2: Is the refinement goal CONVERGENT (approaching a known standard)
+    or EXPLORATORY (trying to make it "better" without clear target)?
+    CONVERGENT → iterate-until with a testable predicate
+                 (e.g., "contains all required sections", JSON validates)
+    EXPLORATORY → critique-refine with open-ended critique
+                  max-iter = 2-3 (diminishing returns beyond this)
+
+Q3 (always, modifier): Should each iteration be validated before continuing?
+    YES → wrap refine step with with-validation
+          (if validation fails, retry the refine step, not the whole loop)
+    NO  → skip
+
+Result combinator:    critique-refine | iterate-until
+Result modifier:      + with-validation wrapper
+Result parameter:     max-iter (2-4)
+```
+
+#### Compare
+
+```
+Q1: Are you comparing STRATEGIES (different approaches to same task)
+    or MODELS (same approach, different models)?
+    STRATEGIES → parallel + vote
+                 (run each strategy, vote on results)
+    MODELS     → ensemble
+                 (same prompt to multiple models, aggregate)
+
+Q2: How should the winner be determined?
+    MAJORITY (>50% agree)   → vote #:method 'majority (need odd number, 3+)
+    PLURALITY (most votes)  → vote #:method 'plurality (any number)
+    CONSENSUS (all agree)   → vote #:method 'consensus (strict, may fail)
+    SYNTHESIS (combine all) → ensemble with custom aggregator
+                              (LLM synthesizes all responses into one)
+
+Q3: How many alternatives?
+    2   → simple parallel, no voting needed (just compare and pick)
+    3-5 → parallel + vote
+    5+  → parallel (capped at max-concurrent) + tournament or weighted vote
+
+Result combinator:    vote | ensemble | parallel
+Result parameter:     voting method | aggregator function | model list
+```
+
+#### Classify
+
+```
+Q1: How many items to classify?
+    1 item     → single llm-query (no combinator needed)
+    2-50 items → map-async (parallel, uniform)
+    50+ items  → Q2
+
+Q2: Are categories clear-cut or ambiguous?
+    CLEAR    → fan-out-aggregate with cheap model
+               (nano/mini can handle clear classification)
+    AMBIGUOUS → active-learning
+                (cheap model on all, expensive re-classifies uncertain ones)
+
+Q3: Do you need per-item labels or aggregate distribution?
+    PER-ITEM LABELS      → map-async (return list)
+    AGGREGATE DISTRIBUTION → fan-out-aggregate + py-exec
+                             (extract per-item, then Python counts/aggregates)
+
+Q4 (modifier): Is misclassification costly?
+    YES → add with-validation wrapper or vote (classify with 2-3 models, majority)
+    NO  → single-model classification
+
+Result combinator:    fan-out-aggregate | map-async | active-learning
+Result modifier:      + vote wrapper (if misclassification costly)
+```
+
+#### Pipeline
+
+```
+Q1: How many stages?
+    2 stages → sequence(stage1, stage2) — simple chain
+    3+ stages → sequence(stage1, stage2, stage3, ...)
+
+Q2 (per stage): Could this stage fail?
+    YES → wrap stage with try-fallback
+          (primary approach + simpler fallback)
+    NO  → unwrapped stage
+
+Q3 (per stage): Does this stage need quality assurance?
+    YES → wrap stage with with-validation
+          (check output before passing to next stage)
+    NO  → unwrapped stage
+
+Q4: Are stages the same operation on different data, or distinct operations?
+    SAME OPERATION → this is actually Batch, not Pipeline. Re-classify.
+    DISTINCT OPS   → true Pipeline, sequence is correct.
+
+Result combinator:    sequence
+Result modifiers:     + try-fallback per stage | + with-validation per stage
+```
+
+#### Generate
+
+```
+Q1: Do you need a FIXED NUMBER of outputs or generate UNTIL a condition?
+    FIXED NUMBER → fan-out-aggregate over (range 1 N)
+                   (create a dummy index list, map generation over it)
+    UNTIL CONDITION → iterate-until
+                      (generate batch, check condition, repeat)
+
+Q2 (fixed number): Do generated items need to be UNIQUE/diverse?
+    YES → parallel generation + deduplication via memoized or py-exec
+    NO  → plain fan-out-aggregate over index list
+
+Q3 (fixed number): Do items need to be CONSISTENT with each other?
+    YES → fold-sequential (each generation sees prior items as context)
+    NO  → parallel fan-out-aggregate
+
+Result combinator:    fan-out-aggregate (over index list) | iterate-until | fold-sequential
+```
+
+#### Decompose
+
+```
+Q1: Is the decomposition structure KNOWN in advance (e.g., chapters, sections)?
+    YES → py-exec to split (regex/structural parsing), return list
+          (no LLM needed for decomposition itself)
+    NO  → Q2
+
+Q2: Can the LLM identify the structure in ONE pass?
+    YES → single llm-query with #:json #t
+          (ask LLM to return structured breakdown as JSON)
+          then py-exec to parse and separate
+    NO  → recursive-spawn
+          (LLM breaks into coarse parts, then recurses on each part)
+
+Q3: After decomposition, do parts need individual processing?
+    YES → Decompose becomes first stage of a Composite:
+          Decompose → Batch (process each part)
+    NO  → return the decomposed parts directly
+
+Result combinator:    py-exec (structural) | llm-query + py-exec | recursive-spawn
+Result composition:   often Decompose → Batch (Composite pattern)
+```
+
+#### Validate/Audit
+
+```
+Q1: How many items to validate?
+    1 item   → single llm-query (structured assessment prompt)
+    2+ items → Q2
+
+Q2: Is validation criteria FIXED (same rubric for all items)?
+    YES → fan-out-aggregate
+          map-fn: validate each item against rubric
+          reduce-fn: aggregate pass/fail counts + summarize failures
+    NO  → fold-sequential (criteria evolve based on what you've seen)
+
+Q3: Is false-positive or false-negative more costly?
+    FALSE POSITIVE costly → tiered: cheap screen first, expensive review on "pass"
+    FALSE NEGATIVE costly → tiered: cheap screen first, expensive review on "fail"
+    EQUAL                 → uniform model, no tiering
+
+Q4 (modifier): Do you need structured output (JSON with score, reasoning)?
+    YES → add #:json #t to llm-query, with-validation to verify JSON structure
+    NO  → prose assessment
+
+Result combinator:    fan-out-aggregate | fold-sequential
+Result modifier:      + tiered | + with-validation (for JSON output)
+```
+
+#### Aggregate/Report
+
+```
+Q1: Is aggregation purely COMPUTATIONAL (counts, averages, distributions)?
+    YES → fan-out-aggregate for LLM extraction + py-exec for computation
+          map-fn: LLM extracts structured data from each item (#:json #t)
+          reduce-fn: py-exec computes statistics, not LLM synthesis
+    NO  → Q2
+
+Q2: Does aggregation require LLM INTERPRETATION (trends, insights)?
+    YES → Two-phase:
+          Phase 1: fan-out-aggregate to extract structured data
+          Phase 2: py-exec to compute stats
+          Phase 3: single llm-query to interpret stats
+    NO  → fan-out-aggregate + py-exec only
+
+Q3: Are there GROUPING dimensions (aggregate per-category)?
+    YES → py-exec handles groupby after extraction
+    NO  → single aggregation pass
+
+Result combinator:    fan-out-aggregate + py-exec
+Result composition:   often a Pipeline: extract → compute → interpret
+```
+
+#### Composite
+
+```
+Q1: Identify the constituent shapes in order.
+    Common patterns:
+    - Batch → Synthesize (extract from many, combine into one)
+    - Decompose → Batch (break apart, process each piece)
+    - Batch → Aggregate (extract from many, compute statistics)
+    - Generate → Validate (create items, check each one)
+    - Classify → Aggregate (label items, count distribution)
+    - Batch → Refine (extract, then iteratively improve the combined result)
+
+Q2: Connect phases with sequence.
+    Each phase uses its own shape's decision tree to select combinators.
+    The output of phase N becomes the input of phase N+1.
+
+Q3: Are phases INDEPENDENT (can run in parallel) or DEPENDENT (sequential)?
+    INDEPENDENT → parallel([phase1, phase2]) then combine
+    DEPENDENT   → sequence(phase1, phase2) — most common
+
+Result combinator:    sequence(shape1_combinator, shape2_combinator)
+```
+
+### Combinator selection is a TWO-LEVEL decision
+
+To summarize: combinator selection is NOT a single mapping from shape to combinator. It's a two-level process:
+
+**Level 1: TaskShape + DataShape → Structural combinator**
+- TaskShape determines the *kind* of operation (map, reduce, iterate, compare)
+- DataShape determines the *structural parameters* (concurrency, branch-factor, sequential vs parallel)
+- This level is **deterministic** — can be implemented as code, no LLM needed
+
+**Level 2: Task properties → Combinator modifiers and parameters**
+- Cost sensitivity → tiered / active-learning wrappers
+- Quality requirements → with-validation / vote / critique-refine wrappers
+- Output format → #:json, py-exec aggregation
+- Error tolerance → try-fallback wrappers
+- This level requires **LLM judgment** for some decisions (how costly is misclassification? is combination order-sensitive?)
+
+The system should handle Level 1 mechanically. The LLM should only make Level 2 decisions, which are qualitative judgments expressible as simple yes/no or multiple-choice answers — not code generation.
+
 ### Missing shapes
 
 | Shape | Description | Why missing matters | Primary Combinators |
