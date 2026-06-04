@@ -50,8 +50,8 @@ Each stage has a clear responsibility:
 | ID | Meaning |
 |---|---|
 | `context_id` | Stored input data plus metadata: shape, item count, modality, independence, size estimates, and optional names. |
-| `plan_id` | Task intent and planning record: objective, constraints, inferred TaskShape/DataShape, selected template or Strategy Spec, and rationale. |
-| `artifact_id` | Compiled executable strategy: template invocation or Strategy Spec, filled typed slots, generated internal Scheme, compiler version, and code hash. |
+| `plan_id` | Task intent and planning record: objective, constraints, inferred TaskShape/DataShape, selected template, and rationale. |
+| `artifact_id` | Compiled executable strategy: template invocation with filled typed slots, generated internal Scheme, compiler version, and code hash. |
 | `dry_run_id` | Structural simulation for an artifact: expected calls, fan-out, recursive depth, model mix, token/cost estimates, warnings, and failure risks. |
 | `verification_id` | Verification decision: deterministic checks, dry-run interpretation, optional semantic review, pass/warn/fail status, and reasons. |
 | `execution_id` | One real execution attempt: result, stdout, trace, call metrics, token usage, errors, checkpoints, and status history. |
@@ -61,8 +61,8 @@ Normal agent flow:
 1. `load_context(data, name, metadata)` stores large input and returns a
    `context_id`.
 2. `plan_strategy(task, context_id, hints)` classifies the work and returns a
-   `plan_id` plus a template invocation or Strategy Spec.
-3. `compile_strategy(plan_id | spec | template_invocation)` validates typed
+   `plan_id` plus a template invocation.
+3. `compile_strategy(plan_id | template_invocation)` validates typed
    slots and returns an `artifact_id`.
 4. `estimate_strategy(artifact_id)` gives a static estimate.
 5. `dry_run_strategy(artifact_id)` simulates execution and returns a
@@ -89,12 +89,13 @@ A template stores:
 
 - `name` and `version`,
 - supported TaskShape/DataShape combinations,
-- trigger conditions and rejection conditions,
+- trigger conditions and rejection conditions (Scheme predicates evaluated
+  against classification hints — e.g., `(> item_count 1)`, `(eq? independent #t)`),
 - typed slots with defaults, enums, ranges, required fields, and descriptions,
 - model requirements such as JSON mode or image support,
 - output shape and schema expectations,
 - expected call formulas and structural profiles,
-- primitive-only Strategy Spec fragment or compiler-owned Scheme body,
+- primitive-only Strategy Spec fragment (the internal representation compiled to Scheme),
 - verification rules and dry-run warnings.
 
 The planner reads template metadata and fills slots. The compiler owns all
@@ -119,17 +120,17 @@ The greenfield server should start with a small artifact-based MCP surface.
 | `list_templates(filters=None)` | Show available templates and selection metadata. |
 | `get_template(template_name, version=None)` | Return template schema and structural profile. |
 | `plan_strategy(task, context_id=None, hints=None)` | Classify task/data and return `plan_id` plus proposed template/spec. |
-| `compile_strategy(plan_id=None, spec=None, template_invocation=None)` | Produce a compiled artifact and return `artifact_id`. |
+| `compile_strategy(plan_id=None, template_invocation=None)` | Produce a compiled artifact and return `artifact_id`. |
 | `get_artifact(artifact_id)` | Inspect artifact metadata, generated Scheme, hash, and compiler version. |
 | `estimate_strategy(artifact_id)` | Static estimate without executing the Racket runtime. |
 | `dry_run_strategy(artifact_id)` | Simulate runtime structure without real LLM calls. |
 | `verify_strategy(artifact_id, dry_run_id=None, options=None)` | Gate artifact execution. |
-| `execute_strategy(artifact_id, verification_id=None, plan_id=None, timeout=None, force=False)` | Execute a verified artifact. |
+| `execute_strategy(artifact_id, verification_id=None, plan_id=None, timeout=None)` | Execute a verified artifact. |
 | `get_execution_trace(execution_id)` | Return call hierarchy, data flow, stdout, errors, token usage, and checkpoints. |
 | `get_status(execution_id=None)` | Return server/runtime/call status. |
 | `cancel_call(call_id=None, execution_id=None)` | Cancel one call or an entire execution. |
 | `reset_runtime(scope="session")` | Reset sandbox state without deleting durable artifacts by default. |
-| `get_usage_guide()` | Explain the artifact workflow. |
+
 
 Target FastMCP function signatures:
 
@@ -162,7 +163,6 @@ def plan_strategy(
 def compile_strategy(
     plan_id: str | None = None,
     template_invocation_json: str | None = None,
-    spec_json: str | None = None,
     options_json: str | None = None,
 ) -> str: ...
 
@@ -193,7 +193,6 @@ async def execute_strategy(
     verification_id: str | None = None,
     plan_id: str | None = None,
     timeout_seconds: int | None = None,
-    force: bool = False,
     runtime_options_json: str | None = None,
     ctx: Context = None,
 ) -> str: ...
@@ -490,13 +489,14 @@ Response:
 }
 ```
 
-Planner output must not include raw Scheme. If no template fits, return a
-Strategy Spec proposal instead of code.
+Planner output must not include raw Scheme or raw Strategy Specs. If no
+template fits, the planner should return `status: "no_template"` with a
+recommendation that the user create a new template, including the inferred
+TaskShape/DataShape and a description of what the template would need.
 
 ### 4.6 `compile_strategy`
 
-Purpose: turn a trusted template invocation or Strategy Spec into an immutable
-compiled artifact.
+Purpose: turn a template invocation into an immutable compiled artifact.
 
 Request:
 
@@ -508,7 +508,6 @@ Request:
     "template_version": "1.0.0",
     "slot_values": {}
   },
-  "spec": null,
   "options": {
     "store_generated_scheme": true,
     "strict": true
@@ -516,8 +515,8 @@ Request:
 }
 ```
 
-At least one of `plan_id`, `template_invocation`, or `spec` is required.
-If `plan_id` is provided and already contains a recommended template/spec,
+At least one of `plan_id` or `template_invocation` is required. If `plan_id`
+is provided and already contains a recommended template invocation,
 `compile_strategy` can use it directly.
 
 Response:
@@ -744,7 +743,6 @@ Request:
   "verification_id": "ver_01HX...",
   "plan_id": "plan_01HX...",
   "timeout_seconds": 900,
-  "force": false,
   "runtime_options": {
     "progress_interval_seconds": 2,
     "checkpoint_prefix": "ace2-run",
@@ -784,7 +782,8 @@ Response:
 
 If `verification_id` is omitted, execution should look up the latest passing
 verification for the artifact. If no passing verification exists, execution
-must fail unless `force=true`.
+must fail with a structured error directing the agent to run
+`verify_strategy` first.
 
 ### 4.12 `get_execution_trace`
 
@@ -1074,11 +1073,13 @@ Artifacts should be immutable. Any edit creates a new `artifact_id`.
 
 ---
 
-## 6. Strategy Spec Schema
+## 6. Strategy Spec Schema (Internal)
 
-Strategy Spec is the LLM-facing structured orchestration language. It should be
-expressive enough to represent templates but constrained enough to compile
-deterministically.
+Strategy Spec is the internal structured representation used by templates and
+the compiler. It is NOT exposed to agents through the MCP API — agents interact
+only with templates via `plan_strategy` and `compile_strategy`. The Strategy
+Spec exists so that templates can declare their structure in a machine-readable
+format that the compiler can validate and convert to Scheme deterministically.
 
 Top-level schema:
 
@@ -1170,6 +1171,52 @@ Explicitly disallowed spec operations:
 - removed compound combinator names,
 - unsafe interpolation/overwrite/eval.
 
+### Reference Resolution
+
+Strategy Specs and templates use `$`-prefixed references to bind data between
+nodes, slots, and contexts. References are resolved by the compiler before
+Scheme generation. They are NOT runtime expressions — they are compile-time
+substitutions.
+
+**Grammar:**
+
+| Prefix | Meaning | Resolved from |
+|---|---|---|
+| `$inputs.<name>` | Named input declared in `inputs` block. | Spec `inputs` section. |
+| `$context.<path>` | JSONPath into a loaded context's data. | Context store, using `context_refs` binding. |
+| `$nodes.<id>.output` | Output of a previously declared node. | Compiler dependency graph. |
+| `$slots.<name>` | Template slot value. | Filled `slot_values` from template invocation. |
+| `$item` | Current iteration variable inside `map_async` body. | Compiler-generated lambda parameter. |
+| `$group` | Current group variable inside `tree_reduce` body. | Compiler-generated lambda parameter. |
+| `$acc` | Accumulator variable inside `fold_sequential` body. | Compiler-generated lambda parameter. |
+
+**Path extraction uses JSONPath** ([RFC 9535](https://www.rfc-editor.org/rfc/rfc9535)).
+The compiler resolves `$context.<path>` and `$inputs.<name>` references using
+JSONPath queries against the stored context data. Examples:
+
+- `$context.items` → `$.items` (shorthand: bare property access)
+- `$inputs.papers` → resolves the `papers` binding from `inputs.papers.from_context` + `inputs.papers.path`
+
+**Resolution rules:**
+
+1. All references must resolve at compile time. Unresolvable references are
+   compile errors.
+2. `$nodes.<id>.output` creates an implicit dependency — the compiler must
+   order nodes so that producers execute before consumers.
+3. `$item`, `$group`, and `$acc` are only valid inside their respective node
+   bodies (`map_async`, `tree_reduce`, `fold_sequential`). Using them outside
+   is a compile error.
+4. `$slots.<name>` values are type-checked against the template's `slot_schema`
+   before substitution.
+5. Nested JSONPath (e.g., `$context.papers[0].title`) is supported for context
+   references but not for node outputs — node outputs are opaque until the
+   next node processes them.
+
+**Compiler output:** References become concrete Racket bindings. For example,
+`$nodes.extract.output` becomes a `let`-bound variable; `$item` becomes a
+lambda parameter; `$slots.max_concurrent` becomes a literal value inlined
+into the generated Scheme.
+
 ---
 
 ## 7. Example Template
@@ -1195,14 +1242,14 @@ Template:
   "data_shapes": ["FlatList", "ChunkedSingular", "Tabular"],
   "output_shape": "one",
   "trigger_conditions": [
-    "item_count > 1",
-    "independent == true",
-    "output_type == one",
-    "has_second_phase == true"
+    "(> item_count 1)",
+    "(eq? independent #t)",
+    "(eq? output_type 'one)",
+    "(eq? has_second_phase #t)"
   ],
   "reject_conditions": [
-    "ordered == true and order_sensitive == true",
-    "requires_pairwise_comparison == true"
+    "(and (eq? ordered #t) (eq? order_sensitive #t))",
+    "(eq? requires_pairwise_comparison #t)"
   ],
   "slot_schema": {
     "type": "object",
@@ -1387,11 +1434,17 @@ bindings and compiler-owned helper bindings.
 
 ## 8. Model Registry
 
-Templates and Strategy Specs should refer to model aliases, not hardcoded
-provider model names. The server resolves aliases at compile or execution time
-through a model registry.
+Templates should refer to model aliases, not hardcoded provider model names.
+The server resolves aliases at compile or execution time through a model
+registry.
 
-Example registry:
+The registry is a JSON configuration file at `config/models.json` (path
+configurable via environment variable `RLM_MODEL_REGISTRY`). It is loaded once
+at server startup and can be reloaded via `reset_runtime(scope="config")`.
+There is no MCP tool to modify it — registry changes are an operator concern,
+not an agent concern.
+
+Example registry (`config/models.json`):
 
 ```json
 {
@@ -1820,6 +1873,48 @@ Disallowed by default:
 - importing project secrets,
 - mutating durable records except through host APIs.
 
+### Error Propagation Model
+
+Each primitive must define how errors are handled. Templates declare an error
+policy per node; the compiler generates the corresponding Scheme error handling.
+
+**Error policies** (declared per-node in templates/specs):
+
+| Policy | Behavior |
+|---|---|
+| `fail_fast` | First error aborts the entire node. Partial results are discarded. Default for most primitives. |
+| `collect` | Errors are collected alongside successful results. The node completes and returns a mixed result list with error markers. Consumer nodes must handle error entries. |
+| `fallback` | On error, execute the declared fallback function for that item. If fallback also fails, apply `fail_fast` or `collect` as secondary policy. |
+
+**Per-primitive error semantics:**
+
+| Primitive | Default policy | Error behavior |
+|---|---|---|
+| `llm-query` | `fail_fast` | Provider errors, timeouts, and token budget exhaustion propagate as structured errors. Rate-limit errors trigger retry (see retry policy). |
+| `llm-query-async` | `fail_fast` | Error is captured in the future. Surfaces when the handle is awaited. |
+| `await` | `fail_fast` | Re-raises the error from the awaited handle. |
+| `await-all` | `fail_fast` | If any handle errored, raises the first error. With `collect`, returns error markers in position. |
+| `await-any` | `fail_fast` | If the completed handle errored, raises immediately. Remaining handles are still cancellable. |
+| `map-async` | `fail_fast` | First item error cancels remaining in-flight items and raises. With `collect`, continues all items and returns mixed results. With `fallback`, retries failed items with fallback function. |
+| `parallel` | `fail_fast` | First thunk error cancels remaining and raises. With `collect`, completes all thunks. |
+| `race` | `fail_fast` | If first completed is an error, raises immediately. Remaining are cancelled. Does not wait for a successful result. |
+| `tree-reduce` | `fail_fast` | Error at any level aborts the tree. Partial reductions from completed levels are lost. |
+| `fold-sequential` | `fail_fast` | Error on any item aborts. Accumulator state up to the error is available in checkpoint if checkpointing is enabled. |
+| `iterate-until` | `fail_fast` | Error on any iteration aborts. Last successful state is available if checkpointed. |
+| `recursive-spawn` | `fail_fast` | Sub-artifact error propagates to parent. |
+| `with-validation` | `fail_fast` | Validation failure is a structured error, not an exception. The template decides whether to retry or propagate. |
+| `try-fallback` | N/A | This IS the error recovery primitive. Primary error triggers fallback. If fallback also fails, the error propagates. |
+
+**Rate-limit and transient errors** are handled by the retry policy (see
+section 11.6) before the error policy applies. Only non-retryable errors reach
+the per-primitive error handling.
+
+**Checkpoints and partial recovery:** Templates that process large item lists
+should declare `checkpoint_every: N`. When `map-async` or `fold-sequential`
+checkpoints, a `restore` call on re-execution skips already-completed items.
+This interacts with error policies — `fail_fast` with checkpointing means the
+failed execution can be retried from the last checkpoint, not from scratch.
+
 ### Remove As Runtime Combinators
 
 These should not exist as runtime public names:
@@ -1958,7 +2053,7 @@ keyword is wired to real enforcement.
 
 ## 11. Architecture Components
 
-### 6.1 Durable Store
+### 11.1 Durable Store
 
 Start with filesystem JSON records for simplicity, but design the schema so it
 can move to SQLite, PGlite, or another embedded database.
@@ -1984,50 +2079,60 @@ Every record should include:
 - status,
 - warnings/errors.
 
-### 6.2 Strategy Spec Schema
+**State lifecycle and persistence scoping:**
 
-Define a Strategy Spec that is expressive enough for all templates but still
-compiler-friendly.
+All durable records are persistent by default — they survive server restarts
+and `reset_runtime` calls. The `reset_runtime` tool accepts a `scope` parameter
+that controls what is cleared:
 
-The spec should represent:
+| Scope | Clears | Preserves |
+|---|---|---|
+| `"sandbox"` | Racket sandbox state, in-memory caches, active call handles. | All durable records (contexts, plans, artifacts, dry-runs, verifications, executions, traces, checkpoints). |
+| `"session"` | Everything in `"sandbox"` plus execution records and traces from the current server session. | Contexts, plans, artifacts, dry-runs, verifications, and checkpoints from prior sessions. |
+| `"all"` | All durable records and sandbox state. Fresh start. | Nothing. |
+| `"config"` | Reloads model registry and template catalog from disk. | All durable records and sandbox state. |
 
-- primitive nodes,
-- model calls,
-- async fan-out,
-- reductions,
-- validation,
-- fallback,
-- Python compute phases,
-- recursion,
-- context references,
-- output schemas,
-- cost/quality hints.
+Contexts, plans, and artifacts are long-lived — they represent reusable work
+products. An agent can re-execute an artifact multiple times, creating new
+execution records each time. Dry-run and verification records are linked to
+specific artifacts and remain valid as long as the artifact exists.
 
-The planner can emit Strategy Specs directly for composite tasks, but it should
-prefer template invocations when a template fits.
+Execution records and traces are the most voluminous. They can be pruned by
+age or count without affecting the ability to create new executions from
+existing artifacts.
 
-### 6.3 Template Catalog
+Checkpoints are scoped to their execution but survive `"sandbox"` resets so
+that failed long-running workflows can be resumed.
 
-Templates should live as structured files, for example:
+### 11.2 Strategy Spec Schema
+
+See section 6 for the full Strategy Spec schema definition, allowed node
+operations, and disallowed operations. The compiler uses this schema as its
+input format. Templates store Strategy Spec fragments (see section 7) that
+the compiler instantiates with filled slot values.
+
+### 11.3 Template Catalog
+
+See section 7 for the full template schema, and section 15 for the initial
+template catalog. Templates live as structured JSON files:
 
 ```text
 templates/
-  batch_extract.yaml
-  batch_extract_reduce.yaml
-  ordered_synthesis.yaml
-  compare_alternatives.yaml
-  refine_until_valid.yaml
-  validate_items.yaml
-  tiered_review.yaml
+  batch_extract_reduce.json
+  batch_map.json
+  ordered_synthesis_fold.json
+  compare_candidates.json
+  refine_until_valid.json
+  tiered_review.json
+  ...
 ```
 
 Template validation is a developer/CI concern. Runtime verification assumes
 trusted templates are structurally valid, but still verifies filled artifacts.
 
-### 6.4 Compiler
+### 11.4 Compiler
 
-The compiler converts template invocations or Strategy Specs into internal
-Scheme artifacts.
+The compiler converts template invocations into internal Scheme artifacts.
 
 Responsibilities:
 
@@ -2042,7 +2147,7 @@ Responsibilities:
 
 The compiler should be deterministic: same inputs, same artifact hash.
 
-### 6.5 Racket Runtime
+### 11.5 Racket Runtime
 
 The Racket runtime should be a sandboxed execution engine, not the planning
 interface.
@@ -2056,7 +2161,7 @@ Responsibilities:
 - emit stdout, scope logs, and trace events,
 - protect scaffold bindings.
 
-### 6.6 Python Host
+### 11.6 Python Host
 
 The Python MCP server owns orchestration state around the Racket runtime.
 
@@ -2074,6 +2179,51 @@ Responsibilities:
 - image resolution,
 - Python bridge process management.
 
+**Retry policy:** The host retries transient provider errors (rate limits,
+server errors, timeouts) before surfacing errors to the per-primitive error
+policy. The retry policy is configurable via `config/retry.json` (path
+configurable via `RLM_RETRY_CONFIG`):
+
+```json
+{
+  "schema_version": "1",
+  "defaults": {
+    "max_retries": 3,
+    "initial_backoff_seconds": 1.0,
+    "max_backoff_seconds": 60.0,
+    "backoff_multiplier": 2.0,
+    "retryable_status_codes": [429, 500, 502, 503, 504],
+    "retryable_error_types": ["rate_limit", "timeout", "server_error"]
+  },
+  "per_model_overrides": {
+    "fast_text_model": {
+      "max_retries": 5,
+      "initial_backoff_seconds": 0.5
+    }
+  }
+}
+```
+
+Retries are per-call, not per-execution. Each retry is logged in the
+execution trace. Rate-limit retries use the `Retry-After` header when
+available, falling back to exponential backoff. Token budget is not consumed
+by failed attempts. If all retries are exhausted, the error propagates to
+the per-primitive error policy (see section 9, Error Propagation Model).
+
+**Progress reporting:** Long-running executions report progress via MCP
+notifications (server-initiated messages on the MCP transport). The protocol:
+
+1. The host emits `notifications/progress` messages during execution. Each
+   message includes `execution_id`, `node_id`, `completed_calls`,
+   `total_expected_calls`, `elapsed_seconds`, and optional `message`.
+2. Progress interval is configurable per-execution via
+   `runtime_options.progress_interval_seconds` (default: 2 seconds).
+3. Primitives that process many items (`map-async`, `tree-reduce`) emit
+   progress after each completed item or batch.
+4. `heartbeat` calls from Racket artifacts also trigger progress notifications.
+5. Agents that don't support notifications can poll `get_status(execution_id)`
+   for the same information.
+
 ---
 
 ## 12. Dry-Run And Verification
@@ -2089,7 +2239,28 @@ Dry-run must simulate structure without real LLM calls:
 - special-case batch await behavior deterministically,
 - record fan-out, call counts, model mix, recursive depth, and estimated tokens,
 - avoid shared global execution-mode state that can leak across concurrent MCP
-  calls.
+  calls — pass dry-run context as a parameter through `send()`, not as
+  mutable state on the backend instance.
+
+**Dry-run behavior for concurrent primitives:**
+
+`parallel` is genuinely concurrent in the rewrite. In dry-run mode, `parallel`
+should behave as follows:
+
+1. All thunks are invoked. Each returns a pre-resolved fake async handle.
+2. `await-all` collects results. Since handles are pre-resolved, this is
+   instant but the dry-run context records the concurrency count as
+   `len(thunks)`.
+3. The dry-run summary reports `max_concurrency` for this node as the thunk
+   count, matching real execution behavior.
+
+This works because `parallel` uses `await-all` (wait for all), not
+`await-any` (rolling window). The `await-any` special-casing is only needed
+for `map-async`'s rolling window and `race`.
+
+`race` in dry-run: all thunks are invoked, all return pre-resolved handles.
+`await-any` special-casing picks exactly one deterministically (first in
+list). Remaining handles are marked cancelled in the dry-run trace.
 
 The dry-run output should use `recursive_depth`, not `max_depth`, unless true
 combinator nesting instrumentation exists.
@@ -2176,19 +2347,49 @@ Batch extract -> Synthesize reduce
 
 Planning output should be one of:
 
-- a template invocation with slot values,
-- a Strategy Spec,
-- a short list of alternatives with estimated tradeoffs.
+- a template invocation with slot values (primary path),
+- a short list of alternative template invocations with estimated tradeoffs,
+- a `no_template` recommendation describing the needed template for the user
+  to create.
 
-Planning output should not include raw Scheme.
+Planning output must not include raw Scheme or raw Strategy Specs. If no
+template matches the classified task, the planner returns a structured
+recommendation for a new template rather than attempting to generate an
+ad-hoc strategy.
 
 ---
 
 ## 14. Taxonomy Decision Rules
 
-The planner should use deterministic taxonomy rules before it asks any model
-for judgment. Classification selects templates or Strategy Specs, not
-hand-written Scheme.
+Classification and template selection use a **two-level decision model**:
+
+**Level 1 — Deterministic (code, no LLM):** TaskShape and DataShape
+classification from structured hints, plus template selection from
+trigger/reject conditions. If all required hints are provided, this level
+runs entirely as deterministic code. The decision tree questions in sections
+14.1-14.3 below are all Level 1 — they operate on structured fields
+(`item_count`, `independent`, `output_type`, `has_second_phase`, etc.),
+not on free-text interpretation.
+
+**Level 2 — LLM gap-filling (only when hints are missing):** When the agent
+does not provide enough structured hints to answer the decision tree, the
+planner makes a single LLM call to fill the missing fields. The LLM answers
+structured yes/no or multiple-choice questions (e.g., "Are items independent?
+yes/no", "What is the per-item operation? transform/label/check"). Once
+fields are filled, Level 1 runs deterministically on the complete fields.
+
+The LLM never chooses templates directly. It only fills missing structured
+fields that the deterministic classifier then uses.
+
+**Level 2 qualitative modifiers** — After template selection, some slot values
+require LLM judgment:
+- Cost sensitivity → model tier selection
+- Quality requirements → validation wrappers, iteration counts
+- Error tolerance → error policy selection
+- Instruction text → the actual prompts for LLM calls
+
+These are template slot values, not structural decisions. The template's
+`slot_schema` constrains them with types, enums, and ranges.
 
 ### 14.1 TaskShape
 
@@ -2776,26 +2977,260 @@ Minimum test coverage:
 
 ---
 
-## 19. Open Design Decisions
+## 19. End-to-End Walkthrough
+
+This section shows every MCP call in sequence for a realistic task: "Extract
+ACE2 protein mentions from 100 research papers and synthesize a report."
+
+### Step 1: Load context
+
+Agent sends 100 papers as a JSON array.
+
+```
+→ load_context(
+    data: "[{\"id\":\"paper_001\",\"text\":\"...\"},...]",
+    name: "ace2_papers",
+    metadata_json: "{\"data_shape\":\"FlatList\",\"item_count\":100,\"independent\":true,\"modality\":[\"text\"]}"
+  )
+
+← {
+    "status": "ok",
+    "context_id": "ctx_7f3a",
+    "name": "ace2_papers",
+    "metadata": {"data_shape":"FlatList","item_count":100,"independent":true},
+    "preview": "[{\"id\":\"paper_001\",\"text\":\"Recent studies on ACE2...",
+    "next_actions": ["Call plan_strategy with context_id=ctx_7f3a"]
+  }
+```
+
+### Step 2: Plan strategy
+
+Agent describes the task. Hints provide structured fields so classification
+is fully deterministic (Level 1 only, no LLM call needed).
+
+```
+→ plan_strategy(
+    task: "Extract ACE2 mentions from each paper and synthesize findings into one report.",
+    context_id: "ctx_7f3a",
+    hints_json: "{\"item_count\":100,\"independent\":true,\"output_type\":\"one\",\"has_second_phase\":true,\"sub_operations\":[\"extract\",\"synthesize\"]}"
+  )
+
+← {
+    "status": "ok",
+    "plan_id": "plan_b2c1",
+    "classification": {
+      "task_shape": "Composite",
+      "constituent_shapes": ["Batch","Synthesize"],
+      "data_shape": "FlatList",
+      "confidence": 1.0,
+      "rationale": "All hints provided. Deterministic classification: independent items with combined output and second phase."
+    },
+    "recommended": {
+      "kind": "template_invocation",
+      "template_name": "batch_extract_reduce",
+      "template_version": "1.0.0",
+      "slot_values": {
+        "context_id": "ctx_7f3a",
+        "items_path": "$.items",
+        "map_instruction": "Extract all mentions of ACE2 protein, including evidence and uncertainty, as JSON.",
+        "reduce_instruction": "Synthesize the extracted ACE2 findings into a concise report with citations.",
+        "map_model": "fast_text_model",
+        "reduce_model": "quality_text_model",
+        "max_concurrent": 20,
+        "branch_factor": 5,
+        "json_mode": true
+      }
+    },
+    "alternatives": [
+      {"template_name":"batch_extract_fold","tradeoff":"Preserves paper order but higher latency."}
+    ],
+    "next_actions": ["Call compile_strategy(plan_id=plan_b2c1)"]
+  }
+```
+
+### Step 3: Compile strategy
+
+Agent accepts the recommended template. Compilation validates slots, generates
+primitive-only Scheme, and stores an immutable artifact.
+
+```
+→ compile_strategy(plan_id: "plan_b2c1")
+
+← {
+    "status": "ok",
+    "artifact_id": "art_e4d9",
+    "plan_id": "plan_b2c1",
+    "artifact": {
+      "source_type": "template_invocation",
+      "template_name": "batch_extract_reduce",
+      "template_version": "1.0.0",
+      "compiler_version": "0.1.0",
+      "code_hash": "sha256:a1b2c3...",
+      "primitive_nodes": ["map-async","tree-reduce","llm-query-async","llm-query"],
+      "context_ids": ["ctx_7f3a"],
+      "static_profile": {
+        "min_calls": 1,
+        "expected_calls_formula": "100 + 20 + 4 + 1 = 125",
+        "max_concurrency": 20,
+        "recursive_depth": 0
+      }
+    },
+    "next_actions": ["Call dry_run_strategy(artifact_id=art_e4d9)"]
+  }
+```
+
+### Step 4: Dry run
+
+Agent runs a structural simulation. No real LLM calls are made.
+
+```
+→ dry_run_strategy(artifact_id: "art_e4d9")
+
+← {
+    "status": "ok",
+    "dry_run_id": "dry_1a2b",
+    "artifact_id": "art_e4d9",
+    "summary": {
+      "llm_calls": 125,
+      "max_concurrency": 20,
+      "recursive_depth": 0,
+      "critical_path_calls": 4,
+      "checkpoints": 0,
+      "python_phases": 0
+    },
+    "call_graph": [
+      {"node_id":"extract","primitive":"map-async","calls":100,"model":"fast_text_model","concurrency":20},
+      {"node_id":"synthesize","primitive":"tree-reduce","calls":25,"model":"quality_text_model","branch_factor":5}
+    ],
+    "warnings": [],
+    "next_actions": ["Call verify_strategy(artifact_id=art_e4d9, dry_run_id=dry_1a2b)"]
+  }
+```
+
+### Step 5: Verify
+
+Agent gates execution. Verification checks the artifact against policy limits.
+
+```
+→ verify_strategy(
+    artifact_id: "art_e4d9",
+    dry_run_id: "dry_1a2b",
+    policy_json: "{\"max_llm_calls\":500,\"max_concurrency\":50,\"max_recursive_depth\":3}"
+  )
+
+← {
+    "status": "ok",
+    "verification_id": "ver_3c4d",
+    "decision": "pass",
+    "artifact_id": "art_e4d9",
+    "dry_run_id": "dry_1a2b",
+    "checks": [
+      {"name":"artifact_hash","status":"pass","message":"Code hash matches."},
+      {"name":"primitive_allowlist","status":"pass","message":"Only primitives used."},
+      {"name":"call_count_limit","status":"pass","message":"125 <= 500."},
+      {"name":"concurrency_limit","status":"pass","message":"20 <= 50."},
+      {"name":"model_capabilities","status":"pass","message":"fast_text_model supports json mode."},
+      {"name":"context_exists","status":"pass","message":"ctx_7f3a exists."}
+    ],
+    "warnings": [],
+    "next_actions": ["Call execute_strategy(artifact_id=art_e4d9, verification_id=ver_3c4d)"]
+  }
+```
+
+### Step 6: Execute
+
+Agent runs the verified artifact. Real LLM calls happen here.
+
+```
+→ execute_strategy(
+    artifact_id: "art_e4d9",
+    verification_id: "ver_3c4d",
+    plan_id: "plan_b2c1",
+    timeout_seconds: 900,
+    runtime_options_json: "{\"progress_interval_seconds\":5}"
+  )
+
+  ... (progress notifications arrive every 5 seconds) ...
+
+← {
+    "status": "ok",
+    "execution_id": "exec_5e6f",
+    "artifact_id": "art_e4d9",
+    "verification_id": "ver_3c4d",
+    "result": {
+      "value": "ACE2 (Angiotensin-Converting Enzyme 2) findings across 100 papers...",
+      "stdout": ""
+    },
+    "execution": {
+      "state": "finished",
+      "elapsed_seconds": 182.4,
+      "llm_calls": 125,
+      "tokens": 131250,
+      "models": {"fast_text_model":100,"quality_text_model":25},
+      "checkpoints_written": 0
+    },
+    "next_actions": ["Call get_execution_trace(execution_id=exec_5e6f)"]
+  }
+```
+
+### Step 7: Inspect trace (optional)
+
+Agent reviews what happened during execution.
+
+```
+→ get_execution_trace(execution_id: "exec_5e6f")
+
+← {
+    "status": "ok",
+    "execution_id": "exec_5e6f",
+    "trace": {
+      "artifact_id": "art_e4d9",
+      "plan_id": "plan_b2c1",
+      "events": [
+        {"type":"llm_call_started","call_id":"call_001","node_id":"extract","model":"fast_text_model","depth":0},
+        {"type":"llm_call_completed","call_id":"call_001","tokens":1250,"elapsed_seconds":1.2},
+        ...
+        {"type":"llm_call_started","call_id":"call_101","node_id":"synthesize","model":"quality_text_model","depth":0},
+        ...
+      ],
+      "scope_log": [
+        {"op":"syntax-e","preview":"extracted ACE2 mentions...","scope":"sandbox","call_id":"call_001"}
+      ],
+      "stdout": ""
+    }
+  }
+```
+
+### Summary of ID chain
+
+```text
+ctx_7f3a (data) → plan_b2c1 (classification + template) → art_e4d9 (compiled Scheme)
+  → dry_1a2b (structural simulation) → ver_3c4d (gate) → exec_5e6f (result + trace)
+```
+
+Each ID is durable and inspectable. The same artifact can be re-executed with
+different data by creating a new context and re-compiling with updated
+`context_id` in the slot values.
+
+---
+
+## 20. Open Design Decisions
 
 These should be decided before implementation begins:
 
-1. **Store backend.** Filesystem JSON is easiest. SQLite/PGlite is better for
-   queryable history and concurrent access.
+1. **Store backend.** Start with filesystem JSON (decided in section 11.1).
+   Migrate to SQLite/PGlite if queryable history or concurrent access becomes
+   a bottleneck. *(Partially decided — revisit if needed.)*
 2. **Artifact mutability.** Prefer immutable artifacts. Edits create new
-   artifact IDs.
-3. **Python bridge policy.** Decide whether only templates can request Python
-   phases, or whether Strategy Specs can request them with strict validation.
-4. **Recursive planning.** Decide whether recursive sub-plans are compiled
+   artifact IDs. *(Decided.)*
+3. **Recursive planning.** Decide whether recursive sub-plans are compiled
    ahead of time or generated at runtime under verification constraints.
-5. **Template language.** Decide whether templates store Strategy Spec
-   fragments only, or also compiler-owned Scheme snippets.
-6. **History feedback.** Decide which execution metrics influence future
+4. **History feedback.** Decide which execution metrics influence future
    planning and how to avoid leaking sensitive data into planner prompts.
 
 ---
 
-## 20. Success Criteria
+## 21. Success Criteria
 
 The rewrite is successful when:
 
