@@ -132,6 +132,95 @@ The greenfield server should start with a small artifact-based MCP surface.
 | `reset_runtime(scope="session")` | Reset sandbox state without deleting durable artifacts by default. |
 | `get_usage_guide()` | Explain the artifact workflow. |
 
+Target FastMCP function signatures:
+
+```python
+def load_context(
+    data: str,
+    name: str | None = None,
+    metadata_json: str | None = None,
+) -> str: ...
+
+def get_context(
+    context_id: str,
+    include_preview: bool = True,
+    include_data: bool = False,
+) -> str: ...
+
+def list_templates(filters_json: str | None = None) -> str: ...
+
+def get_template(
+    template_name: str,
+    version: str | None = None,
+) -> str: ...
+
+def plan_strategy(
+    task: str,
+    context_id: str | None = None,
+    hints_json: str | None = None,
+) -> str: ...
+
+def compile_strategy(
+    plan_id: str | None = None,
+    template_invocation_json: str | None = None,
+    spec_json: str | None = None,
+    options_json: str | None = None,
+) -> str: ...
+
+def get_artifact(
+    artifact_id: str,
+    include_scheme: bool = False,
+    include_source_map: bool = True,
+) -> str: ...
+
+def estimate_strategy(
+    artifact_id: str,
+    assumptions_json: str | None = None,
+) -> str: ...
+
+def dry_run_strategy(
+    artifact_id: str,
+    options_json: str | None = None,
+) -> str: ...
+
+def verify_strategy(
+    artifact_id: str,
+    dry_run_id: str | None = None,
+    policy_json: str | None = None,
+) -> str: ...
+
+async def execute_strategy(
+    artifact_id: str,
+    verification_id: str | None = None,
+    plan_id: str | None = None,
+    timeout_seconds: int | None = None,
+    force: bool = False,
+    runtime_options_json: str | None = None,
+    ctx: Context = None,
+) -> str: ...
+
+def get_execution_trace(
+    execution_id: str,
+    include_scope_log: bool = True,
+    include_calls: bool = True,
+    include_stdout: bool = True,
+) -> str: ...
+
+def get_status(execution_id: str | None = None) -> str: ...
+
+def cancel_call(
+    call_id: str | None = None,
+    execution_id: str | None = None,
+    reason: str | None = None,
+) -> str: ...
+
+def reset_runtime(scope: str = "session") -> str: ...
+```
+
+`*_json` parameters are JSON strings because MCP clients vary in how reliably
+they support nested structured arguments. The server should parse and validate
+them into typed internal models immediately.
+
 Do not expose these as public tools:
 
 - `execute_scheme(code, ...)`,
@@ -144,7 +233,1221 @@ MCP contract should only expose artifact-based orchestration.
 
 ---
 
-## 4. Runtime Basis
+## 4. MCP Request And Response Schemas
+
+All public MCP tools should return JSON strings. Each response should include a
+stable top-level `status` field so agents can handle errors mechanically.
+
+Common response shape:
+
+```json
+{
+  "status": "ok | warn | error",
+  "id": "optional primary id",
+  "warnings": [],
+  "errors": [],
+  "next_actions": []
+}
+```
+
+Errors should be structured:
+
+```json
+{
+  "status": "error",
+  "error": {
+    "code": "verification_failed",
+    "message": "Artifact failed verification.",
+    "details": {
+      "artifact_id": "art_...",
+      "failed_checks": ["call_count_limit"]
+    },
+    "retryable": false
+  }
+}
+```
+
+### 4.1 `load_context`
+
+Purpose: store input data and metadata so plans reference data by ID instead of
+copying it through every tool call.
+
+Request:
+
+```json
+{
+  "data": "string | JSON-serializable value",
+  "name": "optional human-readable name",
+  "metadata": {
+    "data_shape": "FlatList | Hierarchy | Singular | ChunkedSingular | Graph | TimeSeries | Tabular | Multimodal | Paired | KeyValue | Unknown",
+    "item_count": 100,
+    "item_size_estimate_tokens": 500,
+    "total_size_estimate_tokens": 50000,
+    "independent": true,
+    "ordered": false,
+    "modality": ["text"],
+    "chunking": {
+      "chunk_count": 100,
+      "overlap_tokens": 100,
+      "boundary": "paragraph"
+    },
+    "source": {
+      "kind": "inline | file | url | generated",
+      "uri": "optional source identifier"
+    },
+    "schema": {
+      "type": "optional JSON schema or table schema"
+    }
+  }
+}
+```
+
+Response:
+
+```json
+{
+  "status": "ok",
+  "context_id": "ctx_01HX...",
+  "name": "papers",
+  "metadata": {
+    "data_shape": "FlatList",
+    "item_count": 100,
+    "total_size_estimate_tokens": 50000,
+    "independent": true,
+    "modality": ["text"]
+  },
+  "preview": "first 500 characters or structured preview",
+  "next_actions": [
+    "Call plan_strategy with context_id=ctx_01HX..."
+  ]
+}
+```
+
+### 4.2 `get_context`
+
+Request:
+
+```json
+{
+  "context_id": "ctx_01HX...",
+  "include_preview": true,
+  "include_data": false
+}
+```
+
+Response:
+
+```json
+{
+  "status": "ok",
+  "context": {
+    "context_id": "ctx_01HX...",
+    "name": "papers",
+    "created_at": "2026-06-03T12:00:00Z",
+    "metadata": {},
+    "preview": "...",
+    "data_hash": "sha256:..."
+  }
+}
+```
+
+`include_data=true` should be allowed only for small contexts or explicit debug
+settings. Large context retrieval should default to previews and metadata.
+
+### 4.3 `list_templates`
+
+Request:
+
+```json
+{
+  "filters": {
+    "task_shape": "Batch",
+    "data_shape": "FlatList",
+    "requires_multimodal": false,
+    "max_expected_calls": 200
+  }
+}
+```
+
+Response:
+
+```json
+{
+  "status": "ok",
+  "templates": [
+    {
+      "template_name": "batch_extract_reduce",
+      "version": "1.0.0",
+      "task_shapes": ["Batch", "Synthesize"],
+      "data_shapes": ["FlatList", "ChunkedSingular"],
+      "summary": "Extract independently, then synthesize with tree reduction.",
+      "primitive_nodes": ["map-async", "tree-reduce"],
+      "slot_count": 9
+    }
+  ]
+}
+```
+
+### 4.4 `get_template`
+
+Request:
+
+```json
+{
+  "template_name": "batch_extract_reduce",
+  "version": "1.0.0"
+}
+```
+
+Response:
+
+```json
+{
+  "status": "ok",
+  "template": {
+    "template_name": "batch_extract_reduce",
+    "version": "1.0.0",
+    "summary": "...",
+    "slot_schema": {},
+    "structural_profile": {},
+    "verification_rules": []
+  }
+}
+```
+
+Do not return compiler-owned Scheme from `get_template` by default. Template
+metadata is public; generated Scheme is artifact metadata.
+
+### 4.5 `plan_strategy`
+
+Purpose: classify task/data, choose template/spec alternatives, and persist a
+planning record.
+
+Request:
+
+```json
+{
+  "task": "Analyze every paper for ACE2 mentions and synthesize findings.",
+  "context_id": "ctx_01HX...",
+  "hints": {
+    "task_shape": null,
+    "data_shape": "FlatList",
+    "item_count": 100,
+    "independent": true,
+    "output_type": "one",
+    "operation": "extract_then_synthesize",
+    "has_second_phase": true,
+    "sub_operations": ["extract", "synthesize"],
+    "priority": "balanced",
+    "latency_priority": "medium",
+    "quality_priority": "high",
+    "budget_limit_usd": 5.0,
+    "max_concurrent": 20,
+    "preferred_models": {
+      "map": "fast_text_model",
+      "reduce": "quality_text_model"
+    }
+  }
+}
+```
+
+Response:
+
+```json
+{
+  "status": "ok",
+  "plan_id": "plan_01HX...",
+  "classification": {
+    "task_shape": "Composite",
+    "constituent_shapes": ["Batch", "Synthesize"],
+    "data_shape": "FlatList",
+    "confidence": 0.92,
+    "rationale": "Independent per-paper extraction followed by one synthesis output."
+  },
+  "recommended": {
+    "kind": "template_invocation",
+    "template_name": "batch_extract_reduce",
+    "template_version": "1.0.0",
+    "slot_values": {
+      "context_id": "ctx_01HX...",
+      "map_instruction": "Extract ACE2 mentions, evidence, and uncertainty as JSON.",
+      "reduce_instruction": "Synthesize ACE2 findings into a concise report.",
+      "map_model": "fast_text_model",
+      "reduce_model": "quality_text_model",
+      "max_concurrent": 20,
+      "branch_factor": 5,
+      "json_mode": true
+    }
+  },
+  "alternatives": [
+    {
+      "template_name": "batch_extract_fold",
+      "tradeoff": "Preserves order but has higher latency."
+    }
+  ],
+  "next_actions": [
+    "Call compile_strategy(plan_id=plan_01HX...)"
+  ]
+}
+```
+
+Planner output must not include raw Scheme. If no template fits, return a
+Strategy Spec proposal instead of code.
+
+### 4.6 `compile_strategy`
+
+Purpose: turn a trusted template invocation or Strategy Spec into an immutable
+compiled artifact.
+
+Request:
+
+```json
+{
+  "plan_id": "plan_01HX...",
+  "template_invocation": {
+    "template_name": "batch_extract_reduce",
+    "template_version": "1.0.0",
+    "slot_values": {}
+  },
+  "spec": null,
+  "options": {
+    "store_generated_scheme": true,
+    "strict": true
+  }
+}
+```
+
+At least one of `plan_id`, `template_invocation`, or `spec` is required.
+If `plan_id` is provided and already contains a recommended template/spec,
+`compile_strategy` can use it directly.
+
+Response:
+
+```json
+{
+  "status": "ok",
+  "artifact_id": "art_01HX...",
+  "plan_id": "plan_01HX...",
+  "artifact": {
+    "source_type": "template_invocation",
+    "template_name": "batch_extract_reduce",
+    "template_version": "1.0.0",
+    "compiler_version": "0.1.0",
+    "code_hash": "sha256:...",
+    "primitive_nodes": ["map-async", "tree-reduce", "llm-query-async", "llm-query"],
+    "context_ids": ["ctx_01HX..."],
+    "static_profile": {
+      "min_calls": 1,
+      "expected_calls_formula": "N + ceil(N/B) + ... + 1",
+      "max_concurrency": 20,
+      "recursive_depth": 0
+    }
+  },
+  "next_actions": [
+    "Call estimate_strategy(artifact_id=art_01HX...)",
+    "Call dry_run_strategy(artifact_id=art_01HX...)"
+  ]
+}
+```
+
+### 4.7 `get_artifact`
+
+Request:
+
+```json
+{
+  "artifact_id": "art_01HX...",
+  "include_scheme": false,
+  "include_source_map": true
+}
+```
+
+Response:
+
+```json
+{
+  "status": "ok",
+  "artifact": {
+    "artifact_id": "art_01HX...",
+    "plan_id": "plan_01HX...",
+    "source_type": "template_invocation",
+    "template_name": "batch_extract_reduce",
+    "slot_values": {},
+    "compiler_version": "0.1.0",
+    "code_hash": "sha256:...",
+    "generated_scheme": null,
+    "source_map": [
+      {
+        "spec_path": "$.nodes[0]",
+        "scheme_symbol": "map-phase",
+        "primitive": "map-async"
+      }
+    ]
+  }
+}
+```
+
+`include_scheme=true` is an inspection option, not an execution path.
+
+### 4.8 `estimate_strategy`
+
+Request:
+
+```json
+{
+  "artifact_id": "art_01HX...",
+  "assumptions": {
+    "item_count": 100,
+    "avg_input_tokens": 800,
+    "avg_output_tokens": 250
+  }
+}
+```
+
+Response:
+
+```json
+{
+  "status": "ok",
+  "artifact_id": "art_01HX...",
+  "estimate": {
+    "expected_llm_calls": 125,
+    "critical_path_calls": 4,
+    "max_concurrency": 20,
+    "models": {
+      "fast_text_model": 100,
+      "quality_text_model": 25
+    },
+    "estimated_tokens": {
+      "prompt": 100000,
+      "completion": 31250,
+      "total": 131250
+    },
+    "estimated_cost_usd": {
+      "low": 1.20,
+      "high": 3.50
+    }
+  },
+  "warnings": []
+}
+```
+
+### 4.9 `dry_run_strategy`
+
+Request:
+
+```json
+{
+  "artifact_id": "art_01HX...",
+  "options": {
+    "mock_prefix": "[dry-run]",
+    "deterministic_await_any": true,
+    "max_simulated_items": 1000
+  }
+}
+```
+
+Response:
+
+```json
+{
+  "status": "ok",
+  "dry_run_id": "dry_01HX...",
+  "artifact_id": "art_01HX...",
+  "summary": {
+    "llm_calls": 125,
+    "max_concurrency": 20,
+    "recursive_depth": 0,
+    "critical_path_calls": 4,
+    "checkpoints": 0,
+    "python_phases": 0
+  },
+  "call_graph": [
+    {
+      "node_id": "map.extract",
+      "primitive": "map-async",
+      "calls": 100,
+      "model": "fast_text_model",
+      "concurrency": 20
+    },
+    {
+      "node_id": "reduce.synthesize",
+      "primitive": "tree-reduce",
+      "calls": 25,
+      "model": "quality_text_model",
+      "branch_factor": 5
+    }
+  ],
+  "warnings": [],
+  "next_actions": [
+    "Call verify_strategy(artifact_id=art_01HX..., dry_run_id=dry_01HX...)"
+  ]
+}
+```
+
+### 4.10 `verify_strategy`
+
+Request:
+
+```json
+{
+  "artifact_id": "art_01HX...",
+  "dry_run_id": "dry_01HX...",
+  "policy": {
+    "max_llm_calls": 500,
+    "max_concurrency": 50,
+    "max_recursive_depth": 3,
+    "allow_python_bridge": true,
+    "allow_multimodal": true,
+    "semantic_review": "off | cheap | required"
+  }
+}
+```
+
+Response:
+
+```json
+{
+  "status": "ok",
+  "verification_id": "ver_01HX...",
+  "decision": "pass",
+  "artifact_id": "art_01HX...",
+  "dry_run_id": "dry_01HX...",
+  "checks": [
+    {
+      "name": "artifact_hash",
+      "status": "pass",
+      "message": "Generated code hash matches stored artifact."
+    },
+    {
+      "name": "primitive_allowlist",
+      "status": "pass",
+      "message": "Only primitive runtime names are used."
+    }
+  ],
+  "warnings": [],
+  "next_actions": [
+    "Call execute_strategy(artifact_id=art_01HX..., verification_id=ver_01HX...)"
+  ]
+}
+```
+
+If verification fails, return `status: "error"` and still store a
+`verification_id` with `decision: "fail"` so the user can inspect the reasons.
+
+### 4.11 `execute_strategy`
+
+Request:
+
+```json
+{
+  "artifact_id": "art_01HX...",
+  "verification_id": "ver_01HX...",
+  "plan_id": "plan_01HX...",
+  "timeout_seconds": 900,
+  "force": false,
+  "runtime_options": {
+    "progress_interval_seconds": 2,
+    "checkpoint_prefix": "ace2-run",
+    "max_stdout_chars": 4000
+  }
+}
+```
+
+Response:
+
+```json
+{
+  "status": "ok",
+  "execution_id": "exec_01HX...",
+  "artifact_id": "art_01HX...",
+  "verification_id": "ver_01HX...",
+  "result": {
+    "value": "final answer or JSON value",
+    "stdout": "optional truncated stdout"
+  },
+  "execution": {
+    "state": "finished",
+    "elapsed_seconds": 182.4,
+    "llm_calls": 125,
+    "tokens": 131250,
+    "models": {
+      "fast_text_model": 100,
+      "quality_text_model": 25
+    },
+    "checkpoints_written": 0
+  },
+  "next_actions": [
+    "Call get_execution_trace(execution_id=exec_01HX...)"
+  ]
+}
+```
+
+If `verification_id` is omitted, execution should look up the latest passing
+verification for the artifact. If no passing verification exists, execution
+must fail unless `force=true`.
+
+### 4.12 `get_execution_trace`
+
+Request:
+
+```json
+{
+  "execution_id": "exec_01HX...",
+  "include_scope_log": true,
+  "include_calls": true,
+  "include_stdout": true
+}
+```
+
+Response:
+
+```json
+{
+  "status": "ok",
+  "execution_id": "exec_01HX...",
+  "trace": {
+    "artifact_id": "art_01HX...",
+    "plan_id": "plan_01HX...",
+    "events": [
+      {
+        "type": "llm_call_started",
+        "call_id": "call_001",
+        "node_id": "map.extract",
+        "model": "fast_text_model",
+        "depth": 0
+      }
+    ],
+    "scope_log": [
+      {
+        "op": "syntax-e",
+        "preview": "extracted result...",
+        "scope": "sandbox",
+        "call_id": "call_001"
+      }
+    ],
+    "stdout": ""
+  }
+}
+```
+
+### 4.13 `get_status`
+
+Request:
+
+```json
+{
+  "execution_id": "exec_01HX..."
+}
+```
+
+Response:
+
+```json
+{
+  "status": "ok",
+  "runtime": {
+    "racket_alive": true,
+    "python_bridge_alive": true,
+    "sandbox_memory_limit_mb": 256
+  },
+  "active_calls": [
+    {
+      "call_id": "call_001",
+      "execution_id": "exec_01HX...",
+      "type": "async",
+      "model": "fast_text_model",
+      "elapsed_seconds": 12.3,
+      "depth": 0,
+      "instruction_preview": "Extract ACE2..."
+    }
+  ],
+  "token_usage": {
+    "prompt_tokens": 10000,
+    "completion_tokens": 2500,
+    "total_tokens": 12500,
+    "calls": 10
+  },
+  "rate_limits": {
+    "remaining_requests": 490,
+    "remaining_tokens": 900000,
+    "reset_requests": "..."
+  }
+}
+```
+
+### 4.14 `cancel_call`
+
+Request:
+
+```json
+{
+  "call_id": "call_001",
+  "execution_id": null,
+  "reason": "user requested cancellation"
+}
+```
+
+Response:
+
+```json
+{
+  "status": "ok",
+  "cancelled": {
+    "call_ids": ["call_001"],
+    "execution_id": "exec_01HX..."
+  }
+}
+```
+
+If `execution_id` is provided, cancel all active and queued calls for that
+execution and mark the execution as `cancelled`.
+
+---
+
+## 5. Durable Record Schemas
+
+The API schemas above are request/response contracts. The server should also
+store durable records with explicit schemas so history, verification, and
+replay are reliable.
+
+### 5.1 Context Record
+
+```json
+{
+  "context_id": "ctx_01HX...",
+  "schema_version": "1",
+  "name": "papers",
+  "created_at": "2026-06-03T12:00:00Z",
+  "data_ref": {
+    "storage": "filesystem",
+    "path": "contexts/ctx_01HX/data.json",
+    "hash": "sha256:...",
+    "bytes": 1234567
+  },
+  "metadata": {
+    "data_shape": "FlatList",
+    "item_count": 100,
+    "independent": true,
+    "ordered": false,
+    "modality": ["text"],
+    "total_size_estimate_tokens": 50000
+  }
+}
+```
+
+### 5.2 Plan Record
+
+```json
+{
+  "plan_id": "plan_01HX...",
+  "schema_version": "1",
+  "created_at": "2026-06-03T12:01:00Z",
+  "context_ids": ["ctx_01HX..."],
+  "task": "Analyze every paper for ACE2 mentions and synthesize findings.",
+  "hints": {},
+  "classification": {
+    "task_shape": "Composite",
+    "constituent_shapes": ["Batch", "Synthesize"],
+    "data_shape": "FlatList",
+    "confidence": 0.92
+  },
+  "recommended": {
+    "kind": "template_invocation",
+    "template_name": "batch_extract_reduce",
+    "template_version": "1.0.0",
+    "slot_values": {}
+  },
+  "alternatives": [],
+  "planner": {
+    "mode": "deterministic_with_llm_fill",
+    "model": "quality_text_model",
+    "prompt_hash": "sha256:..."
+  }
+}
+```
+
+### 5.3 Artifact Record
+
+```json
+{
+  "artifact_id": "art_01HX...",
+  "schema_version": "1",
+  "created_at": "2026-06-03T12:02:00Z",
+  "plan_id": "plan_01HX...",
+  "context_ids": ["ctx_01HX..."],
+  "source_type": "template_invocation | strategy_spec",
+  "template_name": "batch_extract_reduce",
+  "template_version": "1.0.0",
+  "slot_values": {},
+  "strategy_spec": {},
+  "compiler": {
+    "name": "rlm-scheme-spec-compiler",
+    "version": "0.1.0"
+  },
+  "generated_scheme_ref": {
+    "path": "artifacts/art_01HX/program.rkt",
+    "hash": "sha256:..."
+  },
+  "primitive_nodes": ["map-async", "tree-reduce"],
+  "static_profile": {
+    "expected_calls_formula": "N + ceil(N/B) + ... + 1",
+    "max_concurrency": 20,
+    "recursive_depth": 0
+  },
+  "source_map": []
+}
+```
+
+Artifacts should be immutable. Any edit creates a new `artifact_id`.
+
+### 5.4 Dry-Run Record
+
+```json
+{
+  "dry_run_id": "dry_01HX...",
+  "schema_version": "1",
+  "created_at": "2026-06-03T12:03:00Z",
+  "artifact_id": "art_01HX...",
+  "mode": "deterministic",
+  "summary": {
+    "llm_calls": 125,
+    "max_concurrency": 20,
+    "recursive_depth": 0,
+    "critical_path_calls": 4
+  },
+  "call_graph": [],
+  "warnings": []
+}
+```
+
+### 5.5 Verification Record
+
+```json
+{
+  "verification_id": "ver_01HX...",
+  "schema_version": "1",
+  "created_at": "2026-06-03T12:04:00Z",
+  "artifact_id": "art_01HX...",
+  "dry_run_id": "dry_01HX...",
+  "decision": "pass | warn | fail",
+  "policy": {},
+  "checks": [
+    {
+      "name": "primitive_allowlist",
+      "status": "pass",
+      "message": "No removed or unsafe runtime names used."
+    }
+  ],
+  "warnings": [],
+  "errors": []
+}
+```
+
+### 5.6 Execution Record
+
+```json
+{
+  "execution_id": "exec_01HX...",
+  "schema_version": "1",
+  "created_at": "2026-06-03T12:05:00Z",
+  "completed_at": "2026-06-03T12:08:00Z",
+  "state": "queued | running | finished | failed | cancelled",
+  "artifact_id": "art_01HX...",
+  "plan_id": "plan_01HX...",
+  "verification_id": "ver_01HX...",
+  "result_ref": {
+    "path": "executions/exec_01HX/result.json",
+    "hash": "sha256:..."
+  },
+  "trace_ref": {
+    "path": "executions/exec_01HX/trace.jsonl"
+  },
+  "metrics": {
+    "elapsed_seconds": 182.4,
+    "llm_calls": 125,
+    "tokens": 131250,
+    "max_concurrency_observed": 20
+  },
+  "error": null
+}
+```
+
+---
+
+## 6. Strategy Spec Schema
+
+Strategy Spec is the LLM-facing structured orchestration language. It should be
+expressive enough to represent templates but constrained enough to compile
+deterministically.
+
+Top-level schema:
+
+```json
+{
+  "schema_version": "1",
+  "name": "ace2_batch_synthesis",
+  "description": "Extract from papers, then synthesize.",
+  "context_refs": [
+    {
+      "context_id": "ctx_01HX...",
+      "binding": "papers"
+    }
+  ],
+  "inputs": {
+    "items": {
+      "from_context": "ctx_01HX...",
+      "path": "$.items"
+    }
+  },
+  "nodes": [
+    {
+      "id": "extract",
+      "op": "map_async",
+      "input": "$inputs.items",
+      "max_concurrent": 20,
+      "body": {
+        "op": "llm_call",
+        "mode": "async",
+        "model": "fast_text_model",
+        "instruction": "Extract ACE2 mentions as JSON.",
+        "data": "$item",
+        "json_mode": true,
+        "output_schema": "Ace2Extraction"
+      }
+    },
+    {
+      "id": "synthesize",
+      "op": "tree_reduce",
+      "input": "$nodes.extract.output",
+      "branch_factor": 5,
+      "body": {
+        "op": "llm_call",
+        "mode": "sync",
+        "model": "quality_text_model",
+        "instruction": "Combine extractions into one synthesis.",
+        "data": "$group",
+        "json_mode": false
+      }
+    }
+  ],
+  "output": "$nodes.synthesize.output",
+  "policies": {
+    "max_llm_calls": 500,
+    "max_concurrency": 20,
+    "max_recursive_depth": 0,
+    "token_budget": 200000
+  }
+}
+```
+
+Allowed node operations:
+
+| Spec op | Compiles to |
+|---|---|
+| `llm_call` | `llm-query` or `llm-query-async`. |
+| `map_async` | `map-async`. |
+| `parallel` | `parallel`. |
+| `race` | `race`. |
+| `tree_reduce` | `tree-reduce`. |
+| `fold_sequential` | `fold-sequential`. |
+| `sequence` | `sequence` or explicit `let*`. |
+| `choose` | `choose` or `cond`. |
+| `iterate_until` | `iterate-until`. |
+| `validate` | `with-validation`. |
+| `fallback` | `try-fallback`. |
+| `memoize` | `memoized`. |
+| `python_compute` | controlled `py-set!`, `py-exec`, `py-eval`. |
+| `checkpoint` | `checkpoint`. |
+| `restore` | `restore`. |
+| `recursive` | `recursive-spawn` with artifact-aware sub-plan. |
+
+Explicitly disallowed spec operations:
+
+- raw Scheme,
+- string eval,
+- shell commands,
+- filesystem access outside declared context/artifact/checkpoint stores,
+- removed compound combinator names,
+- unsafe interpolation/overwrite/eval.
+
+---
+
+## 7. Example Template
+
+Templates can be JSON or YAML. JSON is shown because it is unambiguous and easy
+to validate in tests.
+
+File:
+
+```text
+templates/batch_extract_reduce.json
+```
+
+Template:
+
+```json
+{
+  "schema_version": "1",
+  "template_name": "batch_extract_reduce",
+  "version": "1.0.0",
+  "summary": "Run independent extraction over many items, then synthesize results with tree reduction.",
+  "task_shapes": ["Batch", "Synthesize", "Composite"],
+  "data_shapes": ["FlatList", "ChunkedSingular", "Tabular"],
+  "output_shape": "one",
+  "trigger_conditions": [
+    "item_count > 1",
+    "independent == true",
+    "output_type == one",
+    "has_second_phase == true"
+  ],
+  "reject_conditions": [
+    "ordered == true and order_sensitive == true",
+    "requires_pairwise_comparison == true"
+  ],
+  "slot_schema": {
+    "type": "object",
+    "required": [
+      "context_id",
+      "items_path",
+      "map_instruction",
+      "reduce_instruction",
+      "map_model",
+      "reduce_model"
+    ],
+    "properties": {
+      "context_id": {
+        "type": "string",
+        "pattern": "^ctx_"
+      },
+      "items_path": {
+        "type": "string",
+        "default": "$.items"
+      },
+      "map_instruction": {
+        "type": "string",
+        "minLength": 10
+      },
+      "reduce_instruction": {
+        "type": "string",
+        "minLength": 10
+      },
+      "map_model": {
+        "type": "string",
+        "default": "fast_text_model"
+      },
+      "reduce_model": {
+        "type": "string",
+        "default": "quality_text_model"
+      },
+      "max_concurrent": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 50,
+        "default": 20
+      },
+      "branch_factor": {
+        "type": "integer",
+        "minimum": 2,
+        "maximum": 10,
+        "default": 5
+      },
+      "json_mode": {
+        "type": "boolean",
+        "default": false
+      },
+      "map_output_schema": {
+        "type": ["object", "null"],
+        "default": null
+      },
+      "checkpoint_every": {
+        "type": ["integer", "null"],
+        "minimum": 1,
+        "default": null
+      }
+    }
+  },
+  "strategy_spec_fragment": {
+    "nodes": [
+      {
+        "id": "extract",
+        "op": "map_async",
+        "input": "$context.items",
+        "max_concurrent": "$slots.max_concurrent",
+        "body": {
+          "op": "llm_call",
+          "mode": "async",
+          "model": "$slots.map_model",
+          "instruction": "$slots.map_instruction",
+          "data": "$item",
+          "json_mode": "$slots.json_mode",
+          "output_schema": "$slots.map_output_schema"
+        }
+      },
+      {
+        "id": "synthesize",
+        "op": "tree_reduce",
+        "input": "$nodes.extract.output",
+        "branch_factor": "$slots.branch_factor",
+        "body": {
+          "op": "llm_call",
+          "mode": "sync",
+          "model": "$slots.reduce_model",
+          "instruction": "$slots.reduce_instruction",
+          "data": "$group",
+          "json_mode": false
+        }
+      }
+    ],
+    "output": "$nodes.synthesize.output"
+  },
+  "structural_profile": {
+    "expected_calls_formula": "N + ceil(N/B) + ceil(ceil(N/B)/B) + ... + 1",
+    "critical_path_formula": "1 + ceil(log_B(N))",
+    "max_concurrency": "$slots.max_concurrent",
+    "recursive_depth": 0,
+    "uses_python_bridge": false,
+    "uses_multimodal": false
+  },
+  "verification_rules": [
+    "context_id_exists",
+    "items_path_resolves_to_list",
+    "map_model_supports_json_if_json_mode",
+    "expected_calls_within_policy",
+    "max_concurrency_within_policy",
+    "no_removed_compound_combinators",
+    "no_unsafe_forms"
+  ],
+  "examples": [
+    {
+      "task": "Extract claims from papers and synthesize a literature review.",
+      "slot_values": {
+        "items_path": "$.papers",
+        "map_instruction": "Extract the core claim, evidence, and uncertainty as JSON.",
+        "reduce_instruction": "Synthesize the extracted claims into a literature review."
+      }
+    }
+  ]
+}
+```
+
+Example template invocation:
+
+```json
+{
+  "template_name": "batch_extract_reduce",
+  "template_version": "1.0.0",
+  "slot_values": {
+    "context_id": "ctx_01HX...",
+    "items_path": "$.papers",
+    "map_instruction": "Extract ACE2 mentions, evidence, and uncertainty as JSON.",
+    "reduce_instruction": "Synthesize ACE2 findings into a report with citations to source IDs.",
+    "map_model": "fast_text_model",
+    "reduce_model": "quality_text_model",
+    "max_concurrent": 20,
+    "branch_factor": 5,
+    "json_mode": true
+  }
+}
+```
+
+Example compiler-owned Scheme shape:
+
+```scheme
+(define papers (__context-ref "ctx_01HX..." "$.papers"))
+
+(define extracted
+  (map-async
+    (lambda (item)
+      (llm-query-async
+        #:instruction "Extract ACE2 mentions, evidence, and uncertainty as JSON."
+        #:data item
+        #:model "fast_text_model"
+        #:json #t))
+    papers
+    #:max-concurrent 20))
+
+(define synthesized
+  (tree-reduce
+    (lambda group
+      (syntax-e
+        (llm-query
+          #:instruction "Synthesize ACE2 findings into a report with citations to source IDs."
+          #:data (__join-json group)
+          #:model "quality_text_model")))
+    extracted
+    #:branch-factor 5))
+
+(finish synthesized)
+```
+
+The exact generated Scheme can differ, but it must use only primitive runtime
+bindings and compiler-owned helper bindings.
+
+---
+
+## 8. Model Registry
+
+Templates and Strategy Specs should refer to model aliases, not hardcoded
+provider model names. The server resolves aliases at compile or execution time
+through a model registry.
+
+Example registry:
+
+```json
+{
+  "schema_version": "1",
+  "aliases": {
+    "fast_text_model": {
+      "provider": "openai",
+      "model": "configured-fast-model",
+      "capabilities": ["text", "json"],
+      "max_context_tokens": 128000,
+      "supports_temperature": true,
+      "cost_tier": "low"
+    },
+    "quality_text_model": {
+      "provider": "openai",
+      "model": "configured-quality-model",
+      "capabilities": ["text", "json"],
+      "max_context_tokens": 128000,
+      "supports_temperature": true,
+      "cost_tier": "high"
+    },
+    "vision_model": {
+      "provider": "openai",
+      "model": "configured-vision-model",
+      "capabilities": ["text", "json", "image"],
+      "max_context_tokens": 128000,
+      "supports_temperature": true,
+      "cost_tier": "high"
+    }
+  },
+  "defaults": {
+    "planner": "quality_text_model",
+    "map": "fast_text_model",
+    "reduce": "quality_text_model",
+    "vision": "vision_model"
+  }
+}
+```
+
+Verification should check aliases against the registry:
+
+- alias exists,
+- required capabilities are present,
+- JSON mode is supported when requested,
+- image inputs target an image-capable alias,
+- context estimates fit the alias context window,
+- temperature/max-token settings are compatible with the resolved model.
+
+Provider model names should live in configuration, not in templates or planner
+prompts. Documentation examples should use aliases unless they are describing
+provider configuration.
+
+---
+
+## 9. Runtime Basis
 
 The Racket runtime should be small and primitive-only. Compound patterns belong
 in templates or the compiler.
@@ -175,6 +1478,349 @@ in templates or the compiler.
 | State | `heartbeat` | Keep long executions alive. |
 | Compute | `py-exec` / `py-eval` / `py-call` / `py-set!` | Controlled Python bridge for parsing, aggregation, and local computation. |
 
+### Primitive Signatures And Semantics
+
+The signatures below are the target public bindings inside compiler-generated
+Scheme artifacts. Some helper bindings can be private and prefixed with `__`.
+
+#### `llm-query`
+
+```scheme
+(llm-query #:instruction string
+           #:data any
+           #:model string
+           #:recursive boolean
+           #:temperature number-or-#f
+           #:max-tokens integer-or-#f
+           #:json boolean
+           #:image image-or-#f
+           #:images list)
+  -> syntax-object
+```
+
+Semantics:
+
+- calls the host model provider synchronously,
+- returns a syntax object,
+- decrements token budget after response,
+- logs call metadata and provenance,
+- supports image inputs only when model capabilities allow them,
+- supports `#:recursive #t` only under global recursion policy.
+
+Compiler rule: use this for reduce/synthesis/refinement steps where the next
+Scheme expression needs the completed value immediately.
+
+#### `llm-query-async`
+
+```scheme
+(llm-query-async #:instruction string
+                 #:data any
+                 #:model string
+                 #:temperature number-or-#f
+                 #:max-tokens integer-or-#f
+                 #:json boolean
+                 #:image image-or-#f
+                 #:images list)
+  -> async-handle
+```
+
+Semantics:
+
+- dispatches model call through the host future pool,
+- returns immediately with an opaque async handle,
+- does not support recursive calls,
+- validates image/model compatibility before dispatch when possible,
+- records call metadata in the execution registry.
+
+Compiler rule: use this inside `map-async`, `parallel`, and `race` bodies.
+
+#### `await`
+
+```scheme
+(await async-handle) -> syntax-object
+```
+
+Semantics:
+
+- blocks until one handle completes,
+- propagates cancellation and provider errors,
+- decrements token budget when the real usage is known,
+- wraps result as syntax.
+
+#### `await-all`
+
+```scheme
+(await-all (list async-handle ...)) -> (list string ...)
+```
+
+Semantics:
+
+- waits for all handles concurrently,
+- returns unwrapped strings in input order,
+- records batch wait in trace.
+
+If syntax preservation is needed, the runtime may also expose a private
+compiler-only `__await-all-syntax`.
+
+#### `await-any`
+
+```scheme
+(await-any (list async-handle ...)) -> (values string (list async-handle ...))
+```
+
+Semantics:
+
+- waits for the first completed handle,
+- returns the completed unwrapped string and reconstructed remaining handles,
+- must be deterministic in dry-run mode: exactly one requested pending handle
+  completes per `await-any` call.
+
+#### `map-async`
+
+```scheme
+(map-async (lambda (item) async-handle)
+           items
+           #:max-concurrent integer-or-#f)
+  -> (list string ...)
+```
+
+Semantics:
+
+- preserves input order,
+- maintains a rolling concurrency window,
+- validates that the lambda returns async handles,
+- reports progress and heartbeats during long fan-outs,
+- propagates per-item errors according to compiler-selected error policy.
+
+Error policy should be explicit in the Strategy Spec/template:
+
+```json
+{
+  "on_item_error": "fail | collect | fallback",
+  "checkpoint_every": 25
+}
+```
+
+#### `parallel`
+
+```scheme
+(parallel (list (lambda () async-handle) ...)
+          #:max-concurrent integer-or-#f)
+  -> (list string ...)
+```
+
+Semantics:
+
+- genuinely concurrent, not sequential thunk invocation,
+- accepts thunks that return async handles,
+- preserves strategy order in output,
+- uses the same concurrency policy as `map-async`.
+
+The compiler should reject `parallel` bodies that call synchronous
+`llm-query` directly unless it rewrites them into async equivalents.
+
+#### `race`
+
+```scheme
+(race (list (lambda () async-handle) ...)) -> string
+```
+
+Semantics:
+
+- launches all candidates,
+- returns first completed result,
+- cancels or abandons remaining handles according to runtime policy,
+- records losing handles in trace as cancelled or ignored.
+
+#### `tree-reduce`
+
+```scheme
+(tree-reduce reducer items
+             #:branch-factor integer
+             #:leaf-fn procedure)
+  -> any
+```
+
+Semantics:
+
+- rejects empty input,
+- optionally applies `leaf-fn`,
+- groups items by branch factor,
+- applies reducer recursively until one result remains,
+- suitable only for associative or order-insensitive reductions.
+
+Call estimate:
+
+```text
+N + ceil(N/B) + ceil(ceil(N/B)/B) + ... + 1
+```
+
+The `N` term is present when the tree reduction follows a map/leaf LLM call.
+For a pure reduce over already computed values, omit the leaf-call term.
+
+#### `fold-sequential`
+
+```scheme
+(fold-sequential reducer initial items) -> any
+```
+
+Semantics:
+
+- processes items in order,
+- passes accumulator and item to reducer,
+- has high critical-path latency,
+- appropriate for order-sensitive synthesis and rolling summaries.
+
+#### `sequence`
+
+```scheme
+(sequence fn1 fn2 ...) -> (lambda (input) output)
+```
+
+Semantics:
+
+- left-to-right function composition,
+- used by compiler for multi-phase specs,
+- can be generated as `let*` when simpler.
+
+#### `choose`
+
+```scheme
+(choose predicate then-fn else-fn) -> procedure
+```
+
+Semantics:
+
+- routes based on deterministic predicate or predicate function,
+- should not hide model calls inside predicates unless declared.
+
+#### `iterate-until`
+
+```scheme
+(iterate-until step-fn predicate init #:max-iter integer) -> any
+```
+
+Semantics:
+
+- bounded loop,
+- stops when predicate returns true or `max-iter` is reached,
+- used for refine/critique loops,
+- dry-run reports worst-case iteration count unless predicate is statically
+  known.
+
+#### `recursive-spawn`
+
+```scheme
+(recursive-spawn strategy-ref) -> (lambda (data) syntax-object)
+```
+
+Semantics:
+
+- delegates to a nested artifact/sub-strategy,
+- global recursion depth is enforced host-side,
+- inherits explicitly passed context refs only,
+- appears as recursive depth in dry-run and trace.
+
+Do not include a public `#:depth` keyword unless it controls real enforcement.
+
+#### `memoized`
+
+```scheme
+(memoized fn #:key-fn key-fn) -> procedure
+```
+
+Semantics:
+
+- caches within one execution unless the template requests persistent caching,
+- key function must be deterministic,
+- trace should record cache hits/misses for LLM-call avoidance.
+
+#### `with-validation`
+
+```scheme
+(with-validation fn validator) -> procedure
+```
+
+Semantics:
+
+- runs `fn`,
+- validates result,
+- returns result or raises structured validation error,
+- should include schema path or validation rule in errors.
+
+#### `try-fallback`
+
+```scheme
+(try-fallback primary-fn fallback-fn) -> procedure
+```
+
+Semantics:
+
+- catches declared error classes,
+- executes fallback with the original args,
+- records both primary failure and fallback result in trace.
+
+#### `checkpoint` / `restore`
+
+```scheme
+(checkpoint key value) -> value
+(restore key) -> value-or-#f
+```
+
+Semantics:
+
+- keys are namespaced by execution/artifact unless explicitly shared,
+- values must be JSON-serializable,
+- checkpoints should be visible in execution trace and status.
+
+#### `tokens-used` / `rate-limits` / `heartbeat`
+
+```scheme
+(tokens-used) -> hash
+(rate-limits) -> hash
+(heartbeat) -> void
+```
+
+Semantics:
+
+- expose host accounting to compiler-generated strategies,
+- `heartbeat` should also be emitted automatically by long primitives.
+
+#### Python Bridge
+
+```scheme
+(py-set! name value) -> void
+(py-exec code) -> string
+(py-eval expr) -> any
+(py-call ref method . args) -> any
+```
+
+Semantics:
+
+- runs in an isolated Python subprocess,
+- receives values over JSON, not string interpolation,
+- can access declared context values,
+- cannot access MCP server internals or Racket scaffold bindings,
+- should be generated only by trusted templates/specs.
+
+Allowed Python bridge use cases:
+
+- JSON parsing,
+- schema validation,
+- table aggregation,
+- grouping,
+- deduplication,
+- statistics,
+- deterministic uncertainty filtering.
+
+Disallowed by default:
+
+- arbitrary filesystem writes outside artifact/checkpoint stores,
+- subprocess/shell execution,
+- network access,
+- importing project secrets,
+- mutating durable records except through host APIs.
+
 ### Remove As Runtime Combinators
 
 These should not exist as runtime public names:
@@ -203,7 +1849,7 @@ cannot request directly.
 
 ---
 
-## 5. Preserved Feature Inventory
+## 10. Preserved Feature Inventory
 
 The rewrite should not accidentally lose these current capabilities.
 
@@ -311,7 +1957,7 @@ keyword is wired to real enforcement.
 
 ---
 
-## 6. Architecture Components
+## 11. Architecture Components
 
 ### 6.1 Durable Store
 
@@ -431,7 +2077,7 @@ Responsibilities:
 
 ---
 
-## 7. Dry-Run And Verification
+## 12. Dry-Run And Verification
 
 Dry-run and verification should be artifact-based.
 
@@ -489,7 +2135,7 @@ high-risk artifacts, but deterministic checks should be the default gate.
 
 ---
 
-## 8. Planning And Classification
+## 13. Planning And Classification
 
 The planner should classify work before choosing a template.
 
@@ -539,7 +2185,413 @@ Planning output should not include raw Scheme.
 
 ---
 
-## 9. Implementation Phases
+## 14. Taxonomy Decision Rules
+
+The greenfield planner should preserve the detailed taxonomy from the
+incremental plan. The difference is that classification now selects templates
+or Strategy Specs, not hand-written Scheme.
+
+### 14.1 TaskShape
+
+| Shape | Description | Structural family |
+|---|---|---|
+| `Direct` | One operation on one small input. | `llm-query` only. |
+| `Batch` | Same operation over many independent items. | `map-async`, optional reduction. |
+| `Synthesize` | Combine many inputs into one output. | `tree-reduce` or `fold-sequential`. |
+| `Search` | Explore solution space and choose best result. | `parallel`, `race`, `iterate-until`. |
+| `Refine` | Improve one artifact iteratively. | `iterate-until`. |
+| `Compare` | Evaluate alternatives against criteria. | `parallel` plus selection/aggregation. |
+| `Classify` | Assign labels/categories to items. | `map-async`, optional aggregation. |
+| `Pipeline` | Distinct sequential transformations. | `sequence`. |
+| `Generate` | Create new content from scratch. | index-based `map-async`, `iterate-until`, or `fold-sequential`. |
+| `Decompose` | Break one input into structured parts. | `llm-query` JSON, `python_compute`, or `recursive`. |
+| `Validate` | Produce pass/fail/score assessments. | `map-async`, validation, aggregation. |
+| `Aggregate` | Extract metrics and compute report. | `map-async` plus `python_compute`. |
+| `Composite` | Multi-phase task. | compiled `sequence` of phase specs. |
+
+TaskShape decision tree:
+
+```text
+Q0: Is this one small input, one output, one operation, no second phase?
+    YES -> Direct
+    NO  -> Q1
+
+Q1: Are there many input items?
+    YES -> Q2
+    NO  -> Q5
+
+Q2: Are items independent?
+    YES -> Q3
+    NO  -> Q4
+
+Q3: What is the per-item operation?
+    Transform/extract -> Batch
+    Label/category    -> Classify
+    Check/grade/audit -> Validate
+
+Q4: Does information accumulate across ordered items?
+    YES -> Synthesize with fold-sequential
+    NO  -> Pipeline
+
+Q5: Is the task creating content with no source item list?
+    YES -> Generate
+    NO  -> Q6
+
+Q6: Is the task improving one artifact?
+    YES -> Refine
+    NO  -> Q7
+
+Q7: Is the task breaking one input into parts?
+    YES -> Decompose
+    NO  -> Q8
+
+Q8: Is the task choosing among alternatives?
+    YES -> Compare or Search
+    NO  -> Synthesize, Aggregate, or Direct depending on output type
+
+Q9: Does the task clearly have multiple phases?
+    YES -> Composite, preserving constituent shapes
+```
+
+### 14.2 DataShape
+
+| Shape | Description | Important fields |
+|---|---|---|
+| `FlatList` | Independent or ordered list. | count, item_size, independent. |
+| `Hierarchy` | Tree or nested structure. | depth, branching, node_count. |
+| `Singular` | One blob that may fit in context. | size, chunkable, boundary. |
+| `ChunkedSingular` | Large document split into dependent chunks. | chunk_count, overlap, dependency. |
+| `Graph` | Connected entities and edges. | nodes, edges, connectedness. |
+| `TimeSeries` | Ordered observations. | length, window_size, causal. |
+| `Tabular` | Rows with shared schema. | row_count, columns, grouping keys. |
+| `Multimodal` | Text plus images/audio. | modality, count, model requirements. |
+| `Paired` | Aligned source/target pairs. | pair_count, alignment key. |
+| `KeyValue` | Dictionary/map data. | key_count, preserve_keys. |
+
+DataShape mapping rules:
+
+```text
+FlatList { independent: true, count <= 50 }
+  -> map-async with max-concurrent = count
+
+FlatList { independent: true, count > 50 }
+  -> map-async with max-concurrent = min(count, 20)
+
+FlatList { independent: false }
+  -> fold-sequential
+
+Singular { size <= context_limit, one operation }
+  -> Direct
+
+Singular { size > context_limit, chunkable: true, chunks independent }
+  -> chunk, then FlatList
+
+ChunkedSingular { chunks dependent }
+  -> fold-sequential with explicit summary/checkpoint strategy
+
+Hierarchy { depth > 2 }
+  -> tree-reduce over matching hierarchy or recursive-spawn
+
+Tabular { row_count > 50, independent_rows: true }
+  -> map-async row extraction + python_compute aggregation
+
+Multimodal
+  -> require model with image/audio support; include image token estimates
+
+Paired
+  -> zip pairs and map-async over pair records
+
+KeyValue
+  -> preserve keys in results; aggregate by key
+```
+
+### 14.3 Per-Shape Template Selection
+
+Direct:
+
+```text
+Q1: Does the input fit in one model context?
+    YES -> direct_call
+    NO  -> reclassify as Decompose, Batch, or Synthesize
+
+Q2: Is deterministic computation needed before/after the call?
+    YES -> python_compute + direct_call, or direct_call + python_compute
+    NO  -> direct_call only
+```
+
+Batch:
+
+```text
+Q1: Return a list or one combined output?
+    LIST     -> batch_map
+    COMBINED -> batch_extract_reduce
+
+Q2: If combined, is combination order-sensitive?
+    YES -> batch_extract_fold
+    NO  -> batch_extract_reduce
+
+Q3: Are some items harder or more ambiguous?
+    YES -> tiered_review template
+    NO  -> one map-async pass
+
+Q4: Are duplicates likely?
+    YES -> memoized map phase
+```
+
+Synthesize:
+
+```text
+Q1: Do all items fit in one context?
+    YES -> direct_synthesis
+    NO  -> Q2
+
+Q2: Is order important?
+    YES -> ordered_synthesis_fold
+    NO  -> tree_synthesis
+
+Q3: Is accumulator likely to exceed context?
+    YES -> fold_with_summarization
+    NO  -> exact fold-sequential
+```
+
+Search:
+
+```text
+Q1: Is the candidate set finite?
+    YES -> compare_candidates
+    NO  -> iterative_search
+
+Q2: Is latency more important than quality?
+    YES -> race_candidates
+    NO  -> evaluate_all_then_select
+```
+
+Refine:
+
+```text
+Q1: Is there a testable predicate?
+    YES -> refine_until_valid
+    NO  -> bounded_critique_refine
+
+Q2: Should each iteration be validated?
+    YES -> wrap refine step with validation
+```
+
+Compare:
+
+```text
+Q1: Compare models or strategies?
+    MODELS     -> compare_models
+    STRATEGIES -> compare_strategies
+
+Q2: Select one or synthesize all?
+    SELECT     -> parallel + python_compute/Scheme selection
+    SYNTHESIZE -> parallel + llm-query aggregator
+```
+
+Classify:
+
+```text
+Q1: One item or many?
+    ONE  -> direct_classify
+    MANY -> batch_classify
+
+Q2: Need distribution/report?
+    YES -> python_compute aggregation after labels
+    NO  -> return labels
+
+Q3: Ambiguous categories?
+    YES -> tiered_review template
+```
+
+Pipeline:
+
+```text
+Q1: Are stages distinct?
+    YES -> sequence
+    NO  -> reclassify as Batch
+
+Q2: Can a stage fail?
+    YES -> fallback around that stage
+
+Q3: Does a stage need quality gating?
+    YES -> validation around that stage
+```
+
+Generate:
+
+```text
+Q1: Fixed number or until condition?
+    FIXED -> map-async over generated index list
+    UNTIL -> iterate-until
+
+Q2: Must items be mutually consistent?
+    YES -> fold-sequential
+    NO  -> map-async
+
+Q3: Must items be unique?
+    YES -> python_compute deduplication and regenerate missing count
+```
+
+Decompose:
+
+```text
+Q1: Known structural boundary?
+    YES -> python_compute splitter
+    NO  -> llm-query with JSON output
+
+Q2: Is one pass enough?
+    YES -> parse parts and return
+    NO  -> recursive artifact-aware decomposition
+
+Q3: Process parts afterward?
+    YES -> Composite: Decompose -> Batch
+```
+
+Validate:
+
+```text
+Q1: Same rubric for all items?
+    YES -> map-async validation
+    NO  -> fold-sequential if criteria evolve
+
+Q2: Need structured assessment?
+    YES -> JSON mode plus schema validation
+
+Q3: Which error is costlier?
+    FALSE POSITIVE -> expensive review of passes
+    FALSE NEGATIVE -> expensive review of failures
+```
+
+Aggregate:
+
+```text
+Q1: Pure computation after extraction?
+    YES -> map-async extraction + python_compute aggregation
+    NO  -> map-async extraction + python_compute stats + llm interpretation
+
+Q2: Grouped report?
+    YES -> python_compute groupby using extracted schema
+```
+
+Composite:
+
+```text
+Q1: Identify constituent shapes in order.
+Q2: Compile each phase independently.
+Q3: Connect dependent phases with sequence.
+Q4: Connect independent phases with parallel.
+```
+
+---
+
+## 15. Initial Template Catalog
+
+The first implementation should include enough templates to cover common
+workflows without asking the planner to invent structure.
+
+| Template | Shapes | Primitive composition |
+|---|---|---|
+| `direct_call` | Direct | `llm-query`. |
+| `direct_json_extract` | Direct, Decompose | `llm-query #:json #t` plus validation. |
+| `batch_map` | Batch, Classify, Validate | `map-async`. |
+| `batch_extract_reduce` | Batch + Synthesize | `map-async` plus `tree-reduce`. |
+| `batch_extract_fold` | Batch + ordered Synthesize | `map-async` plus `fold-sequential`, or direct `fold-sequential` when items are dependent. |
+| `ordered_synthesis_fold` | Synthesize | `fold-sequential` with optional checkpointing. |
+| `tree_synthesis` | Synthesize | `tree-reduce`. |
+| `compare_candidates` | Compare, Search | `parallel` plus selection. |
+| `race_candidates` | Search | `race`. |
+| `refine_until_valid` | Refine | `iterate-until` plus `with-validation`. |
+| `bounded_critique_refine` | Refine | `iterate-until` with critique/refine state. |
+| `tiered_review` | Batch, Classify, Validate | cheap `map-async`, uncertainty filter, expensive `map-async`. |
+| `tabular_extract_aggregate` | Aggregate, Tabular | `map-async` plus `python_compute`. |
+| `decompose_then_batch` | Decompose, Composite | JSON decomposition plus `map-async`. |
+| `recursive_decompose` | Decompose, Hierarchy | artifact-aware `recursive-spawn`. |
+
+Every template should include:
+
+- slot schema,
+- expected call formula,
+- structural profile,
+- model capability requirements,
+- verification rules,
+- at least one example invocation,
+- one compiler fixture showing generated primitive nodes.
+
+---
+
+## 16. Implementation File Layout
+
+Suggested greenfield layout:
+
+```text
+rlm_scheme/
+  __init__.py
+  mcp_server.py
+  models.py
+  ids.py
+  store.py
+  context_store.py
+  template_store.py
+  planner.py
+  classifier.py
+  spec_schema.py
+  compiler.py
+  dry_run.py
+  verifier.py
+  executor.py
+  trace.py
+  llm_provider.py
+  image_inputs.py
+  python_bridge.py
+  runtime/
+    racket_server.rkt
+    primitives.rkt
+    sandbox.rkt
+    callbacks.rkt
+templates/
+  batch_extract_reduce.json
+  ...
+docs/
+  GREENFIELD-REWRITE-PLAN.md
+  api-reference.md
+  templates.md
+  primitives.md
+tests/
+  test_id_flow.py
+  test_mcp_api_schemas.py
+  test_template_validation.py
+  test_compiler.py
+  test_runtime_primitives.py
+  test_dry_run.py
+  test_verifier.py
+  test_executor.py
+```
+
+Module responsibilities:
+
+| Module | Responsibility |
+|---|---|
+| `models.py` | Pydantic/dataclass schemas for all durable records and API payloads. |
+| `ids.py` | ID generation and validation for `ctx_`, `plan_`, `art_`, `dry_`, `ver_`, `exec_`, `call_`. |
+| `store.py` | Durable JSON or SQLite/PGlite storage abstraction. |
+| `context_store.py` | Large context storage, previews, metadata, and path extraction. |
+| `template_store.py` | Load, validate, list, and retrieve templates. |
+| `classifier.py` | Deterministic TaskShape/DataShape rules. |
+| `planner.py` | Template/spec selection and plan record creation. |
+| `spec_schema.py` | Strategy Spec validation and normalization. |
+| `compiler.py` | Template/spec to Scheme artifact compilation. |
+| `dry_run.py` | Deterministic structural simulation. |
+| `verifier.py` | Artifact checks and execution gate. |
+| `executor.py` | Racket runtime lifecycle, progress, cancellation, and execution records. |
+| `trace.py` | Trace event schema and aggregation. |
+| `llm_provider.py` | Provider calls, retry, rate limits, token accounting. |
+| `image_inputs.py` | Image resolution, MIME sniffing, size limits. |
+| `python_bridge.py` | Controlled Python compute subprocess. |
+
+---
+
+## 17. Implementation Phases
 
 ### Phase 0: Decisions And Schemas
 
@@ -694,7 +2746,7 @@ Exit criteria:
 
 ---
 
-## 10. Test Plan
+## 18. Test Plan
 
 Minimum test coverage:
 
@@ -725,7 +2777,7 @@ Minimum test coverage:
 
 ---
 
-## 11. Open Design Decisions
+## 19. Open Design Decisions
 
 These should be decided before implementation begins:
 
@@ -744,7 +2796,7 @@ These should be decided before implementation begins:
 
 ---
 
-## 12. Success Criteria
+## 20. Success Criteria
 
 The rewrite is successful when:
 
@@ -760,4 +2812,3 @@ The rewrite is successful when:
 - current operational features are preserved: progress, cancel, trace, rate
   limits, token accounting, checkpointing, multimodal input, and controlled
   Python compute.
-
