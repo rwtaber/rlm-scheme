@@ -57,16 +57,37 @@ strategy specs, compiled artifacts, verification records, and executions:
    status/cancel tools as needed. History links `context_id -> plan_id ->
    artifact_id -> dry_run_id -> verification_id -> execution_id`.
 
-`plan_id` and `artifact_id` intentionally identify different lifecycle stages:
+#### ID Flow
 
-- `plan_id` identifies intent: the task, context metadata, inferred shapes,
-  constraints, selected template/spec rationale, and history lookup context.
-- `artifact_id` identifies an executable compilation: the template invocation
-  or Strategy Spec, filled slots, generated Scheme, compiler version, and code
-  hash.
+Each ID names one stage of the orchestration lifecycle:
 
-One `plan_id` can produce multiple `artifact_id`s: cheap vs high-quality
-variants, revised slot values, or fallback strategies.
+- `context_id`: stored input data plus metadata such as shape, item count,
+  modality, independence, and size estimates. One context can support many
+  plans.
+- `plan_id`: task intent for a context: user objective, constraints, inferred
+  TaskShape/DataShape, selected template/spec rationale, and history lookup
+  context. One plan can produce multiple compiled variants.
+- `artifact_id`: compiled executable strategy: template invocation or Strategy
+  Spec, filled slots, generated Scheme, compiler version, and code hash. One
+  artifact can be estimated, dry-run, verified, and executed multiple times.
+- `dry_run_id`: stored structural simulation for an artifact: call counts,
+  fan-out, recursive depth, model mix, warnings, and estimates.
+- `verification_id`: stored verification decision for an artifact, usually
+  tied to a dry-run: deterministic artifact checks, optional semantic check,
+  pass/warn/fail status, and reasons.
+- `execution_id`: one real execution attempt: final result, stdout, trace,
+  call metrics, token usage, errors, and checkpoint/history links.
+
+The normal chain is:
+
+```text
+context_id -> plan_id -> artifact_id -> dry_run_id -> verification_id -> execution_id
+```
+
+The relationships are one-to-many at most stages: one context can have many
+plans; one plan can have cheap/high-quality/fallback artifacts; one artifact can
+have repeated dry-runs or executions; one execution belongs to exactly one
+artifact.
 
 Templates are the bridge between high-level planner intent and executable
 Scheme. A template generally stores:
