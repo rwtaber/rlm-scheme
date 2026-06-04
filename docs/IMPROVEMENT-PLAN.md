@@ -104,13 +104,11 @@ Scheme body directly. The Python compiler owns Scheme generation. This makes
 the LLM responsible for structured choices and content slots, while deterministic
 code is responsible for syntax, primitive composition, and runtime safety.
 
-Low-level escape hatches can remain for debugging:
-
-- `execute_scheme(code, ...)` can execute raw Scheme directly.
-- `dry_run_scheme(code, ...)` can simulate raw Scheme directly.
-- reference tools can expose runtime docs.
-
-Those are not the normal path. The normal path is artifact-based and auditable.
+There should be no public raw-Scheme execution path in the north-star API.
+Scheme remains an internal compiled artifact: inspectable through artifact
+metadata for debugging, but not submitted directly by agents. Existing
+raw-code tools should be retired from the MCP surface once artifact execution
+is available.
 
 ---
 
@@ -259,7 +257,8 @@ These should be fixed early because they distort the planner interface:
 
 2. **Duplicate stale MCP decorator on `execute_scheme`.** There is an extra
    `@mcp.tool(description="Analyze task and identify clarifying questions...")`
-   stacked above the real `execute_scheme` decorator. Remove it.
+   stacked above the real `execute_scheme` decorator. Remove it as part of
+   retiring `execute_scheme` from the public MCP surface.
 
 3. **Async parameter extraction should be audited.** Confirm `temperature`,
    `max_tokens`, `json_mode`, and `images` are passed through consistently for
@@ -756,8 +755,10 @@ Estimation and dry-run should exist at two levels:
 - `dry_run_strategy(artifact_id)` is the normal artifact-based API. It retrieves
   compiled Scheme from the artifact store, runs the dry-run, stores the result,
   and returns a `dry_run_id`.
-- `dry_run_scheme(code, ...)` remains a low-level debugging escape hatch for
-  raw Scheme.
+
+There is no public `dry_run_scheme(code, ...)` endpoint in the north-star API.
+Dry-run operates on stored artifacts only. Internal test helpers may still call
+the lower-level implementation directly.
 
 **Important design constraints:**
 
@@ -844,7 +845,6 @@ estimation and should be marked approximate.
   `max-concurrent`, not item count.
 - `await-any` leaves remaining ids pending.
 - Dry-run can be run concurrently with a real execution without mode leakage.
-- `execute_scheme` results are unchanged after a dry-run.
 - `estimate_strategy(artifact_id)` returns a cheap static estimate without
   invoking Racket.
 - `dry_run_strategy(artifact_id)` stores and returns a reusable `dry_run_id`.
@@ -861,8 +861,8 @@ estimation and should be marked approximate.
 
 Trusted templates and compiler outputs should already be structurally valid
 because template linting runs in CI. Per-artifact deterministic checks still
-matter when user-filled slots, context metadata, selected models, or raw Scheme
-escape hatches can change execution behavior.
+matter when user-filled slots, context metadata, selected models, imported
+artifacts, or manually edited artifacts can change execution behavior.
 
 ```python
 async def verify_strategy(
@@ -875,9 +875,8 @@ async def verify_strategy(
     ...
 ```
 
-The tool stores its result and returns a `verification_id`. Raw-code
-verification can remain available as a debugging helper, but the normal path is
-artifact-based.
+The tool stores its result and returns a `verification_id`. Verification is
+artifact-based; raw-code verification is not part of the public MCP API.
 
 **Template/compiler linting belongs in CI:**
 
@@ -896,7 +895,6 @@ artifact-based.
 - `MAX_CONCURRENT` exceeds configured limits,
 - expected item count disagrees with context metadata,
 - context binding is missing or has the wrong shape,
-- raw Scheme escape hatch was used,
 - compiled artifact was manually edited or imported,
 - dry-run structure contradicts the template/spec profile.
 
@@ -951,8 +949,8 @@ Templates are consumed by the planner and compiler:
 - Templates must not reference removed compound combinators.
 - Template filling must validate types and ranges.
 - Scheme strings must be escaped with `json.dumps()`.
-- Template output should prefer `template_name + slot_values`; raw
-  `code_template` is fallback only.
+- Template output should be `template_name + slot_values` or a Strategy Spec.
+  The planner should not emit raw Scheme.
 
 **Tree-reduce formula:**
 
@@ -1074,7 +1072,7 @@ Shape prompts should ask for:
 - `template_name`,
 - `slot_values`,
 - optional `strategy_spec`,
-- raw `code_template` only as fallback.
+- no raw `code_template`.
 
 This aligns with the Strategy Spec compiler end state.
 
@@ -1111,13 +1109,16 @@ Use explicit IDs, not global mutable "last plan" state.
 }
 ```
 
-`execute_scheme` keeps `timeout` and adds `plan_id`:
+`execute_strategy` keeps `timeout` and links execution to the verified
+artifact:
 
 ```python
-async def execute_scheme(
-    code: str,
+async def execute_strategy(
+    artifact_id: str,
+    verification_id: str,
     timeout: int | None = None,
     plan_id: str | None = None,
+    force: bool = False,
     ctx: Context = None,
 ) -> str:
     ...
@@ -1367,7 +1368,7 @@ Compiled artifacts are stored server-side:
   "artifact_id": "...",
   "plan_id": "...",
   "context_id": "...",
-  "source_type": "strategy_spec | template_invocation | raw_scheme",
+  "source_type": "strategy_spec | template_invocation",
   "strategy_spec": {},
   "template_name": "...",
   "slot_values": {},
@@ -1387,7 +1388,6 @@ Additional artifact tools:
 - `execute_strategy(artifact_id, verification_id, timeout, plan_id,
   force=false)` runs verified artifacts. It refuses failed verification unless
   forced.
-- `execute_scheme(code, ...)` remains a low-level escape hatch.
 
 **Tests:**
 
@@ -1425,10 +1425,24 @@ Phase numbers match improvement numbers.
 Recommended execution order:
 
 1. 4.1 and 4.2 first, so the runtime surface is honest.
-2. 4.3 next, because dry-run enables safe verification.
-3. 4.5 before 4.6, because classification should select templates/specs.
-4. 4.12 is the end-state interface; 4.4, 4.6, and 4.7 should be designed to
-   accept specs and template slots, not raw Scheme, except as fallback.
+2. Implement artifact storage before exposing new execution tools.
+3. 4.3 next, but expose dry-run only as `dry_run_strategy(artifact_id)`.
+4. 4.5 before 4.6, because classification should select templates/specs.
+5. 4.12 completes the north-star interface: `compile_strategy` creates
+   artifacts, `verify_strategy` gates them, and `execute_strategy` runs them.
+
+Migration to the north-star API:
+
+1. Add template/spec compilation and artifact storage.
+2. Add `estimate_strategy`, `dry_run_strategy`, `verify_strategy`,
+   `execute_strategy`, and `get_artifact`.
+3. Update `plan_strategy` to return template invocations or Strategy Specs, not
+   raw Scheme.
+4. Update tests and docs to call artifact APIs.
+5. Remove public `execute_scheme(code, ...)` and `dry_run_scheme(code, ...)`
+   MCP tools. The implementation may keep internal helpers, but agents should
+   not see or call raw-Scheme endpoints.
+6. Remove raw `code_template` output from planner prompts.
 
 ---
 
@@ -1441,7 +1455,7 @@ Recommended execution order:
 | `docs/IMPROVEMENT-PLAN.md` | This rewritten plan. |
 | `docs/api-reference.md` | Correct model names and primitive docs. |
 | `docs/combinators.md` | Primitive-only type signatures and common errors. |
-| `docs/planner-prompt.md` | Kept as fallback or rewritten to prefer specs/slots. |
+| `docs/planner-prompt.md` | Rewritten to emit template invocations or Strategy Specs only. |
 | `mcp_server.py` | Context IDs, dry-run, verification, classification, templates, history, compiler. |
 | `racket_server.rkt` | Remove compounds, fix `parallel`, remove dead API, reasoning annotation. |
 
@@ -1452,7 +1466,6 @@ Recommended execution order:
 | `docs/task-shapes.md` | TaskShape/DataShape taxonomy and decision rules. |
 | `docs/shape-prompts/*.md` | Shape-specific planner prompts. |
 | `docs/templates/*.json` | Typed primitive-only templates. |
-| `docs/tool-descriptions/dry_run_scheme.md` | Dry-run tool docs. |
 | `docs/tool-descriptions/estimate_strategy.md` | Static strategy estimate docs. |
 | `docs/tool-descriptions/dry_run_strategy.md` | Artifact dry-run tool docs. |
 | `docs/tool-descriptions/verify_strategy.md` | Verification tool docs. |
@@ -1485,7 +1498,7 @@ Recommended execution order:
 - Classification includes `has_second_phase` and `sub_operations`.
 - North-star flow starts with `context_id` from `load_context`.
 - `plan_id` and `artifact_id` have distinct lifecycle meanings.
-- `execute_scheme` retains `timeout` and adds `plan_id`.
+- Public raw-Scheme APIs are retired; execution goes through `execute_strategy`.
 - Templates use primitives only.
 - Compound combinators are slated for runtime removal.
 - Strategy Spec compiler is the end-state LLM-facing interface.
