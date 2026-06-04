@@ -22,34 +22,51 @@ server that asks agents to pass raw Scheme strings around.
 An agent should interact with the MCP server at the level of plans, templates,
 strategy specs, compiled artifacts, verification records, and executions:
 
-1. **Plan.** The agent calls `plan_strategy(...)` with the task and any known
-   structured hints. The planner classifies TaskShape/DataShape, selects an
-   appropriate template or emits a Strategy Spec, and returns a `plan_id`.
+1. **Load context.** The agent calls `load_context(data, name, metadata)` for
+   large inputs and receives a `context_id`. Context metadata should capture
+   shape, item count, independence, modality, and size estimates so the planner
+   can reason over large datasets without reading every token.
 
-2. **Compile.** The agent calls `compile_strategy(...)` with either a Strategy
+2. **Plan.** The agent calls `plan_strategy(..., context_id=...)` with the task
+   and any known structured hints. The planner classifies TaskShape/DataShape,
+   selects an appropriate template or emits a Strategy Spec, and returns a
+   `plan_id`.
+
+3. **Compile.** The agent calls `compile_strategy(...)` with either a Strategy
    Spec or a template invocation. The compiler validates inputs, fills typed
    slots, emits Scheme internally, stores a compiled artifact, and returns an
    `artifact_id`. Raw Scheme remains inspectable, but it is not the primary API
    contract.
 
-3. **Estimate and dry-run.** The agent can call `estimate_strategy(artifact_id)`
+4. **Estimate and dry-run.** The agent can call `estimate_strategy(artifact_id)`
    for a static cost/call estimate, then `dry_run_strategy(artifact_id)` to
    simulate structure without real LLM calls. The server stores the dry-run
    result and returns a `dry_run_id`.
 
-4. **Lint and verify.** The agent calls `lint_strategy(artifact_id,
-   dry_run_id, ...)` for deterministic no-token checks, then optionally
-   `verify_strategy(artifact_id, dry_run_id, ...)` for a cheap semantic model
-   check. Verification reuses the dry-run result and returns a
-   `verification_id`.
+5. **Verify.** The agent calls `verify_strategy(artifact_id, dry_run_id, ...)`.
+   Verification includes deterministic artifact checks, interprets the dry-run,
+   optionally runs a cheap semantic model check, and returns a
+   `verification_id`. Template/compiler linting happens in CI and developer
+   tooling; it is not a required user-facing step for trusted artifacts.
 
-5. **Execute.** The agent calls `execute_strategy(artifact_id,
+6. **Execute.** The agent calls `execute_strategy(artifact_id,
    verification_id, timeout, plan_id)`. By default, execution refuses failed
    verification unless `force=true`.
 
-6. **Inspect and learn.** The agent calls `get_execution_trace(execution_id)` or
-   status/cancel tools as needed. History links `plan_id -> artifact_id ->
-   dry_run_id -> verification_id -> execution_id`.
+7. **Inspect and learn.** The agent calls `get_execution_trace(execution_id)` or
+   status/cancel tools as needed. History links `context_id -> plan_id ->
+   artifact_id -> dry_run_id -> verification_id -> execution_id`.
+
+`plan_id` and `artifact_id` intentionally identify different lifecycle stages:
+
+- `plan_id` identifies intent: the task, context metadata, inferred shapes,
+  constraints, selected template/spec rationale, and history lookup context.
+- `artifact_id` identifies an executable compilation: the template invocation
+  or Strategy Spec, filled slots, generated Scheme, compiler version, and code
+  hash.
+
+One `plan_id` can produce multiple `artifact_id`s: cheap vs high-quality
+variants, revised slot values, or fallback strategies.
 
 Templates are the bridge between high-level planner intent and executable
 Scheme. A template generally stores:
@@ -815,26 +832,16 @@ estimation and should be marked approximate.
 
 **Goal:** Catch structural and semantic errors before real execution.
 
-Verification is split into two layers:
+`verify_strategy` is the normal execution gate. It includes:
 
-- `lint_strategy` is deterministic and token-free. It operates on compiled
-  artifacts and dry-run results.
-- `verify_strategy` optionally uses a cheap model for semantic checks after
-  linting.
+- deterministic artifact checks that are cheap and token-free,
+- dry-run interpretation,
+- optional cheap semantic model verification.
 
-Both operate on compiled artifacts. Both should reuse an existing dry-run result
-when a `dry_run_id` is provided instead of rerunning dry-run.
-
-```python
-async def lint_strategy(
-    artifact_id: str,
-    task_description: str,
-    dry_run_id: str | None = None,
-    expected_items: int | None = None,
-    ctx: Context = None,
-) -> str:
-    ...
-```
+Trusted templates and compiler outputs should already be structurally valid
+because template linting runs in CI. Per-artifact deterministic checks still
+matter when user-filled slots, context metadata, selected models, or raw Scheme
+escape hatches can change execution behavior.
 
 ```python
 async def verify_strategy(
@@ -851,17 +858,26 @@ The tool stores its result and returns a `verification_id`. Raw-code
 verification can remain available as a debugging helper, but the normal path is
 artifact-based.
 
-**Deterministic lints:**
+**Template/compiler linting belongs in CI:**
 
-- zero LLM calls for a non-Direct strategy,
-- async calls much lower than expected item count,
-- max fan-out above configured safe limit,
-- too many sync calls in a supposedly parallel strategy,
-- use of removed compound combinator names,
-- JSON mode without "json" in instruction,
-- `llm-query` result used in string operations without `syntax-e` where
-  detectable,
-- Direct shape wrongly using orchestration.
+- template uses only primitives,
+- template compiles,
+- slot schemas are valid,
+- generated Scheme is syntactically valid,
+- no removed compound combinators appear,
+- expected call formulas match dry-run fixtures,
+- fixed template JSON-mode instructions satisfy API requirements.
+
+**Per-artifact deterministic checks inside `verify_strategy`:**
+
+- filled slot values create invalid prompts, e.g. `#:json #t` without "json",
+- selected model lacks required modality support,
+- `MAX_CONCURRENT` exceeds configured limits,
+- expected item count disagrees with context metadata,
+- context binding is missing or has the wrong shape,
+- raw Scheme escape hatch was used,
+- compiled artifact was manually edited or imported,
+- dry-run structure contradicts the template/spec profile.
 
 **Semantic check:**
 
@@ -880,7 +896,7 @@ The semantic check should answer structured questions:
 - accepts direct single-call plans,
 - reports dry-run structure in verification output.
 - reuses `dry_run_id` without rerunning dry-run.
-- returns deterministic lint results without calling an LLM.
+- includes deterministic artifact checks before optional semantic verification.
 - returns `verification_id`.
 
 ### 4.5 Machine-Readable Templates
@@ -965,11 +981,15 @@ Examples:
 **Goal:** Replace the monolithic creative planner prompt with deterministic
 classification plus shape-specific prompts.
 
+Large inputs should be referenced by `context_id`. Planning should use context
+metadata by default and inspect raw context only when necessary.
+
 **Classification design:**
 
 ```python
 def plan_strategy(
     task_description: str,
+    context_id: str | None = None,
     data_characteristics: str | None = None,
     constraints: str | None = None,
     priority: str = "balanced",
@@ -989,12 +1009,29 @@ def plan_strategy(
 
 Process:
 
-1. Use caller-provided structured fields.
-2. Use a cheap model only to fill missing fields.
+1. Load structured fields from `context_id` metadata when available.
+2. Use caller-provided structured fields to override or supplement metadata.
+3. Use a cheap model only to fill missing fields.
 3. Run deterministic classification.
 4. Select a shape-specific prompt.
 5. Return `plan_id`, shape metadata, and preferably a template invocation or
    Strategy Spec.
+
+`load_context` should support metadata:
+
+```json
+{
+  "name": "papers",
+  "shape": "FlatList",
+  "item_count": 500,
+  "item_size_estimate_tokens": 2000,
+  "independent": true,
+  "modality": "text"
+}
+```
+
+This makes large-context planning deterministic and avoids asking an LLM to
+infer scale from prose.
 
 **Composite preservation:**
 
@@ -1074,6 +1111,7 @@ Entry shape:
 ```json
 {
   "timestamp": "2026-06-03T10:00:00Z",
+  "context_id": "...",
   "plan_id": "...",
   "task_shape": "batch",
   "sub_shapes": ["batch", "synthesize"],
@@ -1098,7 +1136,7 @@ unless explicitly requested.
 History should link the full artifact chain:
 
 ```
-plan_id -> artifact_id -> dry_run_id -> verification_id -> execution_id
+context_id -> plan_id -> artifact_id -> dry_run_id -> verification_id -> execution_id
 ```
 
 This prevents accidental execution of stale code and makes post-run analysis
@@ -1107,6 +1145,7 @@ auditable.
 **Tests:**
 
 - history links to `plan_id`,
+- history links to `context_id` when present,
 - execution without `plan_id` records unknown context,
 - history rotation keeps file bounded,
 - relevant history filters by shape/sub-shape.
@@ -1284,6 +1323,7 @@ def compile_strategy(
     template_name: str | None = None,
     slot_values: dict | None = None,
     plan_id: str | None = None,
+    context_id: str | None = None,
 ) -> str:
     ...
 ```
@@ -1305,6 +1345,7 @@ Compiled artifacts are stored server-side:
 {
   "artifact_id": "...",
   "plan_id": "...",
+  "context_id": "...",
   "source_type": "strategy_spec | template_invocation | raw_scheme",
   "strategy_spec": {},
   "template_name": "...",
@@ -1320,8 +1361,8 @@ Additional artifact tools:
 - `get_artifact(artifact_id)` returns metadata and optionally compiled Scheme.
 - `estimate_strategy(artifact_id)` returns a static call/cost estimate from
   template/spec metadata without executing Scheme.
-- `lint_strategy(artifact_id, dry_run_id, ...)` runs deterministic no-token
-  checks.
+- `verify_strategy(artifact_id, dry_run_id, ...)` runs deterministic
+  per-artifact checks and optional semantic verification.
 - `execute_strategy(artifact_id, verification_id, timeout, plan_id,
   force=false)` runs verified artifacts. It refuses failed verification unless
   forced.
@@ -1336,7 +1377,7 @@ Additional artifact tools:
 - dry-run of compiled specs matches expected call profiles.
 - stores compiled artifacts and returns stable `artifact_id`.
 - static estimates are available before dry-run.
-- lint results can be reused by verification.
+- verification reuses stored dry-run results and deterministic artifact checks.
 - `execute_strategy` refuses failed verification unless `force=true`.
 
 ---
@@ -1380,7 +1421,7 @@ Recommended execution order:
 | `docs/api-reference.md` | Correct model names and primitive docs. |
 | `docs/combinators.md` | Primitive-only type signatures and common errors. |
 | `docs/planner-prompt.md` | Kept as fallback or rewritten to prefer specs/slots. |
-| `mcp_server.py` | Dry-run, verification, classification, templates, history, compiler. |
+| `mcp_server.py` | Context IDs, dry-run, verification, classification, templates, history, compiler. |
 | `racket_server.rkt` | Remove compounds, fix `parallel`, remove dead API, reasoning annotation. |
 
 ### Created
@@ -1393,7 +1434,6 @@ Recommended execution order:
 | `docs/tool-descriptions/dry_run_scheme.md` | Dry-run tool docs. |
 | `docs/tool-descriptions/estimate_strategy.md` | Static strategy estimate docs. |
 | `docs/tool-descriptions/dry_run_strategy.md` | Artifact dry-run tool docs. |
-| `docs/tool-descriptions/lint_strategy.md` | Deterministic lint docs. |
 | `docs/tool-descriptions/verify_strategy.md` | Verification tool docs. |
 | `docs/tool-descriptions/compile_strategy.md` | Strategy compiler tool docs. |
 | `docs/tool-descriptions/execute_strategy.md` | Verified artifact execution docs. |
@@ -1422,6 +1462,8 @@ Recommended execution order:
 - Dry-run reports `recursive_depth`, not false combinator nesting depth.
 - Tree-reduce call formula is recursive and includes all reduce levels.
 - Classification includes `has_second_phase` and `sub_operations`.
+- North-star flow starts with `context_id` from `load_context`.
+- `plan_id` and `artifact_id` have distinct lifecycle meanings.
 - `execute_scheme` retains `timeout` and adds `plan_id`.
 - Templates use primitives only.
 - Compound combinators are slated for runtime removal.
