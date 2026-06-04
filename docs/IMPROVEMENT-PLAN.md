@@ -18,14 +18,342 @@ Three structural problems:
 
 ---
 
+## Literature: Combinator Upper Bounds and Minimal Basis Sets
+
+### Is there an upper bound on combinators?
+
+Theoretically, no — combinators compose infinitely. Practically, yes — there are strong design constraints from four decades of combinator library research.
+
+**Theoretical minimum (2-3 primitives):**
+The SKI combinator calculus (Schönfinkel 1924, Curry 1930) proves that just S, K, and I are computationally universal — any computable function can be expressed. For data processing specifically, Dean & Ghemawat's MapReduce (2004) showed that `map` + `reduce` covers the vast majority of distributed computation. These are existence proofs that very small primitive sets suffice.
+
+**Practical sweet spot (5-8 core + 3-5 modifiers):**
+Every successful combinator library converges on a similar size:
+
+| System | Core primitives | Modifiers/wrappers | Total | Domain |
+|--------|-----------------|-------------------|-------|--------|
+| Apache Beam | ParDo, GroupByKey, CoGroupByKey, Flatten, Partition | Windowing, Triggers | ~7 | Data pipelines |
+| Hutton & Meijer parser combinators (1996) | item, return, bind, zero, (++) | many, some, satisfy | ~8 | Parsing |
+| DSPy (2024-2026) | Predict, ChainOfThought, ReAct, ProgramOfThought | MultiChainComparison, Retry | ~6 | LLM prompting |
+| MapReduce | Map, Reduce | Combine, Partition | ~4 | Distributed compute |
+| Haskell Prelude list combinators | map, fold, filter, zip, concat | take, drop, iterate | ~8 | List processing |
+
+**Key design principle from Hughes (1989), "Why Functional Programming Matters":**
+> "The ways in which one can divide up the original problem depend directly on the ways in which one can glue solutions together."
+
+The glue functions (higher-order functions + lazy evaluation) are what make a small set of primitives powerful. Hughes argues that **the primitives should be orthogonal** (no two do the same thing) and **composable** (output of one fits input of another). The combinatorial explosion comes from *composition*, not from adding more primitives.
+
+**RLM-Scheme currently has 17 combinators. This is too many.**
+
+Applying the orthogonality test:
+
+| Combinator | Truly primitive? | Or expressible as composition? |
+|------------|-----------------|-------------------------------|
+| `parallel` | Yes — batch thunk execution | Core |
+| `race` | Yes — first-to-complete | Core |
+| `map-async` | Yes — parallel map with concurrency control | Core |
+| `fan-out-aggregate` | **No** — `map-async` + reduce-fn | Compound: `(reduce-fn (map-async map-fn items))` |
+| `tree-reduce` | Yes — hierarchical associative reduction | Core |
+| `fold-sequential` | Yes — ordered accumulation | Core |
+| `sequence` | Yes — function composition | Core |
+| `iterate-until` | Yes — conditional loop | Core |
+| `critique-refine` | **No** — `iterate-until` + generate/critique/refine steps | Compound: specialized iterate-until |
+| `vote` | **Borderline** — parallel + majority selection | Could be `parallel` + py-exec majority |
+| `ensemble` | **No** — `parallel` + custom aggregator | Compound: `(agg (parallel strategies))` |
+| `tiered` | **No** — sequential map + expensive synthesis | Compound: `(expensive-fn (map cheap-fn items))` |
+| `active-learning` | **Borderline** — map + filter + selective re-map | Specialized pattern |
+| `memoized` | Yes — caching wrapper | Modifier |
+| `with-validation` | Yes — assertion wrapper | Modifier |
+| `try-fallback` | Yes — error recovery wrapper | Modifier |
+| `choose` | Yes — conditional dispatch | Core |
+| `recursive-spawn` | Yes — nested sandbox delegation | Core |
+
+**Minimal core: 10 primitives**
+- `parallel`, `race`, `map-async` (parallel execution)
+- `tree-reduce`, `fold-sequential` (reduction)
+- `sequence`, `choose` (control flow)
+- `iterate-until` (looping)
+- `recursive-spawn` (delegation)
+- `memoized`, `with-validation`, `try-fallback` (modifiers)
+
+**Derived/compound: 7 combinators that should be templates, not primitives**
+- `fan-out-aggregate` = `map-async` + reduction function
+- `critique-refine` = specialized `iterate-until`
+- `ensemble` = `parallel` + aggregation
+- `vote` = `parallel` + majority selection
+- `tiered` = sequential map + expensive synthesis
+- `active-learning` = map + filter + selective expensive re-map
+
+This doesn't mean removing the 7 compound combinators from the library — they're useful shorthands. But it means the LLM should understand them as **named compositions of primitives**, not as 17 independent concepts to choose from. The planner prompt should present the 10 primitives and show how the 7 compounds are built from them.
+
+**Composition depth bound:**
+No formal bound exists in theory. In practice, the literature suggests:
+- **Parser combinators**: typically 3-5 levels of nesting (Hutton & Meijer 1996)
+- **Apache Beam**: pipelines are typically 4-8 transforms deep (Google Dataflow docs)
+- **MapReduce**: canonically 1 level (map then reduce), with chained jobs for multi-stage
+
+For LLM orchestration specifically, each nesting level adds:
+- One sequential dependency in the critical path
+- One more level of error propagation to handle
+- One more level of indirection for debugging
+
+**Practical recommendation: cap at 3 levels of combinator nesting.**
+- Level 0: single `llm-query` (Direct shape)
+- Level 1: one combinator (e.g., `map-async` or `iterate-until`)
+- Level 2: combinator + modifier (e.g., `fan-out-aggregate` with `try-fallback` wrapped map-fn)
+- Level 3: two combinators + modifier (e.g., `sequence(fan-out-aggregate, critique-refine)`)
+
+Beyond level 3, use `recursive-spawn` to delegate to a sub-sandbox — that's the principled way to add depth without nesting.
+
+### Relevant references
+
+- Schönfinkel (1924), "On the building blocks of mathematical logic" — SKI combinator basis
+- Hughes (1989), ["Why Functional Programming Matters"](https://www.cs.auckland.ac.nz/~j-hamer/360/why-fp-matters.html) — orthogonal primitives + composition as glue
+- Hutton & Meijer (1996), ["Monadic Parser Combinators"](https://people.cs.nott.ac.uk/pszgmh/monparsing.pdf) — ~8 primitives compose into arbitrary parsers
+- Dean & Ghemawat (2004), ["MapReduce"](https://research.google.com/archive/mapreduce-osdi04.pdf) — map + reduce covers most distributed computation
+- Khattab et al. (2024-2026), [DSPy](https://dspy.ai/) — ~6 LLM prompting primitives (Predict, ChainOfThought, ReAct, ProgramOfThought)
+- Willis et al. (2021), ["Design Patterns for Parser Combinators"](https://dl.acm.org/doi/10.1145/3471874.3472984) — formalizes combinator design patterns
+- Apache Beam, ["Programming Model"](https://cloud.google.com/dataflow/docs/concepts/beam-programming-model) — ~5-7 primitive transforms for data pipelines
+- Gibbons (2006), "Design Patterns as Higher-Order Datatype-Generic Programs" — design patterns are combinator compositions
+- [AGORA (2025)](https://arxiv.org/html/2604.11378v1), "From Agent Loops to Structured Graphs" — graph-based LLM agent orchestration, shows simpler methods often outperform complex graphs
+
+---
+
+## Critique Response and Additional Gaps
+
+An external review of this plan identified several issues. Each is addressed below with the planned fix.
+
+### 1. Dry-run semantics: pre-resolved futures break await-any (VALID)
+
+**Critique:** Pre-resolved futures change control flow in `await-any`'s rolling-window execution. When all futures are already done, `await-any` returns the first and the remaining handles are reconstructed from `not_done` — but `not_done` is empty if everything resolved instantly. This undercounts calls in pipelined map-async executions where `items > max-concurrent`.
+
+**Verification:** Confirmed. `map-async` (racket_server.rkt lines 857-912) uses `await-any` for rolling windows. The Python-side `await-any` (mcp_server.py lines 717-820) uses `concurrent.futures.wait(..., FIRST_COMPLETED)`. If all futures are pre-resolved, `wait()` returns all of them in `done`, not just one. The rolling window scheduler then thinks all slots are free simultaneously, launching all remaining items at once instead of one-at-a-time.
+
+**Fix:** Don't use pre-resolved futures. Use a **simulated scheduler** that resolves futures with controlled timing:
+
+```python
+class DryRunScheduler:
+    """Simulates async execution timing for structural analysis."""
+    def __init__(self):
+        self._resolve_delay = 0.001  # 1ms simulated latency
+        self._pending_count = 0
+        self._max_concurrent_seen = 0
+    
+    def create_future(self, mock_result: dict) -> concurrent.futures.Future:
+        """Create a future that resolves after a small delay."""
+        future = concurrent.futures.Future()
+        self._pending_count += 1
+        self._max_concurrent_seen = max(self._max_concurrent_seen, self._pending_count)
+        
+        def resolve():
+            time.sleep(self._resolve_delay)
+            future.set_result(mock_result)
+            self._pending_count -= 1
+        
+        threading.Thread(target=resolve, daemon=True).start()
+        return future
+```
+
+This preserves the scheduling order of `await-any` while keeping dry-run fast (~1ms per call vs ~2-5s per real call).
+
+### 2. Separate dry-run metrics from real execution accounting (VALID)
+
+**Critique:** The plan registers dry-run calls through `_register_call()` / `_complete_call()`, which contaminates the real `_call_registry`, cumulative token counters, and execution history.
+
+**Fix:** Add an `ExecutionMode` enum and a `DryRunContext` that collects metrics independently:
+
+```python
+class ExecutionMode(Enum):
+    REAL = "real"
+    DRY_RUN = "dry_run"
+
+class DryRunContext:
+    """Isolated metrics collector for dry-run execution."""
+    def __init__(self):
+        self.calls = []
+        self.total_sync = 0
+        self.total_async = 0
+        self.max_concurrent = 0
+        self.models = {}
+    
+    def record_call(self, call_type, model, instruction, depth):
+        self.calls.append({...})
+        # Update counters without touching _call_registry
+```
+
+Pass `ExecutionMode` through `send()`. In dry-run mode, skip `_register_call` / `_complete_call` entirely.
+
+### 3. Type signatures must distinguish return types more precisely (VALID)
+
+**Critique:** The type system uses broad `Item` type but doesn't distinguish between: returns async handle, returns already-awaited string, returns syntax object, returns plain value. Whether a combinator awaits internally or just calls thunks matters.
+
+**Verification:** Confirmed from racket_server.rkt:
+- `parallel` calls thunks, does NOT await → returns whatever thunks return
+- `race` calls thunks expecting async handles, calls `await-any` → returns unwrapped string
+- `vote`/`ensemble` call thunks synchronously → returns whatever thunks return
+- `tiered` applies cheap-fn synchronously via `map` (NOT `map-async`) → returns plain value
+- `fan-out-aggregate` uses `map-async` (awaits internally) → returns reduce-fn's return value
+
+**Fix:** Revise type signatures to use:
+```
+SyntaxObject    = opaque wrapped LLM response (from llm-query)
+AsyncHandle     = opaque handle (from llm-query-async, MUST be awaited)
+String          = plain unwrapped string
+[A]             = list of A
+Fn<A,B>         = function A -> B
+Thunk<A>        = () -> A
+
+;; Combinators that AWAIT internally (return unwrapped values):
+map-async         : (Fn<Item, AsyncHandle>, [Item]) -> [String]
+fan-out-aggregate : (Fn<Item, AsyncHandle>, Fn<[String], B>, [Item]) -> B
+race              : [Thunk<AsyncHandle>] -> String
+
+;; Combinators that DON'T await (return whatever thunks return):
+parallel          : [Thunk<A>] -> [A]
+vote              : [Thunk<A>] -> A
+ensemble          : [Thunk<A>] -> B
+
+;; Combinators that are synchronous (no async at all):
+tiered            : (Fn<Item, A>, Fn<[A], B>, [Item]) -> B       ;; NOTE: sequential map, not parallel
+fold-sequential   : (Fn<Acc, Item, Acc>, Acc, [Item]) -> Acc
+tree-reduce       : (Fn<Item..., Item>, [Item]) -> Item
+sequence          : (Fn<A,B>, Fn<B,C>) -> Fn<A,C>
+iterate-until     : (Fn<A,A>, Fn<A,Bool>, A) -> A
+critique-refine   : (Thunk<A>, Fn<A,A>, Fn<A,A,A>) -> A
+
+;; Wrappers (preserve inner type):
+memoized          : Fn<A,B> -> Fn<A,B>
+with-validation   : (Fn<A,B>, Fn<B,Bool>) -> Fn<A,B>
+try-fallback      : (Fn<A,B>, Fn<A,B>) -> Fn<A,B>
+choose            : (Fn<A,Bool>, Fn<A,B>, Fn<A,B>) -> Fn<A,B>
+```
+
+Critical documentation note: **`tiered` is sequential** (`map`, not `map-async`). This is a performance-significant distinction that the current plan's decision trees must account for. For parallel tiered processing, use `fan-out-aggregate` with a cheap model in the map-fn.
+
+### 4. Add Direct/SingleCall shape (VALID)
+
+**Critique:** The TaskShape taxonomy says trivial tasks should "just use llm-query directly" but this isn't a first-class planner output. The planner forces trivial tasks into Synthesize, Refine, or Pipeline.
+
+**Fix:** Add `Direct` as shape #0 in the taxonomy. It explicitly recommends **no combinator** — just a single `llm-query` or `llm-query` + `py-exec`. The classifier should detect this first (before checking other shapes) based on: single input, simple task, no iteration needed.
+
+Decision rule:
+```
+Is input small enough for one context window (<32K tokens)?
+  AND is the task a single operation (not multi-step)?
+  AND is there only one input (not a list of items)?
+    → Direct. No orchestration needed. Single llm-query.
+```
+
+### 5. Don't replace the decision tree with another soft classifier (VALID)
+
+**Critique:** The plan describes a deterministic decision tree but implements a single LLM classification prompt. That's still a soft classifier.
+
+**Fix:** Implement the actual decision tree as deterministic code. Use LLM classification ONLY to fill fields that can't be parsed from structured input:
+
+```python
+def _classify_task(task_description, data_characteristics, structured_fields=None):
+    """Classify task using deterministic rules first, LLM only for gaps."""
+    
+    # Phase 1: Parse structured fields if provided
+    if structured_fields:
+        item_count = structured_fields.get("item_count")
+        independent = structured_fields.get("independent")
+        output_type = structured_fields.get("output_type")  # "one" or "list"
+        # ... deterministic tree from these fields ...
+    
+    # Phase 2: Use LLM only to fill missing fields
+    missing = [f for f in ["item_count", "independent", "output_type"] if f not in (structured_fields or {})]
+    if missing:
+        llm_result = _fill_missing_fields(task_description, data_characteristics, missing)
+        structured_fields = {**(structured_fields or {}), **llm_result}
+    
+    # Phase 3: Deterministic tree on complete fields
+    return _deterministic_classify(structured_fields)
+```
+
+This means: `plan_strategy` gains optional structured parameters (`item_count`, `independent`, `output_type`, `modality`). If provided, classification is pure code. If missing, the LLM fills gaps, then classification is still pure code.
+
+### 6. Machine-readable templates (VALID)
+
+**Critique:** Markdown-first templates with string-based `_fill_template()` is fragile. `f'"{value}"'` quoting is unsafe. Should use proper Scheme string escaping and validate slot types.
+
+**Fix:** Store templates as JSON manifest + Scheme body:
+
+```json
+{
+  "name": "batch-extract-synthesize",
+  "shape": "batch",
+  "slots": {
+    "EXTRACTION_INSTRUCTION": {"type": "string", "required": true},
+    "SYNTHESIS_INSTRUCTION": {"type": "string", "required": true},
+    "EXTRACT_MODEL": {"type": "model", "default": "gpt-4o-mini", "enum": ["gpt-4.1-nano", "gpt-4o-mini", "gpt-4o", "gpt-4.5"]},
+    "MAX_CONCURRENT": {"type": "int", "default": 20, "min": 1, "max": 50},
+    "BRANCH_FACTOR": {"type": "int", "default": 5, "min": 2, "max": 15}
+  },
+  "code": "(define results\n  (fan-out-aggregate\n    (lambda (item)\n      (llm-query-async #:instruction <<EXTRACTION_INSTRUCTION>>\n                       #:data item\n                       #:model <<EXTRACT_MODEL>>))\n    ...))\n(finish results)",
+  "expected_calls_formula": "N + ceil(N / BRANCH_FACTOR)"
+}
+```
+
+Slot filling uses JSON string encoding for Scheme string literals, validates enum/range constraints, and rejects invalid values before template instantiation.
+
+### 7. History: use plan_id, not global state (VALID)
+
+**Critique:** `_last_plan_context` global is fragile under concurrent MCP tool calls. Use an explicit `plan_id` returned by `plan_strategy` and passed into `execute_scheme`.
+
+**Fix:** `plan_strategy` returns a `plan_id` (UUID) in its `_meta` response. `execute_scheme` gains an optional `plan_id` parameter. History is keyed by `plan_id`, not by global mutable state.
+
+### 8. Progressive summarization: make it an explicit combinator (VALID)
+
+**Critique:** Silently changing `fold-sequential` behavior based on accumulator length is dangerous. It adds LLM calls, changes semantics, and assumes accumulator is a string.
+
+**Fix:** Create `fold-summarizing` as a new combinator (or wrapper):
+
+```scheme
+(fold-summarizing fn init items
+  #:horizon 8000
+  #:summary-model "gpt-4o-mini"
+  #:summary-instruction "Compress this running summary, preserving all key facts.")
+```
+
+This is explicit, opt-in, and doesn't modify `fold-sequential` behavior.
+
+### 9. Additional gaps identified
+
+**Gap: `recursive-spawn` has dead `max-depth` parameter.**
+racket_server.rkt lines 1103-1108: the `#:depth` keyword is accepted but never used. Actual depth enforcement happens globally in Python (`MAX_RECURSION_DEPTH = 3`). Either wire the parameter through or remove it to avoid confusion.
+
+**Gap: No composition depth limit for combinators.**
+Only `recursive-spawn` is depth-limited. Arbitrary combinator nesting (e.g., `fan-out-aggregate` inside `critique-refine` inside `sequence` inside `ensemble`) has no enforcement. Recommendation: add a soft warning (not hard limit) when nesting exceeds 3 levels, surfaced in dry-run output.
+
+**Gap: `tiered` is sequential, decision trees assume parallel.**
+The per-shape decision tree for Batch recommends `tiered` for cost optimization, but `tiered` uses synchronous `map` (not `map-async`). For 500+ items, this is dramatically slower. Either: (a) document this clearly, (b) add a `tiered-async` variant that uses `map-async` for the cheap phase, or (c) recommend `fan-out-aggregate` with cheap model in map-fn as the "tiered parallel" pattern.
+
+**Gap: Error propagation model.**
+No discussion of what happens when a sub-call fails in a deeply nested composition. `try-fallback` handles single-function errors, but what about: a rate limit in the middle of `fan-out-aggregate`? A timeout in one branch of `parallel`? Do partial results survive? The plan should specify error semantics for each combinator.
+
+### Revised implementation roadmap (per critique)
+
+The critique's suggested reorder is better than the original:
+
+1. **Fix docs/code consistency** — correct model names, type signatures, async/sync distinction, dead parameters
+2. **Dry-run with correct async scheduler** — simulated scheduler, isolated DryRunContext
+3. **verify_strategy using dry-run + deterministic lints** — structural checks, no LLM needed for basic verification
+4. **Machine-readable templates** for top 4 cases: Direct, Batch extract, Batch extract+synthesize, Refine
+5. **TaskShape/DataShape classification** with deterministic rules + LLM gap-filling
+6. **Strategy replay** only after execution metadata is reliable
+
+---
+
 ## Taxonomy: TaskShape
 
 Tasks the framework handles, each mapping to a canonical set of combinators.
 
-### Current shapes (7)
+### Current shapes (7 + 1 missing core)
 
 | Shape | Description | Primary Combinators |
 |-------|-------------|-------------------|
+| **Direct** | Single operation on single input. No orchestration needed. | llm-query (no combinator) |
 | **Batch** | Apply same operation to many independent items | fan-out-aggregate, map-async, tiered, active-learning, memoized |
 | **Synthesize** | Combine/summarize many inputs into one output | tree-reduce, fold-sequential, ensemble |
 | **Search** | Explore solution space, find best answer | race, iterate-until, vote |
@@ -59,8 +387,11 @@ Q3 (list output):
                     where cheap model's confidence is low)
 
 Q4 (always, modifier): Is cost a primary concern AND items > 100?
-    YES → wrap with tiered: cheap model for per-item extraction,
-          expensive model ONLY for synthesis/aggregation phase
+    YES → Two options depending on latency tolerance:
+          LATENCY OK → tiered: cheap-fn applied SEQUENTIALLY to all items,
+                       then expensive-fn for synthesis. Simple but slow for large N.
+          LATENCY CRITICAL → fan-out-aggregate with cheap model in map-fn,
+                             expensive model in reduce-fn. Parallel but same cost profile.
     NO  → use single model tier
 
 Q5 (always, modifier): Could items be duplicated or near-duplicated?
