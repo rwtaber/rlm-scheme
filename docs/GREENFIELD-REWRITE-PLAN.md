@@ -1,10 +1,9 @@
 # RLM-Scheme Greenfield Rewrite Plan
 
-This is a fork of `IMPROVEMENT-PLAN.md` for a complete rewrite of
-RLM-Scheme. The goal is not to modify the current codebase incrementally. The
-goal is to rebuild the system around the intended architecture from the
-beginning, using the current implementation as a feature inventory and
-reference for proven runtime behavior.
+This document is a complete implementation plan for rewriting RLM-Scheme from
+scratch. The goal is to rebuild the system around the intended architecture
+from the beginning, using the existing codebase only as a feature inventory for
+runtime behavior that should be preserved.
 
 No backward compatibility is required.
 
@@ -2139,7 +2138,7 @@ high-risk artifacts, but deterministic checks should be the default gate.
 
 The planner should classify work before choosing a template.
 
-Keep the TaskShape/DataShape model from `IMPROVEMENT-PLAN.md`:
+The planner should use these TaskShape categories:
 
 - Direct,
 - Batch,
@@ -2187,9 +2186,9 @@ Planning output should not include raw Scheme.
 
 ## 14. Taxonomy Decision Rules
 
-The greenfield planner should preserve the detailed taxonomy from the
-incremental plan. The difference is that classification now selects templates
-or Strategy Specs, not hand-written Scheme.
+The planner should use deterministic taxonomy rules before it asks any model
+for judgment. Classification selects templates or Strategy Specs, not
+hand-written Scheme.
 
 ### 14.1 TaskShape
 
