@@ -1,36 +1,9 @@
 # RLM-Scheme Greenfield Rewrite Plan
 
-This document is a complete implementation plan for rewriting RLM-Scheme from
-scratch. The goal is to rebuild the system around the intended architecture
-from the beginning, using the existing codebase only as a feature inventory for
-runtime behavior that should be preserved.
-
-No backward compatibility is required.
-
-The rewrite should remove:
-
-- public raw Scheme execution APIs,
-- public raw Scheme dry-run APIs,
-- planner-generated `code_template` outputs,
-- runtime compound combinators,
-- public unsafe escape hatches,
-- stale docs and model references.
-
-The rewrite should preserve the important capabilities that already exist:
-
-- Racket sandbox execution with resource limits,
-- syntax hygiene and provenance logging,
-- synchronous and asynchronous LLM callbacks,
-- real fan-out concurrency with cancellation,
-- progress/status reporting,
-- rate-limit and token accounting,
-- checkpoint/restore for long workflows,
-- multimodal image input support,
-- structured JSON-mode support,
-- large context loading and named context access,
-- controlled Python computation bridge,
-- recursive delegation with a hard depth limit,
-- execution trace and runtime health inspection.
+Complete implementation plan for rewriting RLM-Scheme from scratch. No backward
+compatibility required. The existing codebase serves only as a feature inventory
+for runtime behavior that should be preserved — see section 21 (Success Criteria)
+for the full list.
 
 ---
 
