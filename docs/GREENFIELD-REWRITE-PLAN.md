@@ -27,7 +27,7 @@ Each stage has a clear responsibility:
 | `dry_run_id` | Structural simulation: expected calls, fan-out, recursive depth, model mix, token/cost estimates, warnings, and failure risks. |
 | `execution_id` | One real execution attempt: result, stdout, trace, call metrics, token usage, errors, checkpoints, and status history. |
 
-Internally, the system also creates `artifact_id` (compiled Scheme with
+Internally, the system also creates `artifact_id` (instantiated Scheme with
 code hash) and `verification_id` (pre-execution checks) records. These
 appear in responses for audit and debugging but are not agent-managed
 concepts — agents do not create or pass them between tools.
@@ -38,20 +38,20 @@ Normal agent flow:
    `context_id`.
 2. `plan_strategy(task, context_id, hints)` classifies the work and returns a
    `plan_id` plus a template invocation.
-3. `dry_run_strategy(plan_id)` compiles, simulates, and returns a
+3. `dry_run_strategy(plan_id)` instantiates, simulates, and returns a
    `dry_run_id` with call estimates and cost projections.
-4. `execute_strategy(plan_id, timeout)` compiles (or reuses a cached
+4. `execute_strategy(plan_id, timeout)` instantiates (or reuses a cached
    artifact), verifies, and executes. Returns an `execution_id`.
 5. `get_execution_trace(execution_id)`, `get_status`, and `cancel_call` inspect
    or control long-running work.
 
-Compilation (slot validation + safe substitution + hashing) and verification
+Instantiation (slot validation + safe substitution + hashing) and verification
 (policy checks) happen automatically inside `dry_run_strategy` and
 `execute_strategy`. If either step fails, the tool returns a structured
-error. There are no separate tools for compilation, estimation, or
+error. There are no separate tools for instantiation, estimation, or
 verification.
 
-Scheme is internal compiled code. It may be inspectable through dry-run or
+Scheme is internal instantiated code. It may be inspectable through dry-run or
 execution responses for debugging, but agents should not submit arbitrary
 Scheme strings to the public MCP API.
 
@@ -62,24 +62,24 @@ Scheme strings to the public MCP API.
 Templates are the bridge between high-level planning and executable Scheme.
 They should be data, not prompts that ask an LLM to write code.
 
-There are two levels in the compilation pipeline:
+There are two levels in the instantiation pipeline:
 
 ```text
 Template (Scheme code with {{slot}} markers)
-    ↓  compiler validates slots, substitutes values, hashes result
+    ↓  instantiator validates slots, substitutes values, hashes result
 Artifact (executable Scheme run by the Racket sandbox)
 ```
 
 A **template** is a `.rkt` file containing real Scheme code that uses
 primitive runtime bindings directly. Content-specific values are represented
-as `{{slot_name}}` markers — typed holes that the compiler fills with
+as `{{slot_name}}` markers — typed holes that the instantiator fills with
 concrete values. For example, a `batch_extract_reduce` template contains
 `map-async` and `tree-reduce` calls but uses `{{map_instruction}}`,
 `{{map_model}}`, and `{{max_concurrent}}` markers where content-specific
 values belong.
 
 Templates are Scheme, not JSON node graphs. There is no intermediate
-representation between the template and the executable artifact. The compiler
+representation between the template and the executable artifact. The instantiator
 validates slot values against the template's slot schema, performs safe
 substitution of `{{slot}}` markers with concrete values, and hashes the
 result. The output is executable Scheme that runs directly in the Racket
@@ -109,13 +109,13 @@ Template metadata includes:
 The Scheme body uses only:
 
 - primitive runtime bindings (section 9),
-- compiler-owned helper bindings (prefixed with `__`),
-- `{{slot_name}}` markers that the compiler substitutes before execution.
+- instantiator-owned helper bindings (prefixed with `__`),
+- `{{slot_name}}` markers that the instantiator substitutes before execution.
 
-The planner reads template metadata and fills slots. The compiler validates
+The planner reads template metadata and fills slots. The instantiator validates
 slot values, substitutes them into the template body, and stores the result
 as an immutable artifact. Agents interact only with templates (via
-`plan_strategy`); compilation happens internally when they call
+`plan_strategy`); instantiation happens internally when they call
 `dry_run_strategy` or `execute_strategy`.
 
 This division is important:
@@ -123,15 +123,15 @@ This division is important:
 - LLMs choose strategy intent and content slots (template selection + slot
   filling).
 - Deterministic code validates slots and substitutes them safely
-  (compilation). No code generation or IR translation is involved.
-- Verification checks the compiled artifact before real model calls happen.
+  (instantiation). No code generation or IR translation is involved.
+- Verification checks the instantiated artifact before real model calls happen.
 
 ---
 
 ## 3. Public MCP API
 
 The greenfield server should expose a small, artifact-based MCP surface.
-Compilation, estimation, and verification happen internally — agents do not
+Instantiation, estimation, and verification happen internally — agents do not
 need separate tools for these steps.
 
 | Tool | Purpose |
@@ -139,8 +139,8 @@ need separate tools for these steps.
 | `load_context(data, name=None, metadata=None)` | Store input data and metadata; return `context_id`. |
 | `get_context(context_id)` | Inspect metadata and optionally preview stored data. |
 | `plan_strategy(task, context_id=None, hints=None)` | Classify task/data and return `plan_id` plus proposed template invocation. |
-| `dry_run_strategy(plan_id=None, template_invocation=None)` | Compile, simulate, and estimate without real LLM calls. Return `dry_run_id`. |
-| `execute_strategy(plan_id=None, template_invocation=None, timeout=None)` | Compile, verify, and execute. Return `execution_id`. |
+| `dry_run_strategy(plan_id=None, template_invocation=None)` | Instantiate, simulate, and estimate without real LLM calls. Return `dry_run_id`. |
+| `execute_strategy(plan_id=None, template_invocation=None, timeout=None)` | Instantiate, verify, and execute. Return `execution_id`. |
 | `get_execution_trace(execution_id)` | Return call hierarchy, data flow, stdout, errors, token usage, and checkpoints. |
 | `get_status(execution_id=None)` | Return server/runtime/call status. |
 | `cancel_call(call_id=None, execution_id=None)` | Cancel one call or an entire execution. |
@@ -421,20 +421,20 @@ description of what the template would need.
 
 ### 4.4 `dry_run_strategy`
 
-Purpose: compile a plan or template invocation into an artifact, simulate
+Purpose: instantiate a plan or template invocation into an artifact, simulate
 execution, and return the dry-run results along with cost estimates and
 artifact details — all in one call.
 
 Internally, this tool:
 
-1. Compiles the template invocation (validates slots, substitutes `{{slot}}`
+1. Instantiates the template invocation (validates slots, substitutes `{{slot}}`
    markers, hashes, stores the artifact record).
 2. Computes a static cost estimate from the structural profile.
 3. Simulates execution with mock LLM responses.
 
-If compilation fails (invalid slots, unknown template, remaining markers),
+If instantiation fails (invalid slots, unknown template, remaining markers),
 the tool returns a structured error. The agent does not need to handle
-compilation as a separate step.
+instantiation as a separate step.
 
 Request:
 
@@ -524,18 +524,18 @@ Response:
 
 ### 4.5 `execute_strategy`
 
-Purpose: compile (if not already compiled), verify against policy, and execute
+Purpose: instantiate (if not already instantiated), verify against policy, and execute
 the strategy — all in one call.
 
 Internally, this tool:
 
-1. Compiles the template invocation (validates slots, substitutes markers,
-   hashes). If the same artifact was already compiled (e.g. by a prior
+1. Instantiates the template invocation (validates slots, substitutes markers,
+   hashes). If the same artifact was already instantiated (e.g. by a prior
    dry run), the cached artifact is reused automatically via hash match.
 2. Runs verification checks automatically (hash integrity, primitive
    allowlist, policy limits). If verification fails, returns a structured
    error — the agent does not call a separate verify tool.
-3. Executes the compiled Scheme in the sandbox.
+3. Executes the instantiated Scheme in the sandbox.
 
 Request:
 
@@ -815,8 +815,8 @@ inputs.
   "template_name": "batch_extract_reduce",
   "template_version": "1.0.0",
   "slot_values": {},
-  "compiler": {
-    "name": "rlm-scheme-template-compiler",
+  "instantiator": {
+    "name": "rlm-scheme-template-instantiator",
     "version": "0.1.0"
   },
   "generated_scheme_ref": {
@@ -913,13 +913,13 @@ representation is stored.
 
 ## 6. Slot Substitution Model
 
-Templates are Scheme files with `{{slot_name}}` markers. The compiler fills
+Templates are Scheme files with `{{slot_name}}` markers. The instantiator fills
 these markers with concrete values to produce executable artifacts. There is
 no intermediate node graph or resolved template representation.
 
 ### Slot Markers
 
-Slots use double-brace syntax: `{{slot_name}}`. The compiler substitutes
+Slots use double-brace syntax: `{{slot_name}}`. The instantiator substitutes
 each marker with the corresponding value from the template invocation's
 `slot_values`. Markers can appear anywhere in the Scheme body where a
 literal value would be valid:
@@ -932,16 +932,16 @@ literal value would be valid:
 ### Substitution Rules
 
 1. All `{{slot}}` markers must have corresponding values in `slot_values`.
-   Missing required slots are compile errors.
+   Missing required slots are instantiation errors.
 2. Slot values are type-checked against the template's `slot_schema` before
    substitution.
 3. String values are escaped and quoted. Numeric and boolean values are
    inserted as Scheme literals. Context IDs are inserted as quoted strings.
 4. Substitution is safe — values cannot inject arbitrary Scheme code. The
-   compiler rejects slot values that contain unbalanced parentheses, Scheme
+   instantiator rejects slot values that contain unbalanced parentheses, Scheme
    keywords, or other code injection attempts.
 5. After substitution, the result must be syntactically valid Scheme that
-   uses only primitive runtime bindings and compiler-owned helpers.
+   uses only primitive runtime bindings and instantiator-owned helpers.
 
 ### Context References
 
@@ -953,7 +953,7 @@ Templates access loaded context data via the `__context-ref` helper:
 
 `__context-ref` takes a context ID and a JSONPath expression
 ([RFC 9535](https://www.rfc-editor.org/rfc/rfc9535)) and returns the
-extracted data at runtime. The compiler validates that `context_id` slots
+extracted data at runtime. The instantiator validates that `context_id` slots
 contain valid context ID patterns and that `items_path` slots contain valid
 JSONPath expressions.
 
@@ -1052,7 +1052,7 @@ Template:
        (reduce_instruction "Synthesize the extracted claims into a literature review.")))))
 
 ;; --- Body ---
-;; Scheme code with {{slot}} markers. The compiler substitutes slot values
+;; Scheme code with {{slot}} markers. The instantiator substitutes slot values
 ;; to produce the executable artifact.
 
 (define items (__context-ref "{{context_id}}" "{{items_path}}"))
@@ -1102,7 +1102,7 @@ Example template invocation (what the planner produces):
 }
 ```
 
-Example compiled artifact (after slot substitution):
+Example instantiated artifact (after slot substitution):
 
 ```scheme
 (define items (__context-ref "ctx_01HX..." "$.papers"))
@@ -1132,16 +1132,16 @@ Example compiled artifact (after slot substitution):
 (finish synthesized)
 ```
 
-The compiled artifact is the template with all `{{slot}}` markers replaced
+The instantiated artifact is the template with all `{{slot}}` markers replaced
 by concrete values. It uses only primitive runtime bindings and
-compiler-owned helper bindings.
+instantiator-owned helper bindings.
 
 ---
 
 ## 8. Model Registry
 
 Templates should refer to model aliases, not hardcoded provider model names.
-The server resolves aliases at compile or execution time through a model
+The server resolves aliases at instantiation or execution time through a model
 registry.
 
 The registry is a JSON configuration file at `config/models.json` (path
@@ -1238,7 +1238,7 @@ are expressed as template-level compositions of primitives.
 
 ### Primitive Signatures And Semantics
 
-The signatures below are the target public bindings inside compiler-generated
+The signatures below are the target public bindings inside instantiated
 Scheme artifacts. Some helper bindings can be private and prefixed with `__`.
 
 #### `llm-query`
@@ -1265,7 +1265,7 @@ Semantics:
 - supports image inputs only when model capabilities allow them,
 - supports `#:recursive #t` only under global recursion policy.
 
-Compiler rule: use this for reduce/synthesis/refinement steps where the next
+Instantiation rule: use this for reduce/synthesis/refinement steps where the next
 Scheme expression needs the completed value immediately.
 
 #### `llm-query-async`
@@ -1290,7 +1290,7 @@ Semantics:
 - validates image/model compatibility before dispatch when possible,
 - records call metadata in the execution registry.
 
-Compiler rule: use this inside `map-async`, `parallel`, and `race` bodies.
+Instantiation rule: use this inside `map-async`, `parallel`, and `race` bodies.
 
 #### `await`
 
@@ -1318,7 +1318,7 @@ Semantics:
 - records batch wait in trace.
 
 If syntax preservation is needed, the runtime may also expose a private
-compiler-only `__await-all-syntax`.
+instantiator-only `__await-all-syntax`.
 
 #### `await-any`
 
@@ -1348,7 +1348,7 @@ Semantics:
 - maintains a rolling concurrency window,
 - validates that the lambda returns async handles,
 - reports progress and heartbeats during long fan-outs,
-- propagates per-item errors according to compiler-selected error policy.
+- propagates per-item errors according to instantiator-selected error policy.
 
 Error policy should be explicit in the template:
 
@@ -1374,7 +1374,7 @@ Semantics:
 - preserves strategy order in output,
 - uses the same concurrency policy as `map-async`.
 
-The compiler should reject `parallel` bodies that call synchronous
+The instantiator should reject `parallel` bodies that call synchronous
 `llm-query` directly unless it rewrites them into async equivalents.
 
 #### `race`
@@ -1438,7 +1438,7 @@ Semantics:
 Semantics:
 
 - left-to-right function composition,
-- used by compiler for multi-phase templates,
+- used by instantiator for multi-phase templates,
 - can be generated as `let*` when simpler.
 
 #### `choose`
@@ -1541,7 +1541,7 @@ Semantics:
 
 Semantics:
 
-- expose host accounting to compiler-generated strategies,
+- expose host accounting to instantiated strategies,
 - `heartbeat` should also be emitted automatically by long primitives.
 
 #### Python Bridge
@@ -1582,7 +1582,7 @@ Disallowed by default:
 ### Error Propagation Model
 
 Each primitive must define how errors are handled. Templates declare an error
-policy per primitive usage in their metadata; the compiler validates the
+policy per primitive usage in their metadata; the instantiator validates the
 corresponding error handling in the template body.
 
 **Error policies** (declared per-node in templates):
@@ -1639,7 +1639,7 @@ patterns are expressed as template-level compositions of primitives:
 ### Privileged Runtime Hooks
 
 The runtime does not expose `unsafe-interpolate`, `unsafe-overwrite`, or
-`unsafe-exec-sub-output` as public bindings. If the compiler needs
+`unsafe-exec-sub-output` as public bindings. If the instantiator needs
 privileged hooks, they are private host-generated forms that templates
 cannot request directly.
 
@@ -1688,7 +1688,7 @@ Preserve the async callback architecture:
 - cancellation works for queued, active, and nested calls.
 
 `parallel` must be genuinely concurrent in the rewrite. It should require
-thunks that return async handles or compile into equivalent async structure.
+thunks that return async handles or instantiate into equivalent async structure.
 
 ### Runtime Accounting
 
@@ -1736,14 +1736,14 @@ Keep a controlled Python bridge because it is useful for:
 - local computation that should not consume LLM tokens.
 
 The bridge should not become an unrestricted public escape hatch. Templates
-should declare when Python computation is required, and the compiler should
+should declare when Python computation is required, and the instantiator should
 generate constrained bridge calls.
 
 ### Recursive Delegation
 
 Preserve recursive LLM orchestration, but make it artifact-aware:
 
-- recursive calls compile sub-strategies, not arbitrary model-written Scheme,
+- recursive calls instantiate sub-strategies, not arbitrary model-written Scheme,
 - global recursion depth is enforced in one place,
 - nested executions inherit context references intentionally,
 - recursive depth appears in dry-run and trace output.
@@ -1809,7 +1809,7 @@ that failed long-running workflows can be resumed.
 ### 11.2 Slot Substitution
 
 See section 6 for the slot substitution model, allowed primitives, and
-disallowed operations. The compiler fills `{{slot}}` markers in template
+disallowed operations. The instantiator fills `{{slot}}` markers in template
 Scheme code with concrete values — there is no intermediate node graph or
 resolved template representation.
 
@@ -1832,9 +1832,9 @@ templates/
 Template validation is a developer/CI concern. Runtime verification assumes
 trusted templates are structurally valid, but still verifies filled artifacts.
 
-### 11.4 Compiler (internal library)
+### 11.4 Template Instantiation (internal library)
 
-The compiler validates slot values and substitutes them into template Scheme
+The instantiator validates slot values and substitutes them into template Scheme
 code to produce immutable artifacts. It is invoked internally by
 `dry_run_strategy` and `execute_strategy` — there is no dedicated
 `compile_strategy` MCP tool.
@@ -1850,9 +1850,9 @@ Responsibilities:
 - hash the resulting Scheme code,
 - store artifact metadata.
 
-The compiler should be deterministic: same inputs, same artifact hash.
+The instantiator should be deterministic: same inputs, same artifact hash.
 
-The compiler does NOT:
+The instantiator does NOT:
 
 - generate Scheme code from a node graph,
 - translate between an IR and Scheme,
@@ -1866,7 +1866,7 @@ interface.
 
 Responsibilities:
 
-- evaluate compiler-generated Scheme artifacts,
+- evaluate instantiated Scheme artifacts,
 - enforce resource limits,
 - preserve syntax hygiene,
 - call back to Python host for LLM/Python/checkpoint/rate-limit operations,
@@ -1996,7 +1996,7 @@ the filled artifact that will actually run.
 
 Check:
 
-- artifact was compiler-generated,
+- artifact was instantiator-generated,
 - artifact hash matches stored code,
 - template version is known,
 - all required slots are filled,
@@ -2118,7 +2118,7 @@ These are template slot values, not structural decisions. The template's
 | `Decompose` | Break one input into structured parts. | `llm-query` JSON, `python_compute`, or `recursive`. |
 | `Validate` | Produce pass/fail/score assessments. | `map-async`, validation, aggregation. |
 | `Aggregate` | Extract metrics and compute report. | `map-async` plus `python_compute`. |
-| `Composite` | Multi-phase task. | compiled `sequence` of phase templates. |
+| `Composite` | Multi-phase task. | instantiated `sequence` of phase templates. |
 
 TaskShape decision tree:
 
@@ -2389,7 +2389,7 @@ Composite:
 
 ```text
 Q1: Identify constituent shapes in order.
-Q2: Compile each phase independently.
+Q2: Instantiate each phase independently.
 Q3: Connect dependent phases with sequence.
 Q4: Connect independent phases with parallel.
 ```
@@ -2427,7 +2427,7 @@ Every template should include:
 - model capability requirements,
 - verification rules,
 - at least one example invocation,
-- one compiler fixture showing the artifact after slot substitution.
+- one instantiation fixture showing the artifact after slot substitution.
 
 ---
 
@@ -2446,9 +2446,9 @@ rlm_scheme/
   template_store.py
   planner.py
   classifier.py
-  compiler.py          # internal library, used by dry_run.py and executor.py
-  dry_run.py           # compiles + simulates + estimates in one call
-  executor.py          # compiles + verifies + executes in one call
+  instantiator.py      # internal library, used by dry_run.py and executor.py
+  dry_run.py           # instantiates + simulates + estimates in one call
+  executor.py          # instantiates + verifies + executes in one call
   trace.py
   llm_provider.py
   image_inputs.py
@@ -2472,9 +2472,9 @@ tests/
   test_id_flow.py
   test_mcp_api_schemas.py
   test_template_validation.py
-  test_compiler.py
+  test_instantiator.py
   test_runtime_primitives.py
-  test_dry_run.py      # also covers compilation and estimation
+  test_dry_run.py      # also covers instantiation and estimation
   test_executor.py     # also covers verification
 ```
 
@@ -2489,9 +2489,9 @@ Module responsibilities:
 | `template_store.py` | Load, validate, list, and retrieve `.rkt` templates (parse `define-meta` forms + body). |
 | `classifier.py` | Deterministic TaskShape/DataShape rules. |
 | `planner.py` | Template selection and plan record creation. |
-| `compiler.py` | Internal library: slot validation and safe substitution into template Scheme code. Called by `dry_run.py` and `executor.py`. |
-| `dry_run.py` | Compiles template invocation, simulates execution, computes cost estimates. |
-| `executor.py` | Compiles (or reuses artifact from dry run), verifies against policy, executes in Racket sandbox. |
+| `instantiator.py` | Internal library: slot validation and safe substitution into template Scheme code. Called by `dry_run.py` and `executor.py`. |
+| `dry_run.py` | Instantiates template invocation, simulates execution, computes cost estimates. |
+| `executor.py` | Instantiates (or reuses artifact from dry run), verifies against policy, executes in Racket sandbox. |
 | `trace.py` | Trace event schema and aggregation. |
 | `llm_provider.py` | Provider calls, retry, rate limits, token accounting. |
 | `image_inputs.py` | Image resolution, MIME sniffing, size limits. |
@@ -2539,7 +2539,7 @@ Exit criteria:
 
 Exit criteria:
 
-- one compiler-owned artifact can execute,
+- one instantiator-owned artifact can execute,
 - syntax provenance appears in traces,
 - scaffold overwrite attempts fail.
 
@@ -2569,20 +2569,20 @@ Exit criteria:
 - primitive tests cover success, failure, cancellation, and ordering semantics,
 - only the listed primitives are exported.
 
-### Phase 5: Template Catalog And Compiler Library
+### Phase 5: Template Catalog And Instantiation Library
 
 - Create initial `.rkt` templates for common shapes (see section 15).
 - Implement template `define-meta` parsing and validation.
 - Implement slot validation and safe substitution as an internal library
-  (`compiler.py`) — no dedicated MCP tool.
-- Store compiled artifacts with hashes.
+  (`instantiator.py`) — no dedicated MCP tool.
+- Store instantiated artifacts with hashes.
 
 Exit criteria:
 
 - planner can select at least one template per common shape,
-- compiler output is deterministic (same slots → same hash),
+- instantiation output is deterministic (same slots → same hash),
 - artifacts are inspectable via dry-run and execute responses,
-- no `{{slot}}` markers remain in compiled artifacts.
+- no `{{slot}}` markers remain in instantiated artifacts.
 
 ### Phase 6: Planner
 
@@ -2599,7 +2599,7 @@ Exit criteria:
 
 ### Phase 7: Dry-Run (with estimation) and Verification
 
-- Implement `dry_run_strategy` tool: compiles internally, computes static
+- Implement `dry_run_strategy` tool: instantiates internally, computes static
   estimates from artifact profiles, and simulates execution — all in one call.
 - Special-case `await-any` and batch await semantics in simulation.
 - Implement verification logic as an internal step within `execute_strategy`
@@ -2664,7 +2664,7 @@ Minimum test coverage:
 - parent-child ID flow,
 - context metadata classification,
 - template validation,
-- compiler determinism,
+- instantiation determinism,
 - generated Scheme hash verification,
 - no public `execute_scheme` or `dry_run_scheme` MCP tools,
 - only primitive bindings are exported by the runtime,
@@ -2682,7 +2682,7 @@ Minimum test coverage:
 - Python bridge value transfer,
 - recursive depth enforcement,
 - verification pass/warn/fail behavior (tested through `execute_strategy`),
-- compilation tested through `dry_run_strategy` and `execute_strategy` paths,
+- instantiation tested through `dry_run_strategy` and `execute_strategy` paths,
 - estimation tested through `dry_run_strategy` response,
 - execution trace persistence.
 
@@ -2764,7 +2764,7 @@ is fully deterministic (Level 1 only, no LLM call needed).
 
 ### Step 3: Dry run
 
-Agent runs a dry run. Internally, this compiles the template (validates slots,
+Agent runs a dry run. Internally, this instantiates the template (validates slots,
 substitutes markers, hashes, stores artifact), computes cost estimates, and
 simulates execution — all in one call. No real LLM calls are made.
 
@@ -2809,9 +2809,9 @@ simulates execution — all in one call. No real LLM calls are made.
 
 ### Step 4: Execute
 
-Agent runs the strategy. Internally, this compiles the template invocation
+Agent runs the strategy. Internally, this instantiates the template invocation
 (cache-hits the artifact from the dry run via hash match), runs verification
-checks automatically, and executes the compiled Scheme. Real LLM calls happen
+checks automatically, and executes the instantiated Scheme. Real LLM calls happen
 here.
 
 ```
@@ -2886,7 +2886,7 @@ Agent reviews what happened during execution.
 ### Summary of ID chain
 
 ```text
-ctx_7f3a (data) → plan_b2c1 (classification + template) → dry_1a2b (compile + simulate + estimate) → exec_5e6f (verify + execute)
+ctx_7f3a (data) → plan_b2c1 (classification + template) → dry_1a2b (instantiate + simulate + estimate) → exec_5e6f (verify + execute)
 ```
 
 Internal IDs created along the way: `art_e4d9` (artifact, created by dry-run),
@@ -2906,7 +2906,7 @@ These should be decided before implementation begins:
 1. **Store backend.** Start with filesystem JSON (decided in section 11.1).
    Migrate to SQLite/PGlite if queryable history or concurrent access becomes
    a bottleneck. *(Partially decided — revisit if needed.)*
-2. **Recursive planning.** Decide whether recursive sub-plans are compiled
+2. **Recursive planning.** Decide whether recursive sub-plans are instantiated
    ahead of time or generated at runtime under verification constraints.
 3. **History feedback.** Decide which execution metrics influence future
    planning and how to avoid leaking sensitive data into planner prompts.
@@ -2920,10 +2920,10 @@ The rewrite is successful when:
 - agents never need to write Scheme,
 - agents can still inspect generated Scheme for debugging (via dry-run and
   execute responses),
-- all execution goes through compiled artifacts (created internally),
+- all execution goes through instantiated artifacts (created internally),
 - the happy-path agent flow is 3 tool calls: plan → dry-run → execute,
 - the public MCP API surface is 8 tools (down from 15),
-- compilation, estimation, and verification are internal — no separate
+- instantiation, estimation, and verification are internal — no separate
   agent-facing tools for these steps,
 - dry-run and verification happen before expensive calls,
 - templates cover common orchestration shapes,
