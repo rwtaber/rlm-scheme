@@ -40,8 +40,8 @@ Normal agent flow:
    `plan_id` plus a template invocation.
 3. `dry_run_strategy(plan_id)` compiles, simulates, and returns a
    `dry_run_id` with call estimates and cost projections.
-4. `execute_strategy(plan_id, dry_run_id, timeout)` compiles (or reuses
-   the cached artifact), verifies, and executes. Returns an `execution_id`.
+4. `execute_strategy(plan_id, timeout)` compiles (or reuses a cached
+   artifact), verifies, and executes. Returns an `execution_id`.
 5. `get_execution_trace(execution_id)`, `get_status`, and `cancel_call` inspect
    or control long-running work.
 
@@ -139,7 +139,7 @@ need separate tools for these steps.
 | `get_context(context_id)` | Inspect metadata and optionally preview stored data. |
 | `plan_strategy(task, context_id=None, hints=None)` | Classify task/data and return `plan_id` plus proposed template invocation. |
 | `dry_run_strategy(plan_id=None, template_invocation=None)` | Compile, simulate, and estimate without real LLM calls. Return `dry_run_id`. |
-| `execute_strategy(plan_id=None, template_invocation=None, dry_run_id=None, timeout=None)` | Compile, verify, and execute. Return `execution_id`. |
+| `execute_strategy(plan_id=None, template_invocation=None, timeout=None)` | Compile, verify, and execute. Return `execution_id`. |
 | `get_execution_trace(execution_id)` | Return call hierarchy, data flow, stdout, errors, token usage, and checkpoints. |
 | `get_status(execution_id=None)` | Return server/runtime/call status. |
 | `cancel_call(call_id=None, execution_id=None)` | Cancel one call or an entire execution. |
@@ -190,7 +190,6 @@ def dry_run_strategy(
 async def execute_strategy(
     plan_id: str | None = None,
     template_invocation_json: str | None = None,
-    dry_run_id: str | None = None,
     timeout_seconds: int | None = None,
     runtime_options_json: str | None = None,
     ctx: Context = None,
@@ -532,7 +531,7 @@ Response:
   ],
   "warnings": [],
   "next_actions": [
-    "Call execute_strategy(plan_id=plan_01HX..., dry_run_id=dry_01HX...)"
+    "Call execute_strategy(plan_id=plan_01HX...)"
   ]
 }
 ```
@@ -544,8 +543,9 @@ the strategy — all in one call.
 
 Internally, this tool:
 
-1. If `dry_run_id` is provided, reuses the artifact from that dry run.
-   Otherwise, compiles the template invocation (same as dry_run_strategy).
+1. Compiles the template invocation (validates slots, substitutes markers,
+   hashes). If the same artifact was already compiled (e.g. by a prior
+   dry run), the cached artifact is reused automatically via hash match.
 2. Runs verification checks automatically (hash integrity, primitive
    allowlist, policy limits). If verification fails, returns a structured
    error — the agent does not call a separate verify tool.
@@ -557,7 +557,6 @@ Request:
 {
   "plan_id": "plan_01HX...",
   "template_invocation": null,
-  "dry_run_id": "dry_01HX...",
   "timeout_seconds": 900,
   "runtime_options": {
     "progress_interval_seconds": 2,
@@ -574,10 +573,8 @@ Request:
 }
 ```
 
-At least one of `plan_id`, `template_invocation`, or `dry_run_id` is required.
-`dry_run_id` is the most efficient path — it reuses the already-compiled
-artifact and skips re-compilation. If `policy` is omitted, server defaults
-apply.
+At least one of `plan_id` or `template_invocation` is required. If `policy`
+is omitted, server defaults apply.
 
 Response:
 
@@ -2881,20 +2878,20 @@ simulates execution — all in one call. No real LLM calls are made.
       {"node_id":"synthesize","primitive":"tree-reduce","calls":25,"model":"quality_text_model","branch_factor":5}
     ],
     "warnings": [],
-    "next_actions": ["Call execute_strategy(plan_id=plan_b2c1, dry_run_id=dry_1a2b)"]
+    "next_actions": ["Call execute_strategy(plan_id=plan_b2c1)"]
   }
 ```
 
 ### Step 4: Execute
 
-Agent runs the strategy. Internally, this reuses the artifact from the dry
-run (no re-compilation), runs verification checks automatically, and executes
-the compiled Scheme. Real LLM calls happen here.
+Agent runs the strategy. Internally, this compiles the template invocation
+(cache-hits the artifact from the dry run via hash match), runs verification
+checks automatically, and executes the compiled Scheme. Real LLM calls happen
+here.
 
 ```
 → execute_strategy(
     plan_id: "plan_b2c1",
-    dry_run_id: "dry_1a2b",
     timeout_seconds: 900,
     runtime_options_json: "{\"progress_interval_seconds\":5}",
     policy_json: "{\"max_llm_calls\":500,\"max_concurrency\":50}"
