@@ -872,7 +872,7 @@ representation is stored.
     {
       "name": "primitive_allowlist",
       "status": "pass",
-      "message": "No removed or unsafe runtime names used."
+      "message": "Only primitive runtime bindings used."
     }
   ],
   "warnings": [],
@@ -975,12 +975,10 @@ section 9. Specifically:
 
 Explicitly disallowed in templates:
 
-- removed compound combinator names (`fan-out-aggregate`, `critique-refine`,
-  `ensemble`, `vote`, `tiered`, `active-learning`, `fold-summarizing`),
+- any name not in the primitive runtime basis (section 9),
 - string `eval`,
 - shell commands,
-- filesystem access outside declared context/artifact/checkpoint stores,
-- `unsafe-interpolate`, `unsafe-overwrite`, `unsafe-exec-sub-output`.
+- filesystem access outside declared context/artifact/checkpoint stores.
 
 ---
 
@@ -1044,8 +1042,7 @@ Template:
     map_model_supports_json_if_json_mode
     expected_calls_within_policy
     max_concurrency_within_policy
-    no_removed_compound_combinators
-    no_unsafe_forms))
+    only_primitive_bindings))
 
 (define-meta examples
   '(((task "Extract claims from papers and synthesize a literature review.")
@@ -1210,8 +1207,8 @@ provider configuration.
 
 ## 9. Runtime Basis
 
-The Racket runtime should be small and primitive-only. Compound patterns belong
-in templates or the compiler.
+The Racket runtime should be small and primitive-only. Higher-level patterns
+are expressed as template-level compositions of primitives.
 
 ### Keep As Runtime Primitives
 
@@ -1625,30 +1622,25 @@ checkpoints, a `restore` call on re-execution skips already-completed items.
 This interacts with error policies — `fail_fast` with checkpointing means the
 failed execution can be retried from the last checkpoint, not from scratch.
 
-### Remove As Runtime Combinators
+### Common Patterns As Template Compositions
 
-These should not exist as runtime public names:
+The runtime does not provide pre-composed patterns. Common orchestration
+patterns are expressed as template-level compositions of primitives:
 
-| Remove | Compile to |
+| Pattern | Composed from |
 |---|---|
-| `fan-out-aggregate` | `map-async` plus `tree-reduce` or `fold-sequential`. |
-| `critique-refine` | `iterate-until` with explicit generate/critique/refine state. |
-| `ensemble` | `parallel` plus compiler-generated aggregation. |
-| `vote` | `parallel` plus majority/plurality/consensus selection. |
-| `tiered` | cheap `map-async`, filter/summarize, expensive review/synthesis. |
-| `active-learning` | cheap `map-async`, uncertainty filter, expensive `map-async`. |
-| `fold-summarizing` | `fold-sequential` with explicit summarization calls. |
+| Fan-out-aggregate | `map-async` + `tree-reduce` or `fold-sequential` |
+| Critique-refine | `iterate-until` with generate/critique/refine state |
+| Ensemble | `parallel` + aggregation logic |
+| Vote | `parallel` + majority/plurality/consensus selection |
+| Tiered review | cheap `map-async` → filter → expensive review |
+| Active learning | cheap `map-async` → uncertainty filter → expensive `map-async` |
 
-### Remove Unsafe Public Escape Hatches
+### Privileged Runtime Hooks
 
-Do not expose public equivalents of:
-
-- `unsafe-interpolate`,
-- `unsafe-overwrite`,
-- `unsafe-exec-sub-output`.
-
-If the compiler needs privileged runtime hooks, keep them unbound in user
-artifacts or place them behind private host-generated forms that templates
+The runtime does not expose `unsafe-interpolate`, `unsafe-overwrite`, or
+`unsafe-exec-sub-output` as public bindings. If the compiler needs
+privileged hooks, they are private host-generated forms that templates
 cannot request directly.
 
 ---
@@ -2570,13 +2562,12 @@ Exit criteria:
 - Add `map-async`, `parallel`, `race`, `tree-reduce`, `fold-sequential`,
   `sequence`, `choose`, `iterate-until`, `recursive-spawn`, `memoized`,
   `with-validation`, and `try-fallback`.
-- Keep compounds out of the runtime.
 - Add checkpoint/restore and token-budget behavior.
 
 Exit criteria:
 
 - primitive tests cover success, failure, cancellation, and ordering semantics,
-- no compound combinator names are exported.
+- only the listed primitives are exported.
 
 ### Phase 5: Template Catalog And Compiler Library
 
@@ -2660,7 +2651,7 @@ Exit criteria:
 Exit criteria:
 
 - docs do not instruct agents to write raw Scheme,
-- docs do not mention removed compound runtime combinators as public API,
+- docs describe only the primitive runtime basis,
 - docs show the complete `context_id -> ... -> execution_id` flow.
 
 ---
@@ -2676,8 +2667,7 @@ Minimum test coverage:
 - compiler determinism,
 - generated Scheme hash verification,
 - no public `execute_scheme` or `dry_run_scheme` MCP tools,
-- no exported compound runtime combinators,
-- no public unsafe escape hatches,
+- only primitive bindings are exported by the runtime,
 - syntax hygiene and scope logging,
 - async handle validation,
 - `await-any` dry-run behavior,
@@ -2937,8 +2927,8 @@ The rewrite is successful when:
   agent-facing tools for these steps,
 - dry-run and verification happen before expensive calls,
 - templates cover common orchestration shapes,
-- compound combinators are gone from the runtime,
-- unsafe public escape hatches are gone,
+- the runtime exposes only the 10 primitive combinators plus modifiers,
+- no unsafe public escape hatches exist,
 - large contexts are represented by IDs and metadata,
 - recursive workflows remain possible,
 - current operational features are preserved: progress, cancel, trace, rate
