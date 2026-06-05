@@ -85,21 +85,22 @@ substitution of `{{slot}}` markers with concrete values, and hashes the
 result. The output is executable Scheme that runs directly in the Racket
 sandbox.
 
-A template file contains two parts:
+A template file is pure Scheme. Metadata lives in `define-meta` forms at
+the top; the executable body follows. No JSON, no block comments — one
+language throughout.
 
-1. **Frontmatter** (structured YAML or JSON in a comment block at the top):
-   metadata, supported shapes, trigger/reject conditions, slot schema,
-   structural profile, verification rules, and examples.
-2. **Body** (Scheme code): the actual computation using primitive runtime
-   bindings with `{{slot}}` markers for content-specific values.
+`define-meta` is a custom form recognized by the template loader, not
+standard Racket `define`. The loader collects all `define-meta` bindings
+into a metadata hash before evaluating the body.
 
-The frontmatter stores:
+Template metadata includes:
 
 - `name` and `version`,
 - supported TaskShape/DataShape combinations,
-- trigger conditions and rejection conditions (Scheme predicates evaluated
-  against classification hints — e.g., `(> item_count 1)`, `(eq? independent #t)`),
-- typed slots with defaults, enums, ranges, required fields, and descriptions,
+- trigger and rejection conditions (quoted Scheme predicates evaluated
+  against classification hints),
+- typed slots with defaults, enums, ranges, required fields, and
+  descriptions (alists instead of JSON Schema),
 - model requirements such as JSON mode or image support,
 - output shape and schema expectations,
 - expected call formulas and structural profiles,
@@ -111,10 +112,10 @@ The Scheme body uses only:
 - compiler-owned helper bindings (prefixed with `__`),
 - `{{slot_name}}` markers that the compiler substitutes before execution.
 
-The planner reads template frontmatter and fills slots. The compiler
-validates slot values, substitutes them into the template body, and stores
-the result as an immutable artifact. Agents interact only with templates
-(via `plan_strategy`); compilation happens internally when they call
+The planner reads template metadata and fills slots. The compiler validates
+slot values, substitutes them into the template body, and stores the result
+as an immutable artifact. Agents interact only with templates (via
+`plan_strategy`); compilation happens internally when they call
 `dry_run_strategy` or `execute_strategy`.
 
 This division is important:
@@ -144,21 +145,6 @@ need separate tools for these steps.
 | `get_status(execution_id=None)` | Return server/runtime/call status. |
 | `cancel_call(call_id=None, execution_id=None)` | Cancel one call or an entire execution. |
 | `reset_runtime(scope="session")` | Reset sandbox state without deleting durable records by default. |
-
-Removed tools (folded into `dry_run_strategy` and `execute_strategy`):
-
-- `compile_strategy` — compilation is trivial (slot validation + substitution).
-  Done automatically inside `dry_run_strategy` and `execute_strategy`.
-- `estimate_strategy` — static estimates are included in the `dry_run_strategy`
-  response.
-- `verify_strategy` — verification runs automatically inside
-  `execute_strategy`. If verification fails, `execute_strategy` returns a
-  structured error with the failed checks.
-- `get_artifact` — artifact metadata (hash, slot values, compiled Scheme) is
-  included in `dry_run_strategy` and `execute_strategy` responses.
-- `list_templates` — the planner handles template selection internally. Agents
-  do not pick templates.
-- `get_template` — same reason as `list_templates`.
 
 Target FastMCP function signatures:
 
@@ -1000,9 +986,8 @@ Explicitly disallowed in templates:
 
 ## 7. Example Template
 
-Templates are `.rkt` files with structured frontmatter and Scheme code.
-Frontmatter is a JSON block in a Racket block comment (`#| ... |#`) at the
-top of the file. The Scheme body follows.
+Templates are `.rkt` files with `define-meta` forms for metadata and Scheme
+code for the executable body — one language throughout.
 
 File:
 
@@ -1013,115 +998,65 @@ templates/batch_extract_reduce.rkt
 Template:
 
 ```scheme
-#|
-{
-  "schema_version": "1",
-  "template_name": "batch_extract_reduce",
-  "version": "1.0.0",
-  "summary": "Run independent extraction over many items, then synthesize results with tree reduction.",
-  "task_shapes": ["Batch", "Synthesize", "Composite"],
-  "data_shapes": ["FlatList", "ChunkedSingular", "Tabular"],
-  "output_shape": "one",
-  "trigger_conditions": [
-    "(> item_count 1)",
-    "(eq? independent #t)",
-    "(eq? output_type 'one)",
-    "(eq? has_second_phase #t)"
-  ],
-  "reject_conditions": [
-    "(and (eq? ordered #t) (eq? order_sensitive #t))",
-    "(eq? requires_pairwise_comparison #t)"
-  ],
-  "slot_schema": {
-    "type": "object",
-    "required": [
-      "context_id",
-      "items_path",
-      "map_instruction",
-      "reduce_instruction",
-      "map_model",
-      "reduce_model"
-    ],
-    "properties": {
-      "context_id": {
-        "type": "string",
-        "pattern": "^ctx_"
-      },
-      "items_path": {
-        "type": "string",
-        "default": "$.items"
-      },
-      "map_instruction": {
-        "type": "string",
-        "minLength": 10
-      },
-      "reduce_instruction": {
-        "type": "string",
-        "minLength": 10
-      },
-      "map_model": {
-        "type": "string",
-        "default": "fast_text_model"
-      },
-      "reduce_model": {
-        "type": "string",
-        "default": "quality_text_model"
-      },
-      "max_concurrent": {
-        "type": "integer",
-        "minimum": 1,
-        "maximum": 50,
-        "default": 20
-      },
-      "branch_factor": {
-        "type": "integer",
-        "minimum": 2,
-        "maximum": 10,
-        "default": 5
-      },
-      "json_mode": {
-        "type": "boolean",
-        "default": false
-      },
-      "checkpoint_every": {
-        "type": ["integer", "null"],
-        "minimum": 1,
-        "default": null
-      }
-    }
-  },
-  "structural_profile": {
-    "expected_calls_formula": "N + ceil(N/B) + ceil(ceil(N/B)/B) + ... + 1",
-    "critical_path_formula": "1 + ceil(log_B(N))",
-    "max_concurrency_slot": "max_concurrent",
-    "recursive_depth": 0,
-    "uses_python_bridge": false,
-    "uses_multimodal": false
-  },
-  "verification_rules": [
-    "context_id_exists",
-    "items_path_resolves_to_list",
-    "map_model_supports_json_if_json_mode",
-    "expected_calls_within_policy",
-    "max_concurrency_within_policy",
-    "no_removed_compound_combinators",
-    "no_unsafe_forms"
-  ],
-  "examples": [
-    {
-      "task": "Extract claims from papers and synthesize a literature review.",
-      "slot_values": {
-        "items_path": "$.papers",
-        "map_instruction": "Extract the core claim, evidence, and uncertainty as JSON.",
-        "reduce_instruction": "Synthesize the extracted claims into a literature review."
-      }
-    }
-  ]
-}
-|#
+;; --- Metadata ---
 
-;; Template body — Scheme code with {{slot}} markers.
-;; The compiler substitutes slot values to produce the executable artifact.
+(define-meta name "batch_extract_reduce")
+(define-meta version "1.0.0")
+(define-meta summary
+  "Run independent extraction over many items, then synthesize results with tree reduction.")
+(define-meta task-shapes '(Batch Synthesize Composite))
+(define-meta data-shapes '(FlatList ChunkedSingular Tabular))
+(define-meta output-shape 'one)
+
+(define-meta trigger
+  '((> item_count 1)
+    (eq? independent #t)
+    (eq? output_type 'one)
+    (eq? has_second_phase #t)))
+
+(define-meta reject
+  '((and (eq? ordered #t) (eq? order_sensitive #t))
+    (eq? requires_pairwise_comparison #t)))
+
+(define-meta slots
+  '((context_id         (type string) (pattern "^ctx_") (required #t))
+    (items_path         (type string) (default "$.items"))
+    (map_instruction    (type string) (min-length 10) (required #t))
+    (reduce_instruction (type string) (min-length 10) (required #t))
+    (map_model          (type string) (default "fast_text_model"))
+    (reduce_model       (type string) (default "quality_text_model"))
+    (max_concurrent     (type integer) (min 1) (max 50) (default 20))
+    (branch_factor      (type integer) (min 2) (max 10) (default 5))
+    (json_mode          (type boolean) (default #f))
+    (checkpoint_every   (type integer) (nullable #t) (min 1) (default #f))))
+
+(define-meta structural-profile
+  '((expected-calls "N + ceil(N/B) + ceil(ceil(N/B)/B) + ... + 1")
+    (critical-path  "1 + ceil(log_B(N))")
+    (max-concurrency-slot max_concurrent)
+    (recursive-depth 0)
+    (uses-python-bridge #f)
+    (uses-multimodal #f)))
+
+(define-meta verification-rules
+  '(context_id_exists
+    items_path_resolves_to_list
+    map_model_supports_json_if_json_mode
+    expected_calls_within_policy
+    max_concurrency_within_policy
+    no_removed_compound_combinators
+    no_unsafe_forms))
+
+(define-meta examples
+  '(((task "Extract claims from papers and synthesize a literature review.")
+     (slot_values
+       (items_path "$.papers")
+       (map_instruction "Extract the core claim, evidence, and uncertainty as JSON.")
+       (reduce_instruction "Synthesize the extracted claims into a literature review.")))))
+
+;; --- Body ---
+;; Scheme code with {{slot}} markers. The compiler substitutes slot values
+;; to produce the executable artifact.
 
 (define items (__context-ref "{{context_id}}" "{{items_path}}"))
 
@@ -1650,7 +1585,7 @@ Disallowed by default:
 ### Error Propagation Model
 
 Each primitive must define how errors are handled. Templates declare an error
-policy per primitive usage in their frontmatter; the compiler validates the
+policy per primitive usage in their metadata; the compiler validates the
 corresponding error handling in the template body.
 
 **Error policies** (declared per-node in templates):
@@ -1889,7 +1824,7 @@ resolved template representation.
 ### 11.3 Template Catalog
 
 See section 7 for the full template schema, and section 15 for the initial
-template catalog. Templates live as `.rkt` files with JSON frontmatter:
+template catalog. Templates live as `.rkt` files with `define-meta` forms:
 
 ```text
 templates/
@@ -1914,12 +1849,12 @@ code to produce immutable artifacts. It is invoked internally by
 
 Responsibilities:
 
-- parse template frontmatter and Scheme body,
-- validate slot values against the template's `slot_schema`,
+- parse template `define-meta` forms and Scheme body,
+- validate slot values against the template's `slots` metadata,
 - substitute `{{slot}}` markers with safe, type-appropriate values,
 - reject values that could inject arbitrary Scheme code,
 - verify all markers are resolved and only allowed primitives are used,
-- calculate static structural profiles from template frontmatter,
+- calculate static structural profiles from template metadata,
 - hash the resulting Scheme code,
 - store artifact metadata.
 
@@ -2559,7 +2494,7 @@ Module responsibilities:
 | `ids.py` | ID generation and validation for `ctx_`, `plan_`, `art_`, `dry_`, `ver_`, `exec_`, `call_`. |
 | `store.py` | Durable JSON or SQLite/PGlite storage abstraction. |
 | `context_store.py` | Large context storage, previews, metadata, and path extraction. |
-| `template_store.py` | Load, validate, list, and retrieve `.rkt` templates (parse frontmatter + body). |
+| `template_store.py` | Load, validate, list, and retrieve `.rkt` templates (parse `define-meta` forms + body). |
 | `classifier.py` | Deterministic TaskShape/DataShape rules. |
 | `planner.py` | Template selection and plan record creation. |
 | `compiler.py` | Internal library: slot validation and safe substitution into template Scheme code. Called by `dry_run.py` and `executor.py`. |
@@ -2578,8 +2513,8 @@ Module responsibilities:
 
 - Freeze public MCP API names.
 - Define ID record schemas.
-- Define template frontmatter schema and slot substitution rules (section 6).
-- Define template file format (`.rkt` with JSON frontmatter).
+- Define template `define-meta` schema and slot substitution rules (section 6).
+- Define template file format (`.rkt` with `define-meta` forms).
 - Decide initial store backend.
 - Decide which Python bridge operations are allowed in templates.
 
@@ -2646,7 +2581,7 @@ Exit criteria:
 ### Phase 5: Template Catalog And Compiler Library
 
 - Create initial `.rkt` templates for common shapes (see section 15).
-- Implement template frontmatter parsing and validation.
+- Implement template `define-meta` parsing and validation.
 - Implement slot validation and safe substitution as an internal library
   (`compiler.py`) — no dedicated MCP tool.
 - Store compiled artifacts with hashes.
