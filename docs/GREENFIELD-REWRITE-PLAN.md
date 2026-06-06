@@ -101,6 +101,20 @@ language throughout.
 standard Racket `define`. The loader collects all `define-meta` bindings
 into a metadata hash before evaluating the body.
 
+**`define-meta` grammar:**
+
+```bnf
+meta-form    ::= '(' 'define-meta' name value ')'
+name         ::= symbol
+value        ::= atom | quoted-list
+atom         ::= string | number | boolean
+boolean      ::= '#t' | '#f'
+quoted-list  ::= "'" s-expr
+s-expr       ::= atom | '(' s-expr* ')' | '(' s-expr '.' s-expr ')'
+```
+
+The loader recognizes `define-meta` forms at the top level of the template file. Each `define-meta` binding associates a symbol name with a value. Atomic values (strings, numbers, booleans) are stored directly. Quoted lists are stored as Scheme data structures. The loader collects all `define-meta` bindings into a hash table keyed by name; duplicate names are an error.
+
 Template metadata includes:
 
 - `name` and `version`,
@@ -124,6 +138,16 @@ Template metadata includes:
 - `uses-llm-generated-code` flag — whether the template uses the code
   interpreter pattern (`llm-query` → `py-exec`), requiring explicit
   policy approval.
+
+**Output-schema alist syntax:** Output schemas use alist notation that maps
+1:1 to JSON Schema. Each `(key value)` pair in the alist corresponds to a
+JSON Schema keyword. Nested objects use nested alists. The conversion rule
+is: `'((type object) (properties ((name (type string))))) ` becomes
+`{"type": "object", "properties": {"name": {"type": "string"}}}`. The
+template loader validates structural well-formedness (balanced parens, known
+JSON Schema keywords at the top level: `type`, `properties`, `items`,
+`required`, `enum`, `description`) but does not validate semantic JSON
+Schema correctness — that happens at verification time.
 
 The Scheme body uses only:
 
@@ -366,8 +390,11 @@ Response:
 }
 ```
 
-`include_data=true` should be allowed only for small contexts or explicit debug
-settings. Large context retrieval should default to previews and metadata.
+`include_data=true` should be allowed only for contexts under 100 KB
+(serialized JSON size) or when the caller sets an explicit debug flag.
+Large context retrieval should default to previews and metadata. The server
+returns `"data_too_large": true` in the response when `include_data=true`
+is requested but the context exceeds 100 KB, and omits the data field.
 
 ### 4.3 `plan_strategy`
 
@@ -488,12 +515,37 @@ single template invocation:
 ```
 
 `$previous` in a step's `slot_values` resolves to the output of the preceding
-step, stored automatically as an intermediate context during execution.
+step, stored automatically as an intermediate context during execution. See
+section 11.8 for full chain execution semantics, including failure handling,
+gates in chains, and dry-run behavior.
 
 Planner output must not include raw Scheme. If no template fits, the planner
-should return `status: "no_template"` with a recommendation that the user
-create a new template, including the inferred TaskShape/DataShape and a
-description of what the template would need.
+returns a structured `no_template` response:
+
+```json
+{
+  "status": "no_template",
+  "plan_id": "plan_01HX...",
+  "classification": {
+    "task_shape": "Pipeline",
+    "data_shape": "TimeSeries",
+    "confidence": 0.85
+  },
+  "recommendation": {
+    "description": "No existing template handles Pipeline tasks over TimeSeries data with causal dependencies.",
+    "needed_template": {
+      "task_shapes": ["Pipeline"],
+      "data_shapes": ["TimeSeries"],
+      "primitives_likely": ["fold-sequential", "py-exec"],
+      "slot_suggestions": ["window_size", "causal_model"]
+    }
+  },
+  "next_actions": [
+    "Create a new template matching the recommendation above.",
+    "Or reclassify the task with different hints."
+  ]
+}
+```
 
 ### 4.4 `dry_run_strategy`
 
@@ -1103,6 +1155,24 @@ representation is stored.
   "error": null
 }
 ```
+
+**State transitions:**
+
+| From | To | Trigger |
+|---|---|---|
+| `queued` | `running` | Executor picks up the execution |
+| `running` | `finished` | `finish` primitive completes successfully |
+| `running` | `failed` | Unhandled error propagates to top level |
+| `running` | `cancelled` | `cancel_call(execution_id=...)` received |
+| `running` | `awaiting_gate` | `gate` primitive fires |
+| `awaiting_gate` | `running` | `resume_execution(decision="approve")` |
+| `awaiting_gate` | `gate_rejected` | `resume_execution(decision="reject")` |
+| `awaiting_gate` | `cancelled` | `cancel_call(execution_id=...)` while suspended |
+
+Terminal states: `finished`, `failed`, `cancelled`, `gate_rejected`. No
+transitions out of terminal states. An execution in `awaiting_gate` that
+receives no `resume_execution` remains suspended indefinitely (see gate
+timeout decision in section 20).
 
 Additional fields for advanced features:
 
@@ -1760,6 +1830,25 @@ Gate is a pass-through — it does not transform data. Templates place gates
 between phases where human review adds value (e.g., between extraction and
 synthesis).
 
+**Gate lifecycle:**
+
+```text
+Template declares gate       →  Verification checks gate names match
+  ↓                               define-meta gates declarations
+Execution reaches gate call  →  State transitions to awaiting_gate
+  ↓                               Value + message stored in execution record
+Agent calls resume_execution
+  ├─ decision=approve        →  State returns to running, gate returns value
+  └─ decision=reject         →  State transitions to gate_rejected,
+                                  structured error raised, partial work preserved
+```
+
+Gates with `#:required #f` only fire when the execution policy includes
+`require_gates: true`. This allows the same template to run interactively
+(with gates) or autonomously (skipping gates). In dry-run mode, gates are
+recorded but never suspend — the response lists gate names so the agent
+knows to expect pauses during real execution.
+
 #### `recursive-spawn`
 
 ```scheme
@@ -1894,7 +1983,7 @@ corresponding error handling in the template body.
 | `llm-query` | `fail_fast` | Provider errors, timeouts, and token budget exhaustion propagate as structured errors. Rate-limit errors trigger retry (see retry policy). |
 | `llm-query-async` | `fail_fast` | Error is captured in the future. Surfaces when the handle is awaited. |
 | `await` | `fail_fast` | Re-raises the error from the awaited handle. |
-| `await-all` | `fail_fast` | If any handle errored, raises the first error. With `collect`, returns error markers in position. |
+| `await-all` | `fail_fast` | If any handle errored, raises the first error. With `collect`, returns error markers in position (see error marker format below). |
 | `await-any` | `fail_fast` | If the completed handle errored, raises immediately. Remaining handles are still cancellable. |
 | `map-async` | `fail_fast` | First item error cancels remaining in-flight items and raises. With `collect`, continues all items and returns mixed results. With `fallback`, retries failed items with fallback function. |
 | `parallel` | `fail_fast` | First thunk error cancels remaining and raises. With `collect`, completes all thunks. |
@@ -1905,6 +1994,25 @@ corresponding error handling in the template body.
 | `recursive-spawn` | `fail_fast` | Sub-artifact error propagates to parent. |
 | `with-validation` | `fail_fast` | Validation failure is a structured error, not an exception. The template decides whether to retry or propagate. |
 | `try-fallback` | N/A | This IS the error recovery primitive. Primary error triggers fallback. If fallback also fails, the error propagates. |
+
+**Error marker format:** When a primitive uses the `collect` error policy,
+failed items are represented in the result list as error marker objects:
+
+```json
+{
+  "__error": true,
+  "message": "Provider returned 500: Internal Server Error",
+  "item_index": 42,
+  "call_id": "call_043",
+  "retries_attempted": 3,
+  "error_type": "server_error"
+}
+```
+
+Consumer nodes (e.g., `tree-reduce` after `map-async`) must handle error
+markers explicitly — they are not filtered out automatically. Templates
+should use `with-validation` or Python bridge filtering to separate
+successful results from error markers before passing to reduction phases.
 
 **Rate-limit and transient errors** are handled by the retry policy (see
 section 11.6) before the error policy applies. Only non-retryable errors reach
@@ -2219,6 +2327,21 @@ available, falling back to exponential backoff. Token budget is not consumed
 by failed attempts. If all retries are exhausted, the error propagates to
 the per-primitive error policy (see section 9, Error Propagation Model).
 
+**Error type mapping:** The host classifies provider errors into retry
+categories using this mapping:
+
+| HTTP status / exception | Error type | Retry behavior |
+|---|---|---|
+| 429 (Too Many Requests) | `rate_limit` | Use `Retry-After` header if present, else exponential backoff |
+| 408 (Request Timeout), `ETIMEDOUT`, `ECONNRESET` | `timeout` | Exponential backoff, same request |
+| 500, 502, 503, 504 | `server_error` | Exponential backoff, same request |
+| 400, 401, 403, 404, 422 | `client_error` | **Not retried** — propagate immediately |
+| Network unreachable, DNS failure | `network_error` | **Not retried** — propagate immediately |
+| Provider SDK exception with no HTTP status | Classified by exception type: `RateLimitError` → `rate_limit`, `APITimeoutError` → `timeout`, `APIConnectionError` → `server_error`, all others → `client_error` | Per classification |
+
+`per_model_overrides` in the retry config are **merged** with defaults
+(override keys replace default keys; unspecified keys inherit defaults).
+
 **Progress reporting:** Long-running executions report progress via MCP
 notifications (server-initiated messages on the MCP transport). The protocol:
 
@@ -2232,6 +2355,13 @@ notifications (server-initiated messages on the MCP transport). The protocol:
 4. `heartbeat` calls from Racket artifacts also trigger progress notifications.
 5. Agents that don't support notifications can poll `get_status(execution_id)`
    for the same information.
+
+**Streaming transport:** Streaming uses the MCP SDK's built-in notification
+mechanism: `ctx.session.send_notification()` (Python FastMCP). The server
+calls this method to push `notifications/partial_result` messages over the
+existing MCP transport (stdio or SSE) — no separate channel is needed.
+Clients that don't support notifications (or ignore them) still receive the
+final result normally; streaming is best-effort.
 
 **Streaming partial results:** When `stream=true`, the host emits
 `notifications/partial_result` messages in addition to progress counts.
@@ -2267,6 +2397,11 @@ cache_key = sha256(
 )
 ```
 
+`canonical_json()` produces deterministic JSON: keys sorted lexicographically,
+no whitespace, no trailing commas, numbers in their shortest representation
+(no trailing zeros), Unicode escaped as `\uXXXX`. This follows the spirit of
+RFC 8785 (JCS). Use Python's `json.dumps(obj, sort_keys=True, separators=(',', ':'), ensure_ascii=True)` as the reference implementation.
+
 **Cache behavior:**
 
 - Cache entries are immutable — same key always returns same result.
@@ -2277,7 +2412,11 @@ cache_key = sha256(
 - `reset_runtime(scope="cache")` clears all cache entries.
 
 **Cache storage:** Alongside the durable store (filesystem or DB).
-Eviction strategy is an open design decision (section 20).
+
+**Eviction:** V1 uses manual-only eviction via `reset_runtime(scope="cache")`.
+No automatic LRU, TTL, or size-based eviction. This keeps the implementation
+simple and predictable — cached results are permanent until explicitly cleared.
+Automatic eviction can be added later if storage becomes a concern.
 
 **Dry-run interaction:** When a dry-run instantiates an artifact that
 matches a previously-executed one, the dry-run response includes
@@ -2351,10 +2490,19 @@ policy passed to `execute_strategy`.
 **Python bridge hardening:** When executing LLM-generated code, the bridge
 applies stricter limits than for pre-written template code:
 
-- import allowlist (only modules declared in `code-generation-policy`),
-- shorter execution timeout,
-- output size limit,
-- no filesystem, network, or subprocess access (same as existing bridge).
+- **Import allowlist** (only modules declared in `code-generation-policy`).
+  Default allowlist: `json`, `csv`, `statistics`, `collections`, `re`,
+  `math`, `itertools`, `functools`, `datetime`, `decimal`, `fractions`,
+  `string`, `textwrap`, `operator`, `copy`, `pprint`. Templates can
+  restrict this further via `allowed-imports` in `code-generation-policy`.
+  Any `import` or `__import__` of a module not on the allowlist raises
+  `ImportError` immediately.
+- **Execution timeout:** Default 10 seconds (configurable via
+  `sandbox-timeout-seconds` in `code-generation-policy`). Pre-written
+  template code uses 30 seconds.
+- **Output size limit:** 1 MB stdout capture. Larger output is truncated
+  with a warning in the trace.
+- No filesystem, network, or subprocess access (same as existing bridge).
 
 **Standard pattern:**
 
@@ -2390,7 +2538,10 @@ Dry-run and verification should be artifact-based.
 
 Dry-run must simulate structure without real LLM calls:
 
-- use pre-resolved fake futures for async calls,
+- use pre-resolved fake futures for async calls. Fake LLM call results are
+  deterministic empty values: `""` (empty string) for text calls, `"{}"` for
+  JSON-mode calls. This ensures dry-run is fully deterministic and does not
+  require random data generation,
 - special-case `await-any` so exactly one pending handle completes per call,
 - special-case batch await behavior deterministically,
 - record fan-out, call counts, model mix, recursive depth, and estimated tokens,
@@ -2451,29 +2602,37 @@ downward accordingly.
 Verification is more useful than per-call template linting. It should focus on
 the filled artifact that will actually run.
 
-Check:
+**Verification checks:**
 
-- artifact was instantiator-generated,
-- artifact hash matches stored code,
-- template version is known,
-- all required slots are filled,
-- model names and capabilities are valid,
-- JSON-mode instructions are compatible,
-- image usage targets multimodal-capable models,
-- no public unsafe forms are present,
-- no raw code import path was used,
-- expected call count is within configured limits,
-- recursive depth is within configured limits,
-- concurrency is within configured limits,
-- context references exist,
-- output schema is available when required,
-- dry-run warnings are acceptable,
-- output schema is declared and structurally valid (when present),
-- `uses-llm-generated-code` is compatible with execution policy
-  (`allow_llm_generated_code` must be true if the template declares it),
-- gate declarations are consistent (gate names in body match `define-meta gates`),
-- budget-policy fallback model exists in the model registry and has
-  compatible capabilities.
+| # | Check | Pass condition | Failure message |
+|---|---|---|---|
+| 1 | `artifact_origin` | Artifact record exists with `source_type: "template_invocation"` | `"Artifact was not created by the instantiator."` |
+| 2 | `artifact_hash` | `sha256(artifact_code)` matches `artifact.generated_scheme_ref.hash` | `"Artifact code hash mismatch: expected {expected}, got {actual}."` |
+| 3 | `template_version` | Template name+version exists in catalog | `"Unknown template: {name} v{version}."` |
+| 4 | `slots_filled` | No `{{slot}}` markers remain in artifact code | `"Unfilled slot markers: {markers}."` |
+| 5 | `model_exists` | All model aliases in artifact resolve in registry | `"Unknown model alias: {alias}."` |
+| 6 | `model_capabilities` | JSON-mode calls target models with `json_mode: true` | `"Model {alias} does not support JSON mode."` |
+| 7 | `image_model` | Image inputs target models with `image: true` | `"Model {alias} does not support image inputs."` |
+| 8 | `no_unsafe_forms` | No `eval`, `system`, `shell`, `exec` (non-`py-exec`) in artifact | `"Unsafe form found: {form}."` |
+| 9 | `no_raw_import` | No `require`, `load`, `include` outside allowed set | `"Disallowed import: {form}."` |
+| 10 | `call_count_limit` | Expected calls <= `policy.max_llm_calls` (default: 1000) | `"Expected {n} calls exceeds limit {limit}."` |
+| 11 | `recursive_depth_limit` | Recursive depth <= `policy.max_recursive_depth` (default: 3) | `"Recursive depth {d} exceeds limit {limit}."` |
+| 12 | `concurrency_limit` | Max concurrency <= `policy.max_concurrency` (default: 50) | `"Concurrency {c} exceeds limit {limit}."` |
+| 13 | `context_exists` | All referenced `context_id` values exist in store | `"Context not found: {id}."` |
+| 14 | `output_schema_valid` | If `output-schema` declared, it is structurally valid alist notation | `"Output schema is malformed: {detail}."` |
+| 15 | `output_schema_present` | If policy requires output schema, template declares one | `"Output schema required by policy but not declared."` |
+| 16 | `dry_run_warnings` | No `error`-level warnings from dry-run | `"Dry-run produced error-level warning: {warning}."` |
+| 17 | `code_interpreter_policy` | If `uses-llm-generated-code: #t`, policy has `allow_llm_generated_code: true` | `"Template uses LLM-generated code but policy disallows it."` |
+| 18 | `gate_consistency` | Gate names in body match `define-meta gates` declarations | `"Gate '{name}' used in body but not declared in metadata."` |
+| 19 | `budget_policy_model` | If `budget-policy` declares a fallback model, it exists in registry | `"Budget fallback model '{alias}' not found in registry."` |
+| 20 | `budget_policy_caps` | Fallback model has compatible capabilities (JSON mode, images) | `"Fallback model '{alias}' lacks capability: {cap}."` |
+| 21 | `primitive_allowlist` | Only primitives from section 9 are used in artifact | `"Disallowed primitive: {name}."` |
+| 22 | `context_window_fit` | Estimated input tokens fit model's context window | `"Estimated {tokens} tokens exceeds {alias} context window of {limit}."` |
+| 23 | `temperature_compat` | Temperature and max-token settings are valid for model | `"Invalid temperature {t} for model {alias}."` |
+
+Overall verification decision: `pass` if all checks pass, `warn` if any
+produce warnings (non-blocking), `fail` if any check fails (execution
+blocked).
 
 Verification can optionally run a cheap semantic model review for high-cost or
 high-risk artifacts, but deterministic checks should be the default gate.
@@ -2555,12 +2714,72 @@ not on free-text interpretation.
 **Level 2 — LLM gap-filling (only when hints are missing):** When the agent
 does not provide enough structured hints to answer the decision tree, the
 planner makes a single LLM call to fill the missing fields. The LLM answers
-structured yes/no or multiple-choice questions (e.g., "Are items independent?
-yes/no", "What is the per-item operation? transform/label/check"). Once
-fields are filled, Level 1 runs deterministically on the complete fields.
+structured yes/no or multiple-choice questions. Once fields are filled,
+Level 1 runs deterministically on the complete fields.
 
 The LLM never chooses templates directly. It only fills missing structured
 fields that the deterministic classifier then uses.
+
+**Trigger condition:** Level 2 fires when any field required by the first
+unanswered decision tree question (Q0-Q9 in section 14.1) is missing from
+the agent's hints. If the agent provides all fields needed to traverse the
+tree to a leaf, Level 2 is skipped entirely.
+
+**Prompt template:**
+
+```text
+Given this task description and available metadata, answer each question
+with ONLY the specified answer format. Do not explain.
+
+Task: {task_description}
+Context metadata: {context_metadata_json}
+
+Questions:
+{for each missing field:}
+- {field_name}: {question_text} ({answer_format})
+{end for}
+
+Respond as JSON:
+{
+  {for each missing field:}
+  "{field_name}": <answer>
+  {end for}
+}
+```
+
+**Question bank** (one per hint field):
+
+| Field | Question | Answer format |
+|---|---|---|
+| `item_count` | How many input items are there? | integer |
+| `independent` | Are the items independent of each other? | `true` or `false` |
+| `output_type` | What is the output shape? | `"one"`, `"list"`, or `"per_item"` |
+| `operation` | What is the per-item operation? | `"transform"`, `"extract"`, `"label"`, `"check"`, `"grade"`, `"other"` |
+| `has_second_phase` | Does the task have a second phase after processing items? | `true` or `false` |
+| `sub_operations` | What operations are needed? | array of strings |
+| `modality` | What data modalities are present? | array: `"text"`, `"image"`, `"audio"` |
+| `ordered` | Does item order matter? | `true` or `false` |
+
+**Response schema:**
+
+```json
+{
+  "item_count": 100,
+  "independent": true,
+  "output_type": "one",
+  "operation": "extract",
+  "has_second_phase": true,
+  "sub_operations": ["extract", "synthesize"],
+  "modality": ["text"],
+  "ordered": false
+}
+```
+
+The planner validates the LLM response against expected types (integer,
+boolean, enum, array) and falls back to conservative defaults if validation
+fails: `independent: false`, `output_type: "one"`, `has_second_phase: false`.
+The planner model is `quality_text_model` with `json_mode: true` and
+`temperature: 0`.
 
 **Level 2 qualitative modifiers** — After template selection, some slot values
 require LLM judgment:
@@ -2947,10 +3166,22 @@ rlm_scheme/
     sandbox.rkt
     callbacks.rkt
 templates/
-  batch_extract_reduce.rkt
+  direct_call.rkt
+  direct_json_extract.rkt
   batch_map.rkt
+  batch_extract_reduce.rkt
+  batch_extract_fold.rkt
   ordered_synthesis_fold.rkt
-  ...
+  tree_synthesis.rkt
+  compare_candidates.rkt
+  race_candidates.rkt
+  refine_until_valid.rkt
+  bounded_critique_refine.rkt
+  tiered_review.rkt
+  tabular_extract_aggregate.rkt
+  decompose_then_batch.rkt
+  recursive_decompose.rkt
+  code_interpreter.rkt
 docs/
   GREENFIELD-REWRITE-PLAN.md
   api-reference.md
@@ -2992,11 +3223,22 @@ Module responsibilities:
 | `image_inputs.py` | Image resolution, MIME sniffing, size limits. |
 | `python_bridge.py` | Controlled Python compute subprocess. |
 
+**Racket module responsibilities:**
+
+| Module | Responsibility |
+|---|---|
+| `racket_server.rkt` | Main entry point: accepts JSON commands from Python host over stdin/stdout, dispatches to sandbox, returns results. |
+| `primitives.rkt` | All public primitive bindings (section 9): `llm-query`, `map-async`, `tree-reduce`, `gate`, `finish`, etc. Defines the sandbox namespace. |
+| `sandbox.rkt` | Racket sandbox configuration: resource limits, allowed modules, scaffold binding protection, syntax hygiene enforcement. |
+| `callbacks.rkt` | Host callback protocol: JSON-RPC-style messages to Python for LLM calls, Python bridge invocations, checkpoint operations, and progress notifications. |
+
 ---
 
 ## 17. Implementation Phases
 
 ### Phase 0: Decisions And Schemas
+
+*Depends on: nothing.*
 
 - Freeze public MCP API names.
 - Define ID record schemas.
@@ -3010,11 +3252,13 @@ Module responsibilities:
 
 Exit criteria:
 
-- schemas checked into the repo,
-- example records for all ID types,
-- no raw Scheme public API in the design.
+- All Pydantic/dataclass schemas in `models.py` compile without errors.
+- Example JSON records for all 7 ID types (`ctx_`, `plan_`, `art_`, `dry_`, `ver_`, `exec_`, `call_`) pass schema validation.
+- No public MCP tool accepts a `code` or `scheme` string parameter.
 
 ### Phase 1: Durable Store And MCP Skeleton
+
+*Depends on: Phase 0.*
 
 - Implement context, plan, artifact, dry-run, verification, execution stores.
 - Implement ID generation and parent-child linking.
@@ -3023,11 +3267,13 @@ Exit criteria:
 
 Exit criteria:
 
-- object lifecycle can be created and inspected,
-- parent ID chain is visible,
-- tests prove ID flow.
+- `test_id_flow.py` passes: create ctx → plan → art → dry → ver → exec, verify parent chain via `parent_id` lookups.
+- Each MCP tool returns a valid JSON response (even if stubbed).
+- `reset_runtime(scope="all")` clears all records; subsequent `get_status()` returns empty.
 
 ### Phase 2: Minimal Racket Runtime
+
+*Depends on: Phase 1.*
 
 - Build sandbox lifecycle.
 - Implement internal `llm-query`, syntax wrapping, `syntax-e`, `datum->syntax`,
@@ -3037,11 +3283,13 @@ Exit criteria:
 
 Exit criteria:
 
-- one instantiator-owned artifact can execute,
-- syntax provenance appears in traces,
-- scaffold overwrite attempts fail.
+- A test artifact containing `(finish (syntax-e (llm-query ...)))` executes and returns a result string.
+- Scope log contains at least one `syntax-e` entry with `preview` and `scope` fields.
+- `(set! llm-query 42)` raises an error (scaffold protection).
 
 ### Phase 3: Host Callback Loop
+
+*Depends on: Phase 2.*
 
 - Implement real model calls.
 - Implement async futures.
@@ -3051,11 +3299,13 @@ Exit criteria:
 
 Exit criteria:
 
-- concurrent fan-out works,
-- cancellation works for active calls,
-- rate limits and token usage appear in status.
+- `test_runtime_primitives.py`: 3 concurrent `llm-query-async` calls complete via `await-all`, results list has length 3.
+- `cancel_call(call_id=...)` on an in-flight call transitions it to cancelled in the trace.
+- `get_status()` shows `tokens_used > 0` and `rate_limits` hash is non-empty after a successful call.
 
 ### Phase 4: Primitive Runtime Basis
+
+*Depends on: Phase 3.*
 
 - Add `map-async`, `parallel`, `race`, `tree-reduce`, `fold-sequential`,
   `sequence`, `choose`, `iterate-until`, `recursive-spawn`, `memoized`,
@@ -3064,10 +3314,14 @@ Exit criteria:
 
 Exit criteria:
 
-- primitive tests cover success, failure, cancellation, and ordering semantics,
-- only the listed primitives are exported.
+- `test_runtime_primitives.py`: `map-async` with 10 items and `max-concurrent: 3` never has more than 3 in-flight calls simultaneously (verified via trace timestamps).
+- `tree-reduce` with `N=8, B=2` produces exactly `8 + 4 + 2 + 1 = 15` trace call events.
+- `iterate-until` with `max-iter: 5` terminates after at most 5 iterations.
+- Racket sandbox exports exactly the primitives listed in section 9 — no `eval`, `system`, `require`.
 
 ### Phase 5: Template Catalog And Instantiation Library
+
+*Depends on: Phase 4.*
 
 - Create initial `.rkt` templates for common shapes (see section 15).
 - Implement template `define-meta` parsing and validation.
@@ -3079,13 +3333,14 @@ Exit criteria:
 
 Exit criteria:
 
-- planner can select at least one template per common shape,
-- instantiation output is deterministic (same slots → same hash),
-- artifacts are inspectable via dry-run and execute responses,
-- no `{{slot}}` markers remain in instantiated artifacts,
-- new metadata fields are parsed and available to verification and dry-run.
+- `test_instantiator.py`: instantiating `batch_map` with valid slot values produces an artifact; instantiating again with same values produces the same `code_hash`.
+- Artifact code contains zero `{{` markers (grep test).
+- `template_store.list()` returns >= 16 templates (section 15 catalog).
+- `define-meta output-schema`, `streamable`, `cacheable`, `gates`, `budget-policy`, and `uses-llm-generated-code` are parsed and available as metadata fields.
 
 ### Phase 6: Planner
+
+*Depends on: Phase 5.*
 
 - Implement deterministic TaskShape/DataShape classification.
 - Add structured hints to `plan_strategy`.
@@ -3094,11 +3349,13 @@ Exit criteria:
 
 Exit criteria:
 
-- plan output is template invocations only,
-- composite classification preserves phases,
-- tests cover ambiguous and multi-phase inputs.
+- `plan_strategy` with full hints (`item_count=100, independent=true, output_type=one, has_second_phase=true`) returns `task_shape: Composite` and a `template_invocation` or `template_chain` — no LLM call made (Level 1 only).
+- `plan_strategy` with missing hints triggers exactly 1 LLM call (Level 2 gap-fill).
+- `plan_strategy` for an unsupported task returns `status: "no_template"` with `recommendation.needed_template`.
 
 ### Phase 7: Dry-Run (with estimation) and Verification
+
+*Depends on: Phase 6.*
 
 - Implement `dry_run_strategy` tool: instantiates internally, computes static
   estimates from artifact profiles, and simulates execution — all in one call.
@@ -3112,12 +3369,14 @@ Exit criteria:
 
 Exit criteria:
 
-- dry-run has no global mode leak,
-- dry-run response includes both simulation results and cost estimates,
-- tree-reduce formula is correct,
-- failed verification in execute returns structured error (no execution attempted).
+- `dry_run_strategy` for `batch_extract_reduce` with `N=100, B=5` returns `expected_llm_calls: 125` and `critical_path_calls: 4`.
+- Dry-run uses no global mutable state (two concurrent dry-runs produce independent results).
+- `execute_strategy` with `uses-llm-generated-code: #t` and `allow_llm_generated_code: false` returns verification `decision: "fail"` with check `code_interpreter_policy`.
+- Verification of an artifact with `{{unfilled}}` marker returns `decision: "fail"` with check `slots_filled`.
 
 ### Phase 8: Execute And Trace
+
+*Depends on: Phase 7.*
 
 - Implement `execute_strategy`.
 - Link executions to verification and artifact records.
@@ -3130,11 +3389,15 @@ Exit criteria:
 
 Exit criteria:
 
-- successful and failed executions are inspectable,
-- execution IDs remain useful after runtime reset,
-- cancellation produces a traceable terminal state.
+- `execute_strategy` → `get_execution_trace` returns trace with >= 1 `llm_call_completed` event.
+- Executing the same `artifact_id` twice creates two distinct `execution_id` values.
+- `cancel_call(execution_id=...)` during execution transitions state to `cancelled`.
+- `gate` fires → state is `awaiting_gate` → `resume_execution(approve)` → state is `finished`.
+- `gate` fires → `resume_execution(reject)` → state is `gate_rejected`, partial work preserved in trace.
 
 ### Phase 9: Advanced Features
+
+*Depends on: Phase 8.*
 
 - Add multimodal template support.
 - Add controlled Python compute phases.
@@ -3148,15 +3411,15 @@ Exit criteria:
 
 Exit criteria:
 
-- large-context workflows can use chunking and recursion,
-- Python bridge is used only by trusted templates,
-- planner can use execution history without copying raw traces into prompts,
-- cache eliminates redundant LLM calls for identical inputs across executions,
-- chain execution connects atomic templates via intermediate contexts,
-- code interpreter template runs LLM-generated Python under policy gate,
-- budget exhaustion produces partial results with checkpoint, not hard failure.
+- `test_cache.py`: execute with `temp=0` → re-execute same inputs → second run has `cache_hits > 0` and makes zero provider calls.
+- `test_chain.py`: 2-step chain (`batch_map` → `tree_synthesis`) completes; `chain_step_results` has 2 entries; `ctx_auto_0` is retrievable from trace.
+- `test_chain.py`: chain failure at step 1 → retry resumes from step 1 (step 0 not re-executed, verified by call count).
+- `test_gate.py`: code interpreter template with `allow_llm_generated_code: false` → verification fails.
+- Budget test: set budget to 50% of expected → execution activates budget policy, switches model, completes with partial quality.
 
 ### Phase 10: Documentation And Migration
+
+*Depends on: Phase 9.*
 
 - Rewrite README around artifact workflow.
 - Replace old raw-code API docs.
@@ -3166,9 +3429,10 @@ Exit criteria:
 
 Exit criteria:
 
-- docs do not instruct agents to write raw Scheme,
-- docs describe only the primitive runtime basis,
-- docs show the complete `context_id -> ... -> execution_id` flow.
+- README contains zero mentions of `execute_scheme` or `dry_run_scheme`.
+- README shows the 3-tool happy path: `plan_strategy` → `dry_run_strategy` → `execute_strategy`.
+- `docs/primitives.md` lists all primitives from section 9 with signatures.
+- `docs/templates.md` documents at least 5 templates with example invocations.
 
 ---
 
@@ -3528,11 +3792,15 @@ These should be decided before implementation begins:
    ahead of time or generated at runtime under verification constraints.
 3. **History feedback.** Decide which execution metrics influence future
    planning and how to avoid leaking sensitive data into planner prompts.
-4. **Gate timeout.** Decide whether gates expire if not approved within a
-   configurable time window, or whether they wait indefinitely.
-5. **Cache eviction.** Decide cache eviction strategy: LRU, TTL-based,
-   size-based, manual-only via `reset_runtime(scope="cache")`, or a
-   combination.
+4. **Gate timeout.** *(Decided: indefinite wait, optional timeout kwarg.)*
+   Gates wait indefinitely by default. Templates can pass `#:timeout seconds`
+   to the `gate` primitive; if the timeout elapses without a
+   `resume_execution` call, the gate auto-rejects with reason
+   `"gate_timeout"`. This keeps the default simple while allowing
+   time-sensitive workflows to self-terminate.
+5. **Cache eviction.** *(Decided: manual-only in V1.)* Cache entries persist
+   until `reset_runtime(scope="cache")`. No automatic LRU, TTL, or
+   size-based eviction. See section 11.7.
 6. **Chain fan-in.** Decide whether future versions should support fan-in
    chains (multiple previous steps feeding one next step) or whether that
    remains the agent's responsibility.
