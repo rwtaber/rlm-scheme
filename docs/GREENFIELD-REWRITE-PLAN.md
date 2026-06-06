@@ -37,19 +37,27 @@ Normal agent flow:
 1. `load_context(data, name, metadata)` stores large input and returns a
    `context_id`.
 2. `plan_strategy(task, context_id, hints)` classifies the work and returns a
-   `plan_id` plus a template invocation.
+   `plan_id` plus a template invocation (or a template chain for multi-phase
+   Composite tasks).
 3. `dry_run_strategy(plan_id)` instantiates, simulates, and returns a
    `dry_run_id` with call estimates and cost projections.
-4. `execute_strategy(plan_id, timeout)` instantiates (or reuses a cached
-   artifact), verifies, and executes. Returns an `execution_id`.
-5. `get_execution_trace(execution_id)`, `get_status`, and `cancel_call` inspect
-   or control long-running work.
+4. `execute_strategy(plan_id, timeout, stream)` instantiates (or reuses a
+   cached artifact), verifies, and executes. Returns an `execution_id`.
+   With `stream=true`, partial results are delivered via MCP notifications
+   as items complete. Execution may pause at declared gates for human review;
+   `resume_execution` approves or rejects.
+5. `get_execution_trace(execution_id)`, `get_status`, `cancel_call`, and
+   `reset_runtime` inspect or control work.
 
 Instantiation (slot validation + safe substitution + hashing) and verification
 (policy checks) happen automatically inside `dry_run_strategy` and
 `execute_strategy`. If either step fails, the tool returns a structured
 error. There are no separate tools for instantiation, estimation, or
 verification.
+
+Cross-execution memoization caches LLM results by content hash. Repeated
+runs with identical inputs (same instruction, data, model, temperature)
+reuse cached results automatically, making iterative refinement cheap.
 
 Scheme is internal instantiated code. It may be inspectable through dry-run or
 execution responses for debugging, but agents should not submit arbitrary
@@ -102,9 +110,20 @@ Template metadata includes:
 - typed slots with defaults, enums, ranges, required fields, and
   descriptions (alists instead of JSON Schema),
 - model requirements such as JSON mode or image support,
-- output shape and schema expectations,
+- output shape and schema contract (alist notation declaring the structure
+  of the value passed to `finish`),
 - expected call formulas and structural profiles,
-- verification rules and dry-run warnings.
+- verification rules and dry-run warnings,
+- `streamable` flag — whether meaningful intermediate results exist
+  (e.g., completed map items),
+- `cacheable` flag — whether LLM call results can be cached across
+  executions for content-addressed reuse,
+- `gates` — declared human-review checkpoints that suspend execution,
+- `budget-policy` — degradation behavior (model switching, checkpoint-and-stop)
+  when the token budget runs low,
+- `uses-llm-generated-code` flag — whether the template uses the code
+  interpreter pattern (`llm-query` → `py-exec`), requiring explicit
+  policy approval.
 
 The Scheme body uses only:
 
@@ -130,7 +149,7 @@ This division is important:
 
 ## 3. Public MCP API
 
-The greenfield server should expose a small, artifact-based MCP surface.
+The greenfield server should expose a small, artifact-based MCP surface (10 tools).
 Instantiation, estimation, and verification happen internally — agents do not
 need separate tools for these steps.
 
@@ -144,6 +163,7 @@ need separate tools for these steps.
 | `get_execution_trace(execution_id)` | Return call hierarchy, data flow, stdout, errors, token usage, and checkpoints. |
 | `get_status(execution_id=None)` | Return server/runtime/call status. |
 | `cancel_call(call_id=None, execution_id=None)` | Cancel one call or an entire execution. |
+| `resume_execution(execution_id, gate, decision, reason=None)` | Approve or reject a gate to resume or terminate a suspended execution. |
 | `reset_runtime(scope="session")` | Reset sandbox state without deleting durable records by default. |
 
 Target FastMCP function signatures:
@@ -177,6 +197,7 @@ async def execute_strategy(
     plan_id: str | None = None,
     template_invocation_json: str | None = None,
     timeout_seconds: int | None = None,
+    stream: bool = False,
     runtime_options_json: str | None = None,
     ctx: Context = None,
 ) -> str: ...
@@ -197,6 +218,13 @@ def cancel_call(
 ) -> str: ...
 
 def reset_runtime(scope: str = "session") -> str: ...
+
+async def resume_execution(
+    execution_id: str,
+    gate: str,
+    decision: str,
+    reason: str | None = None,
+) -> str: ...
 ```
 
 `*_json` parameters are JSON strings because MCP clients vary in how reliably
@@ -414,6 +442,54 @@ Response:
 }
 ```
 
+For Composite tasks, `plan_strategy` can return a template chain instead of a
+single template invocation:
+
+```json
+{
+  "status": "ok",
+  "plan_id": "plan_01HX...",
+  "classification": {
+    "task_shape": "Composite",
+    "constituent_shapes": ["Batch", "Synthesize"],
+    "data_shape": "FlatList",
+    "confidence": 0.95
+  },
+  "recommended": {
+    "kind": "template_chain",
+    "steps": [
+      {
+        "template_name": "batch_map",
+        "template_version": "1.0.0",
+        "slot_values": {
+          "context_id": "ctx_01HX...",
+          "map_instruction": "Extract ACE2 mentions as JSON.",
+          "map_model": "fast_text_model",
+          "max_concurrent": 20,
+          "json_mode": true
+        }
+      },
+      {
+        "template_name": "tree_synthesis",
+        "template_version": "1.0.0",
+        "slot_values": {
+          "input": "$previous",
+          "reduce_instruction": "Synthesize findings into a report.",
+          "reduce_model": "quality_text_model",
+          "branch_factor": 5
+        }
+      }
+    ]
+  },
+  "next_actions": [
+    "Call dry_run_strategy(plan_id=plan_01HX...)"
+  ]
+}
+```
+
+`$previous` in a step's `slot_values` resolves to the output of the preceding
+step, stored automatically as an intermediate context during execution.
+
 Planner output must not include raw Scheme. If no template fits, the planner
 should return `status: "no_template"` with a recommendation that the user
 create a new template, including the inferred TaskShape/DataShape and a
@@ -522,6 +598,15 @@ Response:
 }
 ```
 
+The response also includes `output_schema` from the template's `define-meta`
+when present, and `cache_hits_expected` when a matching artifact from a prior
+execution is found in the LLM result cache.
+
+For template chains, the dry-run response includes a `steps` array with
+per-step estimates and validates that each step's output schema is compatible
+with the next step's input expectations. Aggregate totals (`total_estimated_llm_calls`,
+`total_estimated_cost_usd`) cover the entire chain.
+
 ### 4.5 `execute_strategy`
 
 Purpose: instantiate (if not already instantiated), verify against policy, and execute
@@ -614,6 +699,54 @@ Response:
 If verification fails, the response has `status: "verification_failed"` with
 the failing checks and no execution is attempted. The agent can adjust
 policy limits or the template invocation and retry.
+
+**Streaming:** When `stream=true`, the server emits `notifications/partial_result`
+messages during execution:
+
+```json
+{
+  "type": "notifications/partial_result",
+  "execution_id": "exec_01HX...",
+  "node_id": "extract",
+  "primitive": "map-async",
+  "item_index": 42,
+  "items_completed": 43,
+  "items_total": 100,
+  "value": "{ ... extracted data ... }"
+}
+```
+
+The final response still contains the complete result. Agents that don't
+support notifications get the same behavior as without streaming.
+
+**Gates:** If the template declares a gate and execution reaches it, the response
+returns early with `"state": "awaiting_gate"`:
+
+```json
+{
+  "status": "ok",
+  "execution_id": "exec_01HX...",
+  "execution": {
+    "state": "awaiting_gate",
+    "gate": {
+      "name": "review_extractions",
+      "message": "Review 100 extractions before synthesis.",
+      "value_preview": "[{\"paper_id\":\"paper_001\",...}, ...]"
+    }
+  },
+  "next_actions": [
+    "Call resume_execution(execution_id=exec_01HX..., gate=review_extractions, decision=approve)"
+  ]
+}
+```
+
+The agent or human reviews the gate data and calls `resume_execution` to continue
+or reject. See section 4.9.
+
+**Cache and budget metrics:** The execution response `metrics` object also includes
+`cache_hits` (number of LLM calls satisfied from cross-execution cache) and
+`budget_policy_activations` (number of times the budget policy triggered, e.g.
+model switching or checkpoint-and-stop).
 
 ### 4.6 `get_execution_trace`
 
@@ -730,6 +863,68 @@ Response:
 
 If `execution_id` is provided, cancel all active and queued calls for that
 execution and mark the execution as `cancelled`.
+
+### 4.9 `resume_execution`
+
+Purpose: approve or reject a gate to resume or terminate a suspended execution.
+
+Request:
+
+```json
+{
+  "execution_id": "exec_01HX...",
+  "gate": "review_extractions",
+  "decision": "approve",
+  "reason": null
+}
+```
+
+Response (approved — execution resumes and completes):
+
+```json
+{
+  "status": "ok",
+  "execution_id": "exec_01HX...",
+  "gate": {
+    "name": "review_extractions",
+    "decision": "approve",
+    "resumed_at": "2026-06-03T12:06:00Z"
+  },
+  "result": {
+    "value": "final synthesized report...",
+    "stdout": ""
+  },
+  "execution": {
+    "state": "finished",
+    "elapsed_seconds": 195.1,
+    "llm_calls": 125,
+    "tokens": 131250
+  }
+}
+```
+
+Response (rejected — execution terminates):
+
+```json
+{
+  "status": "ok",
+  "execution_id": "exec_01HX...",
+  "gate": {
+    "name": "review_extractions",
+    "decision": "reject",
+    "reason": "Too many false positives in extractions."
+  },
+  "execution": {
+    "state": "gate_rejected",
+    "elapsed_seconds": 90.2,
+    "llm_calls": 100,
+    "tokens": 100000
+  }
+}
+```
+
+If `decision` is `"reject"`, the execution terminates with state `"gate_rejected"`.
+Completed work up to the gate is preserved in the execution record and trace.
 
 ---
 
@@ -888,7 +1083,7 @@ representation is stored.
   "schema_version": "1",
   "created_at": "2026-06-03T12:05:00Z",
   "completed_at": "2026-06-03T12:08:00Z",
-  "state": "queued | running | finished | failed | cancelled",
+  "state": "queued | running | finished | failed | cancelled | awaiting_gate | gate_rejected",
   "artifact_id": "art_01HX...",
   "plan_id": "plan_01HX...",
   "verification_id": "ver_01HX...",
@@ -908,6 +1103,46 @@ representation is stored.
   "error": null
 }
 ```
+
+Additional fields for advanced features:
+
+- `gates`: array of gate records `[{"name": "...", "status": "pending | approved | rejected", "decided_at": "...", "reason": "..."}]`
+- `cache_hits`: integer count of LLM calls served from cross-execution cache
+- `budget_policy_activations`: integer count of times budget policy triggered (model switch, checkpoint-and-stop)
+- `chain_step_results`: array of per-step results for chain executions (intermediate context IDs and step outcomes)
+
+### 5.7 Cache Record
+
+```json
+{
+  "cache_key": "sha256:...",
+  "schema_version": "1",
+  "created_at": "2026-06-03T12:05:30Z",
+  "instruction_hash": "sha256:...",
+  "data_hash": "sha256:...",
+  "model": "fast_text_model",
+  "temperature": 0,
+  "json_mode": false,
+  "result": "...",
+  "result_tokens": {
+    "prompt": 1000,
+    "completion": 250,
+    "total": 1250
+  },
+  "source_execution_id": "exec_01HX...",
+  "source_call_id": "call_042"
+}
+```
+
+Cache records are content-addressed: `cache_key = sha256(instruction + data +
+model + temperature + json_mode)`. Same inputs always produce the same key.
+Cache entries are immutable — a hit returns the stored result without calling
+the provider.
+
+Temperature > 0 calls are not cached by default (non-deterministic output).
+Templates can override this with `cacheable: #t` in their metadata when
+non-determinism is acceptable for caching (e.g., the template handles
+variability via validation).
 
 ---
 
@@ -1044,6 +1279,34 @@ Template:
     max_concurrency_within_policy
     only_primitive_bindings))
 
+(define-meta output-schema
+  '((type object)
+    (properties
+      ((findings (type array)
+                 (items ((type object)
+                         (properties
+                           ((paper_id (type string))
+                            (ace2_mentions (type array))
+                            (evidence (type string))
+                            (uncertainty (type string)))))))
+       (summary (type string))))))
+
+(define-meta streamable #t)
+(define-meta cacheable #t)
+
+(define-meta budget-policy
+  '((on-low-budget   switch-model)
+    (low-budget-threshold 0.20)
+    (fallback-model  "fast_text_model")
+    (on-exhausted    checkpoint-and-stop)))
+
+(define-meta gates
+  '((review_extractions
+      (description "Review extraction results before synthesis")
+      (required #f))))
+
+(define-meta uses-llm-generated-code #f)
+
 (define-meta examples
   '(((task "Extract claims from papers and synthesize a literature review.")
      (slot_values
@@ -1067,6 +1330,10 @@ Template:
         #:json {{json_mode}}))
     items
     #:max-concurrent {{max_concurrent}}))
+
+;; Optional gate — suspends for human review when policy requires it.
+(gate "review_extractions" extracted
+      #:message "Review extraction results before synthesis.")
 
 (define synthesized
   (tree-reduce
@@ -1170,7 +1437,8 @@ Example registry (`config/models.json`):
       "capabilities": ["text", "json"],
       "max_context_tokens": 128000,
       "supports_temperature": true,
-      "cost_tier": "high"
+      "cost_tier": "high",
+      "fallback": "fast_text_model"
     },
     "vision_model": {
       "provider": "openai",
@@ -1198,6 +1466,8 @@ Verification should check aliases against the registry:
 - image inputs target an image-capable alias,
 - context estimates fit the alias context window,
 - temperature/max-token settings are compatible with the resolved model.
+- fallback alias exists and has compatible capabilities when budget-policy
+  references it.
 
 Provider model names should live in configuration, not in templates or planner
 prompts. Documentation examples should use aliases unless they are describing
@@ -1227,6 +1497,7 @@ are expressed as template-level compositions of primitives.
 | Control | `sequence` | Function pipeline. |
 | Control | `choose` | Conditional dispatch. |
 | Control | `iterate-until` | Bounded loop. |
+| Control | `gate` | Suspend execution for human review. |
 | Delegation | `recursive-spawn` | Nested orchestration with global depth limit. |
 | Modifier | `memoized` | Cache by explicit key. |
 | Modifier | `with-validation` | Wrap result validation. |
@@ -1466,6 +1737,29 @@ Semantics:
 - dry-run reports worst-case iteration count unless predicate is statically
   known.
 
+#### `gate`
+
+```scheme
+(gate name value #:message string #:required boolean) -> value
+```
+
+Semantics:
+
+- suspends execution and transitions state to `"awaiting_gate"`,
+- stores the gate name, value preview, and message in the execution record,
+- waits for `resume_execution` to approve or reject,
+- on approve, returns `value` unchanged — downstream code sees the same data,
+- on reject, raises a structured gate-rejection error,
+- `#:required #t` means the gate always fires; `#:required #f` means it fires
+  only when the execution policy includes `require_gates: true`,
+- in dry-run mode, gates are recorded in the simulation output but do not
+  suspend — the dry-run reports `"gates": ["review_extractions"]` so the
+  agent knows execution will pause.
+
+Gate is a pass-through — it does not transform data. Templates place gates
+between phases where human review adds value (e.g., between extraction and
+synthesis).
+
 #### `recursive-spawn`
 
 ```scheme
@@ -1635,6 +1929,7 @@ patterns are expressed as template-level compositions of primitives:
 | Vote | `parallel` + majority/plurality/consensus selection |
 | Tiered review | cheap `map-async` → filter → expensive review |
 | Active learning | cheap `map-async` → uncertainty filter → expensive `map-async` |
+| Code interpreter | `llm-query` + `py-exec` + `with-validation` + `iterate-until` |
 
 ### Privileged Runtime Hooks
 
@@ -1769,7 +2064,8 @@ Store:
 - verification records,
 - executions,
 - traces,
-- checkpoints.
+- checkpoints,
+- cache entries.
 
 Every record should include:
 
@@ -1792,6 +2088,7 @@ that controls what is cleared:
 | `"sandbox"` | Racket sandbox state, in-memory caches, active call handles. | All durable records (contexts, plans, artifacts, dry-runs, verifications, executions, traces, checkpoints). |
 | `"session"` | Everything in `"sandbox"` plus execution records and traces from the current server session. | Contexts, plans, artifacts, dry-runs, verifications, and checkpoints from prior sessions. |
 | `"all"` | All durable records and sandbox state. Fresh start. | Nothing. |
+| `"cache"` | LLM result cache entries. | All durable records, sandbox state, and template catalog. |
 | `"config"` | Reloads model registry and template catalog from disk. | All durable records and sandbox state. |
 
 Contexts, plans, and artifacts are long-lived — they represent reusable work
@@ -1936,6 +2233,153 @@ notifications (server-initiated messages on the MCP transport). The protocol:
 5. Agents that don't support notifications can poll `get_status(execution_id)`
    for the same information.
 
+**Streaming partial results:** When `stream=true`, the host emits
+`notifications/partial_result` messages in addition to progress counts.
+For `map-async`, each completed item result is emitted. For `tree-reduce`,
+each completed reduction level is emitted. The host controls emission
+rate — high-throughput fan-outs may batch multiple items per notification
+to avoid flooding the transport.
+
+**LLM result cache:** Before dispatching each LLM call to the provider,
+the host checks the content-addressed cache (see section 11.7). On hit,
+the cached result is returned immediately — no provider call, no token
+consumption, no latency. Cache hits are logged in the trace with
+`"source": "cache"`. The host also checks remaining token budget before
+each dispatch and activates the template's budget policy when the
+threshold is crossed (see section 11.8 for budget-aware degradation).
+
+### 11.7 LLM Result Cache
+
+The server maintains a content-addressed cache of LLM call results that
+persists across executions. When the same LLM call (identical instruction,
+data, model, temperature, and json_mode) occurs in a later execution, the
+cached result is returned without calling the provider.
+
+**Key computation:**
+
+```text
+cache_key = sha256(
+    canonical_json(instruction) +
+    canonical_json(data) +
+    model_alias +
+    str(temperature) +
+    str(json_mode)
+)
+```
+
+**Cache behavior:**
+
+- Cache entries are immutable — same key always returns same result.
+- Temperature = 0 calls are cached by default. Temperature > 0 calls are
+  not cached unless the template declares `cacheable: #t`.
+- Cache hits are logged in the execution trace with `"source": "cache"`.
+- Cache hits do not consume token budget.
+- `reset_runtime(scope="cache")` clears all cache entries.
+
+**Cache storage:** Alongside the durable store (filesystem or DB).
+Eviction strategy is an open design decision (section 20).
+
+**Dry-run interaction:** When a dry-run instantiates an artifact that
+matches a previously-executed one, the dry-run response includes
+`cache_hits_expected` with the count of calls that would hit the cache.
+Cost estimates are adjusted accordingly.
+
+### 11.8 Template Chaining
+
+A plan can describe a template chain — a linear sequence of template
+invocations where each step's output feeds as input context to the next.
+
+**Chain descriptor:** The plan record's `recommended` field has
+`"kind": "template_chain"` with a `"steps"` array. Each step is a
+standard template invocation. Steps reference the previous step's output
+via `"$previous"` in their `slot_values`.
+
+**Execution semantics:**
+
+1. Steps run sequentially.
+2. After step N finishes, its output is stored as an intermediate context
+   (`ctx_auto_N`) scoped to the execution.
+3. Step N+1's `"$previous"` references are resolved to `ctx_auto_N`.
+4. Step N+1 is instantiated and executed.
+5. The final step's output is the chain's result.
+
+Intermediate contexts are available in the execution trace and via
+`get_execution_trace`, but do not appear in the agent's context namespace
+(they are not returned by `get_context` unless explicitly requested).
+
+**Failure and retry:** If step N fails, the chain stops. Completed steps
+are checkpointed. Retrying the execution resumes from the failed step
+using checkpointed intermediate contexts — completed steps are not
+re-executed.
+
+**Gates in chains:** A gate at the end of step N suspends the chain
+before step N+1 begins. `resume_execution` continues the chain.
+
+**Dry-run:** Each step is instantiated and dry-run independently. The
+aggregate response includes per-step estimates and totals. Output schema
+compatibility between adjacent steps is validated at dry-run time (see
+section 12).
+
+**Scope:** Chains are linear pipelines only. Conditional branching and
+parallel fan-out stay with the outer agent. This keeps chain execution
+simple and predictable while the agent handles adaptive decisions.
+
+### 11.9 Code Interpreter Pattern
+
+The code interpreter pattern allows LLM calls to generate Python code that
+the bridge executes. This is not a new primitive — it is a composition of
+existing primitives (`llm-query` → `py-exec` → `with-validation` →
+`iterate-until`) elevated to a declared template capability.
+
+**Template declaration:**
+
+```scheme
+(define-meta uses-llm-generated-code #t)
+(define-meta code-generation-policy
+  '((max-code-length 500)
+    (allowed-imports (json csv statistics collections re))
+    (max-retries 2)
+    (sandbox-timeout-seconds 10)))
+```
+
+**Policy gating:** Verification checks `uses-llm-generated-code` against
+the execution policy. If `policy.allow_llm_generated_code` is `false`
+(the default), verification fails with a clear message. The agent must
+explicitly opt in by setting `allow_llm_generated_code: true` in the
+policy passed to `execute_strategy`.
+
+**Python bridge hardening:** When executing LLM-generated code, the bridge
+applies stricter limits than for pre-written template code:
+
+- import allowlist (only modules declared in `code-generation-policy`),
+- shorter execution timeout,
+- output size limit,
+- no filesystem, network, or subprocess access (same as existing bridge).
+
+**Standard pattern:**
+
+```scheme
+(iterate-until
+  (lambda (state)
+    (let* ((code (syntax-e
+                   (llm-query
+                     #:instruction (string-append "Write Python: " task "\nPrevious error: " (or (hash-ref state 'error) "none"))
+                     #:data data
+                     #:model code-model
+                     #:json #f)))
+           (exec-result (try-fallback
+                          (lambda () (py-exec code))
+                          (lambda () (hash 'error (current-error-message))))))
+      (hash 'code code 'result exec-result 'error #f)))
+  (lambda (state) (not (hash-ref state 'error)))
+  (hash 'error "no attempt yet")
+  #:max-iter max-retries)
+```
+
+**Dry-run interaction:** Dry-run reports `"uses_llm_generated_code": true`
+and notes that cost estimates are less precise (generated code behavior
+is not statically predictable).
+
 ---
 
 ## 12. Dry-Run And Verification
@@ -1989,6 +2433,19 @@ Example with `N=100`, `B=5`:
 100 + 20 + 4 + 1 = 125 calls
 ```
 
+**Chain dry-runs:** For template chains, each step is instantiated and
+dry-run independently. The aggregate response includes per-step estimates
+and total pipeline cost. The dry-run also validates output-input
+compatibility between adjacent steps — if step N declares an output schema
+and step N+1's slot types expect a different structure, the dry-run reports
+a compatibility warning.
+
+**Cache hit prediction:** When a dry-run instantiates an artifact whose
+hash matches a previously-executed artifact, the dry-run checks the LLM
+result cache for matching call signatures. The response includes
+`cache_hits_expected` with the predicted count and adjusts cost estimates
+downward accordingly.
+
 ### Verification
 
 Verification is more useful than per-call template linting. It should focus on
@@ -2010,7 +2467,13 @@ Check:
 - concurrency is within configured limits,
 - context references exist,
 - output schema is available when required,
-- dry-run warnings are acceptable.
+- dry-run warnings are acceptable,
+- output schema is declared and structurally valid (when present),
+- `uses-llm-generated-code` is compatible with execution policy
+  (`allow_llm_generated_code` must be true if the template declares it),
+- gate declarations are consistent (gate names in body match `define-meta gates`),
+- budget-policy fallback model exists in the model registry and has
+  compatible capabilities.
 
 Verification can optionally run a cheap semantic model review for high-cost or
 high-risk artifacts, but deterministic checks should be the default gate.
@@ -2059,10 +2522,17 @@ Batch extract -> Synthesize reduce
 
 Planning output should be one of:
 
-- a template invocation with slot values (primary path),
+- a template invocation with slot values (primary path for single-phase tasks),
+- a template chain with sequenced steps (primary path for Composite tasks),
 - a short list of alternative template invocations with estimated tradeoffs,
 - a `no_template` recommendation describing the needed template for the user
   to create.
+
+For Composite tasks, the planner decomposes the task into constituent atomic
+templates and produces a `template_chain` with `$previous` references
+connecting steps. This enables combinatorial composition — the planner
+assembles pipelines from atomic templates rather than requiring a monolithic
+template for every combination.
 
 Planning output must not include raw Scheme. If no template matches the
 classified task, the planner returns a structured recommendation for a new
@@ -2389,9 +2859,9 @@ Composite:
 
 ```text
 Q1: Identify constituent shapes in order.
-Q2: Instantiate each phase independently.
-Q3: Connect dependent phases with sequence.
-Q4: Connect independent phases with parallel.
+Q2: Select an atomic template for each phase.
+Q3: Produce a template chain connecting dependent phases with `$previous`.
+Q4: If phases are independent, the agent can execute them as separate plans in parallel.
 ```
 
 ---
@@ -2418,6 +2888,7 @@ workflows without asking the planner to invent structure.
 | `tabular_extract_aggregate` | Aggregate, Tabular | `map-async` plus `python_compute`. |
 | `decompose_then_batch` | Decompose, Composite | JSON decomposition plus `map-async`. |
 | `recursive_decompose` | Decompose, Hierarchy | artifact-aware `recursive-spawn`. |
+| `code_interpreter` | Direct, Aggregate | `llm-query` + `py-exec` + `with-validation` + `iterate-until`. Requires `uses-llm-generated-code: #t`. |
 
 Every template should include:
 
@@ -2428,6 +2899,20 @@ Every template should include:
 - verification rules,
 - at least one example invocation,
 - one instantiation fixture showing the artifact after slot substitution.
+
+**Chaining and monolithic templates:** Several monolithic templates
+(`batch_extract_reduce`, `batch_extract_fold`) can also be expressed as
+chains of atomic templates (`batch_map` → `tree_synthesis`, `batch_map` →
+`ordered_fold`). Monolithic versions are kept for convenience and
+performance (one artifact, one instantiation), but chains are the preferred
+composition mechanism for new Composite workflows.
+
+Templates should also declare in their `define-meta`:
+
+- `streamable: #t` for templates that produce meaningful intermediate results
+  (e.g., `batch_map`, `batch_extract_reduce`, `tabular_extract_aggregate`),
+- `cacheable: #t` for templates whose LLM calls are safe to cache across
+  executions (most templates at temperature 0).
 
 ---
 
@@ -2447,6 +2932,9 @@ rlm_scheme/
   planner.py
   classifier.py
   instantiator.py      # internal library, used by dry_run.py and executor.py
+  cache.py            # content-addressed LLM result cache
+  chain.py            # template chain execution logic
+  gate.py             # gate primitive and resume_execution handler
   dry_run.py           # instantiates + simulates + estimates in one call
   executor.py          # instantiates + verifies + executes in one call
   trace.py
@@ -2476,6 +2964,10 @@ tests/
   test_runtime_primitives.py
   test_dry_run.py      # also covers instantiation and estimation
   test_executor.py     # also covers verification
+  test_cache.py
+  test_chain.py
+  test_gate.py
+  test_streaming.py
 ```
 
 Module responsibilities:
@@ -2492,6 +2984,9 @@ Module responsibilities:
 | `instantiator.py` | Internal library: slot validation and safe substitution into template Scheme code. Called by `dry_run.py` and `executor.py`. |
 | `dry_run.py` | Instantiates template invocation, simulates execution, computes cost estimates. |
 | `executor.py` | Instantiates (or reuses artifact from dry run), verifies against policy, executes in Racket sandbox. |
+| `cache.py` | Content-addressed LLM result cache. Key computation, storage, lookup, and `reset_runtime(scope="cache")`. |
+| `chain.py` | Template chain execution: step sequencing, intermediate context creation, `$previous` resolution, and chain-level checkpointing. |
+| `gate.py` | Gate primitive implementation and `resume_execution` MCP tool handler. Manages gate state in execution records. |
 | `trace.py` | Trace event schema and aggregation. |
 | `llm_provider.py` | Provider calls, retry, rate limits, token accounting. |
 | `image_inputs.py` | Image resolution, MIME sniffing, size limits. |
@@ -2509,6 +3004,9 @@ Module responsibilities:
 - Define template file format (`.rkt` with `define-meta` forms).
 - Decide initial store backend.
 - Decide which Python bridge operations are allowed in templates.
+- Decide cache key format and eviction strategy.
+- Decide streaming notification schema and batching policy.
+- Decide gate approval protocol and timeout behavior.
 
 Exit criteria:
 
@@ -2576,13 +3074,16 @@ Exit criteria:
 - Implement slot validation and safe substitution as an internal library
   (`instantiator.py`) — no dedicated MCP tool.
 - Store instantiated artifacts with hashes.
+- Add `output-schema`, `streamable`, `cacheable`, `gates`, `budget-policy`,
+  and `uses-llm-generated-code` to the template `define-meta` schema.
 
 Exit criteria:
 
 - planner can select at least one template per common shape,
 - instantiation output is deterministic (same slots → same hash),
 - artifacts are inspectable via dry-run and execute responses,
-- no `{{slot}}` markers remain in instantiated artifacts.
+- no `{{slot}}` markers remain in instantiated artifacts,
+- new metadata fields are parsed and available to verification and dry-run.
 
 ### Phase 6: Planner
 
@@ -2604,6 +3105,10 @@ Exit criteria:
 - Special-case `await-any` and batch await semantics in simulation.
 - Implement verification logic as an internal step within `execute_strategy`
   (no separate `verify_strategy` tool).
+- Add output schema validation in verification.
+- Add chain compatibility validation (output-input schema matching).
+- Add cache hit prediction in dry-run response.
+- Add `uses-llm-generated-code` policy check in verification.
 
 Exit criteria:
 
@@ -2619,6 +3124,9 @@ Exit criteria:
 - Assemble full traces with scope logs, call metrics, stdout, errors, and
   checkpoints.
 - Support repeated executions of the same artifact.
+- Implement streaming partial results via MCP notifications.
+- Implement `gate` primitive and `resume_execution` tool.
+- Implement budget threshold monitoring and policy activation.
 
 Exit criteria:
 
@@ -2633,12 +3141,20 @@ Exit criteria:
 - Add recursive artifact-aware delegation.
 - Add checkpoint recovery workflows.
 - Add history-based planner feedback.
+- Add cross-execution memoization cache (section 11.7).
+- Add plan-level template chaining (section 11.8).
+- Add code interpreter template with `uses-llm-generated-code` gating (section 11.9).
+- Add budget-aware model switching and checkpoint-and-stop degradation.
 
 Exit criteria:
 
 - large-context workflows can use chunking and recursion,
 - Python bridge is used only by trusted templates,
-- planner can use execution history without copying raw traces into prompts.
+- planner can use execution history without copying raw traces into prompts,
+- cache eliminates redundant LLM calls for identical inputs across executions,
+- chain execution connects atomic templates via intermediate contexts,
+- code interpreter template runs LLM-generated Python under policy gate,
+- budget exhaustion produces partial results with checkpoint, not hard failure.
 
 ### Phase 10: Documentation And Migration
 
@@ -2684,7 +3200,23 @@ Minimum test coverage:
 - verification pass/warn/fail behavior (tested through `execute_strategy`),
 - instantiation tested through `dry_run_strategy` and `execute_strategy` paths,
 - estimation tested through `dry_run_strategy` response,
-- execution trace persistence.
+- execution trace persistence,
+- streaming partial results delivery and ordering,
+- cross-execution cache hit/miss behavior,
+- cache key correctness (same inputs → same key, different inputs → different key),
+- temperature > 0 cache bypass (not cached unless `cacheable: #t`),
+- template chain execution: 2-step and 3-step chains,
+- chain failure at step N: completed steps preserved, retry resumes,
+- chain dry-run: per-step estimates and aggregate totals,
+- chain output-input schema compatibility validation,
+- output schema validation on `finish`,
+- output schema mismatch produces structured error,
+- gate suspension and `resume_execution` approve/reject,
+- gate with `required: #f` and policy override,
+- budget threshold detection and model switching,
+- budget exhaustion checkpoint-and-stop with partial results,
+- LLM-generated Python execution with import allowlist,
+- LLM-generated Python policy gating (blocked when policy disallows).
 
 ---
 
@@ -2897,6 +3429,92 @@ Each ID is durable and inspectable. The same plan can be re-executed with
 different data by creating a new context and updating `context_id` in the
 template invocation's slot values.
 
+### Walkthrough 2: Chained Workflow With Streaming And Cache
+
+This walkthrough shows a Composite task using template chaining, streaming,
+and cache reuse.
+
+**First run:** Extract then synthesize, with streaming.
+
+```text
+→ load_context(data: "[100 papers]", name: "ace2_papers", ...)
+← { "context_id": "ctx_7f3a" }
+
+→ plan_strategy(task: "Extract ACE2 mentions and synthesize a report.", context_id: "ctx_7f3a", ...)
+← {
+    "plan_id": "plan_c1d2",
+    "recommended": {
+      "kind": "template_chain",
+      "steps": [
+        {"template_name": "batch_map", "slot_values": {"context_id": "ctx_7f3a", "map_instruction": "Extract ACE2 mentions as JSON.", ...}},
+        {"template_name": "tree_synthesis", "slot_values": {"input": "$previous", "reduce_instruction": "Synthesize findings.", ...}}
+      ]
+    }
+  }
+
+→ dry_run_strategy(plan_id: "plan_c1d2")
+← {
+    "dry_run_id": "dry_e3f4",
+    "steps": [
+      {"template_name": "batch_map", "estimated_llm_calls": 100, "estimated_cost_usd": {"low": 0.80, "high": 2.00}},
+      {"template_name": "tree_synthesis", "estimated_llm_calls": 25, "estimated_cost_usd": {"low": 0.40, "high": 1.50}}
+    ],
+    "total_estimated_llm_calls": 125,
+    "total_estimated_cost_usd": {"low": 1.20, "high": 3.50},
+    "cache_hits_expected": 0
+  }
+
+→ execute_strategy(plan_id: "plan_c1d2", stream: true, timeout_seconds: 900)
+
+  ... notifications arrive as items complete:
+  { "type": "notifications/partial_result", "node_id": "extract", "item_index": 0, "value": "{...}" }
+  { "type": "notifications/partial_result", "node_id": "extract", "item_index": 1, "value": "{...}" }
+  ...
+
+← {
+    "execution_id": "exec_a1b2",
+    "result": {"value": "ACE2 findings report..."},
+    "execution": {
+      "state": "finished",
+      "llm_calls": 125,
+      "cache_hits": 0,
+      "budget_policy_activations": 0,
+      "chain_step_results": [
+        {"step": 0, "template": "batch_map", "intermediate_context_id": "ctx_auto_0"},
+        {"step": 1, "template": "tree_synthesis", "result": "ACE2 findings report..."}
+      ]
+    }
+  }
+```
+
+**Second run:** Same extraction, different synthesis instruction. Cache
+eliminates all 100 map-phase calls.
+
+```text
+→ plan_strategy(task: "Extract ACE2 mentions and write a methods section.", context_id: "ctx_7f3a", ...)
+← { "plan_id": "plan_d4e5", "recommended": {"kind": "template_chain", "steps": [
+      {"template_name": "batch_map", "slot_values": {"context_id": "ctx_7f3a", "map_instruction": "Extract ACE2 mentions as JSON.", ...}},
+      {"template_name": "tree_synthesis", "slot_values": {"input": "$previous", "reduce_instruction": "Write a methods section.", ...}}
+    ]} }
+
+→ dry_run_strategy(plan_id: "plan_d4e5")
+← {
+    "total_estimated_llm_calls": 125,
+    "cache_hits_expected": 100,
+    "total_estimated_cost_usd": {"low": 0.40, "high": 1.50}
+  }
+
+→ execute_strategy(plan_id: "plan_d4e5", timeout_seconds: 900)
+← {
+    "execution_id": "exec_c3d4",
+    "execution": { "llm_calls": 125, "cache_hits": 100 },
+    "result": {"value": "Methods section focusing on ACE2..."}
+  }
+```
+
+The second run costs ~60% less and completes faster because the entire
+map phase hits the cache.
+
 ---
 
 ## 20. Open Design Decisions
@@ -2910,6 +3528,14 @@ These should be decided before implementation begins:
    ahead of time or generated at runtime under verification constraints.
 3. **History feedback.** Decide which execution metrics influence future
    planning and how to avoid leaking sensitive data into planner prompts.
+4. **Gate timeout.** Decide whether gates expire if not approved within a
+   configurable time window, or whether they wait indefinitely.
+5. **Cache eviction.** Decide cache eviction strategy: LRU, TTL-based,
+   size-based, manual-only via `reset_runtime(scope="cache")`, or a
+   combination.
+6. **Chain fan-in.** Decide whether future versions should support fan-in
+   chains (multiple previous steps feeding one next step) or whether that
+   remains the agent's responsibility.
 
 ---
 
@@ -2922,15 +3548,23 @@ The rewrite is successful when:
   execute responses),
 - all execution goes through instantiated artifacts (created internally),
 - the happy-path agent flow is 3 tool calls: plan → dry-run → execute,
-- the public MCP API surface is 8 tools (down from 15),
+- the public MCP API surface is 10 tools,
 - instantiation, estimation, and verification are internal — no separate
   agent-facing tools for these steps,
 - dry-run and verification happen before expensive calls,
 - templates cover common orchestration shapes,
-- the runtime exposes only the 10 primitive combinators plus modifiers,
+- the runtime exposes only the 10 primitive combinators plus modifiers and
+  the `gate` control primitive,
 - no unsafe public escape hatches exist,
 - large contexts are represented by IDs and metadata,
 - recursive workflows remain possible,
 - current operational features are preserved: progress, cancel, trace, rate
   limits, token accounting, checkpointing, multimodal input, and controlled
-  Python compute.
+  Python compute,
+- streaming delivers partial results during `map-async` and `tree-reduce`,
+- cross-execution cache eliminates redundant LLM calls for identical inputs,
+- the planner produces template chains for Composite tasks,
+- output schemas are declared in templates and validated on `finish`,
+- gates suspend execution and `resume_execution` resumes or rejects,
+- budget exhaustion produces partial results via checkpoint, not hard failure,
+- LLM-generated Python is policy-gated and declared in template metadata.
