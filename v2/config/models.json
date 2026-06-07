@@ -1,0 +1,36 @@
+{
+  "schema_version": "1",
+  "aliases": {
+    "fast_text_model": {
+      "provider": "openai",
+      "model": "configured-fast-model",
+      "capabilities": ["text", "json"],
+      "max_context_tokens": 128000,
+      "supports_temperature": true,
+      "cost_tier": "low"
+    },
+    "quality_text_model": {
+      "provider": "openai",
+      "model": "configured-quality-model",
+      "capabilities": ["text", "json"],
+      "max_context_tokens": 128000,
+      "supports_temperature": true,
+      "cost_tier": "high",
+      "fallback": "fast_text_model"
+    },
+    "vision_model": {
+      "provider": "openai",
+      "model": "configured-vision-model",
+      "capabilities": ["text", "json", "image"],
+      "max_context_tokens": 128000,
+      "supports_temperature": true,
+      "cost_tier": "high"
+    }
+  },
+  "defaults": {
+    "planner": "quality_text_model",
+    "map": "fast_text_model",
+    "reduce": "quality_text_model",
+    "vision": "vision_model"
+  }
+}

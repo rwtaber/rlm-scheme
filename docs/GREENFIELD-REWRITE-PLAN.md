@@ -222,8 +222,9 @@ async def execute_strategy(
     template_invocation_json: str | None = None,
     timeout_seconds: int | None = None,
     stream: bool = False,
+    policy_json: str | None = None,
     runtime_options_json: str | None = None,
-    ctx: Context = None,
+    ctx: Context = None,  # FastMCP-injected dependency for notifications, not user-facing
 ) -> str: ...
 
 def get_execution_trace(
@@ -1320,10 +1321,24 @@ Template:
 (define-meta reject
   '((and (eq? ordered #t) (eq? order_sensitive #t))
     (eq? requires_pairwise_comparison #t)))
+```
 
+**Trigger/reject evaluation context:** Predicates are evaluated in an
+environment where each classification hint field is bound as a variable:
+`item_count`, `independent`, `output_type`, `has_second_phase`, `ordered`,
+`modality`, `operation`, `sub_operations`, `requires_pairwise_comparison`,
+`order_sensitive`, and any other hint fields the agent provides. Missing
+hints are bound to `#f`. Trigger conditions use implicit AND — all
+predicates must return `#t` for the template to match. Reject conditions
+use implicit OR — any predicate returning `#t` disqualifies the template.
+Predicates that reference a potentially missing hint should be written to
+handle the `#f` case, e.g., `(and ordered (eq? order_sensitive #t))`
+short-circuits to `#f` when `ordered` is missing.
+
+```scheme
 (define-meta slots
   '((context_id         (type string) (pattern "^ctx_") (required #t))
-    (items_path         (type string) (default "$.items"))
+    (items_path         (type string) (default "$"))
     (map_instruction    (type string) (min-length 10) (required #t))
     (reduce_instruction (type string) (min-length 10) (required #t))
     (map_model          (type string) (default "fast_text_model"))
@@ -1691,14 +1706,20 @@ Semantics:
 - reports progress and heartbeats during long fan-outs,
 - propagates per-item errors according to instantiator-selected error policy.
 
-Error policy should be explicit in the template:
+Error policy is declared per-node in the template's `define-meta`
+`error-policies` alist. Each entry names a logical node (matching template
+body structure) and specifies the policy:
 
-```json
-{
-  "on_item_error": "fail | collect | fallback",
-  "checkpoint_every": 25
-}
+```scheme
+(define-meta error-policies
+  '((extract (on-error fail_fast) (checkpoint-every 25))
+    (synthesize (on-error fail_fast))))
 ```
+
+Valid `on-error` values: `fail_fast` (default), `collect`, `fallback`.
+When `fallback` is specified, the corresponding template body node must
+use `try-fallback` to provide the fallback function. The instantiator
+validates that declared error policies match the template body structure.
 
 #### `parallel`
 
@@ -1852,17 +1873,34 @@ knows to expect pauses during real execution.
 #### `recursive-spawn`
 
 ```scheme
-(recursive-spawn strategy-ref) -> (lambda (data) syntax-object)
+(recursive-spawn template-name slot-values) -> (lambda (data) syntax-object)
 ```
+
+`template-name` is a string naming a template in the catalog.
+`slot-values` is an alist of slot bindings for the sub-template (excluding
+the data slot, which is provided by the returned lambda).
 
 Semantics:
 
-- delegates to a nested artifact/sub-strategy,
-- global recursion depth is enforced host-side,
+- returns a lambda that, when called with `data`:
+  1. creates a temporary context from `data`,
+  2. instantiates the named template with `slot-values` plus the
+     temporary context ID,
+  3. verifies the sub-artifact against the parent execution's policy,
+  4. executes the sub-artifact in the same sandbox,
+- sub-artifacts are instantiated at runtime, not ahead of time, because
+  the data they operate on may not exist until execution (e.g., items
+  produced by a decomposition step),
+- global recursion depth is enforced host-side — the host increments a
+  depth counter on each `recursive-spawn` invocation and rejects
+  instantiation when `policy.max_recursive_depth` is exceeded,
+- the sub-execution inherits the parent's token budget, policy, and
+  execution record (sub-calls appear in the parent's trace),
 - inherits explicitly passed context refs only,
 - appears as recursive depth in dry-run and trace.
 
-Do not include a public `#:depth` keyword unless it controls real enforcement.
+Do not include a public `#:depth` keyword — depth enforcement is
+host-side only.
 
 #### `memoized`
 
@@ -1961,6 +1999,90 @@ Disallowed by default:
 - network access,
 - importing project secrets,
 - mutating durable records except through host APIs.
+
+### Helper Primitives
+
+#### `finish`
+
+```scheme
+(finish value) -> (terminates execution)
+```
+
+Semantics:
+
+- terminates the current execution and sets its result to `value`,
+- if the template declares `output-schema` in `define-meta`, the runtime
+  validates `value` against it before accepting — validation failure
+  produces a structured error and transitions the execution to `failed`,
+- implemented via Racket's `shift`/`reset` (delimited continuations) to
+  exit the artifact body cleanly,
+- exactly one `finish` call per execution — if the artifact body completes
+  without calling `finish`, the execution ends with `failed` and error
+  `"No finish call reached."`,
+- the value passed to `finish` becomes the `result.value` field in the
+  `execute_strategy` response.
+
+#### `syntax-e`
+
+```scheme
+(syntax-e stx) -> any
+```
+
+Semantics:
+
+- unwraps a syntax object to its underlying value (typically a string),
+- pass-through for non-syntax values (plain strings, numbers, etc.),
+- logs every unwrap operation to the scope/provenance log with a preview
+  of the unwrapped value and the scope it originated from,
+- this is the explicit "trust this LLM output" operation — model output
+  is data until `syntax-e` is called.
+
+#### `datum->syntax`
+
+```scheme
+(datum->syntax datum) -> syntax-object
+```
+
+Semantics:
+
+- wraps a plain value (string, number, etc.) in a syntax object with
+  scope metadata,
+- logs the wrap operation to the scope/provenance log,
+- used when template code needs to promote a computed value back into the
+  syntax-tracked domain (e.g., wrapping Python bridge output for
+  downstream consumption by syntax-aware primitives).
+
+#### `__context-ref`
+
+```scheme
+(__context-ref context-id json-path) -> any
+```
+
+Semantics:
+
+- retrieves data from a loaded context at runtime,
+- `context-id` must be a valid `ctx_` ID that exists in the store,
+- `json-path` is an RFC 9535 JSONPath expression evaluated against the
+  stored context data,
+- `"$"` returns the entire context value (use when data is a raw array),
+- the instantiator validates that `context_id` slots match `^ctx_` and
+  that `json-path` slots are syntactically valid JSONPath at
+  instantiation time; runtime resolution failures are structured errors.
+
+#### `__join-json`
+
+```scheme
+(__join-json items) -> string
+```
+
+Semantics:
+
+- takes a list of JSON strings and produces a single JSON array string
+  containing all items: `"[item1, item2, ...]"`,
+- each item is parsed to verify JSON well-formedness; malformed items
+  produce a structured error,
+- used in `tree-reduce` bodies to aggregate multiple results into a
+  single string suitable as `#:data` input for an LLM call.
 
 ### Error Propagation Model
 
@@ -2781,15 +2903,38 @@ fails: `independent: false`, `output_type: "one"`, `has_second_phase: false`.
 The planner model is `quality_text_model` with `json_mode: true` and
 `temperature: 0`.
 
-**Level 2 qualitative modifiers** — After template selection, some slot values
-require LLM judgment:
-- Cost sensitivity → model tier selection
-- Quality requirements → validation wrappers, iteration counts
-- Error tolerance → error policy selection
-- Instruction text → the actual prompts for LLM calls
+**Level 2 content slot filling** — After template selection, the planner
+makes one additional LLM call to fill content-specific slot values that
+require natural language judgment. This is part of the same `plan_strategy`
+call, not a separate step.
 
-These are template slot values, not structural decisions. The template's
-`slot_schema` constrains them with types, enums, and ranges.
+The planner sends the agent's `task` string, the selected template's slot
+schema (names, types, descriptions, and constraints), and the context
+metadata to the planner model. The LLM returns a JSON object with values
+for each unfilled content slot:
+
+- `map_instruction`, `reduce_instruction`, and similar string slots — the
+  actual prompts that will be sent to LLM calls during execution,
+- model tier selection (e.g., choosing `fast_text_model` vs
+  `quality_text_model` based on quality/cost hints),
+- iteration counts and validation wrappers based on quality requirements.
+
+Structural slots with defaults (`max_concurrent`, `branch_factor`,
+`json_mode`) use their defaults unless the agent overrides them in
+`hints.slot_overrides`. If the agent provides explicit `slot_overrides`
+for content slots, those override the LLM-generated values — this makes
+the planner fully deterministic when the agent provides everything.
+
+**Trigger condition:** This LLM call fires when the selected template has
+required string-typed slots with no default value and no agent-provided
+override. If all slots have defaults or agent-provided values, no LLM
+call is made.
+
+The planner model is `quality_text_model` with `json_mode: true` and
+`temperature: 0`. The template's `slot_schema` constrains LLM-generated
+values with types, enums, min/max ranges, and min-length — the planner
+validates the LLM response against these constraints before storing the
+plan record.
 
 ### 14.1 TaskShape
 
@@ -3541,7 +3686,7 @@ is fully deterministic (Level 1 only, no LLM call needed).
       "template_version": "1.0.0",
       "slot_values": {
         "context_id": "ctx_7f3a",
-        "items_path": "$.items",
+        "items_path": "$",
         "map_instruction": "Extract all mentions of ACE2 protein, including evidence and uncertainty, as JSON.",
         "reduce_instruction": "Synthesize the extracted ACE2 findings into a concise report with citations.",
         "map_model": "fast_text_model",
@@ -3788,8 +3933,13 @@ These should be decided before implementation begins:
 1. **Store backend.** Start with filesystem JSON (decided in section 11.1).
    Migrate to SQLite/PGlite if queryable history or concurrent access becomes
    a bottleneck. *(Partially decided — revisit if needed.)*
-2. **Recursive planning.** Decide whether recursive sub-plans are instantiated
-   ahead of time or generated at runtime under verification constraints.
+2. **Recursive planning.** *(Decided: runtime instantiation under
+   verification.)* Recursive sub-plans are instantiated at runtime when
+   `recursive-spawn` is invoked, because sub-strategy data may not exist
+   until execution (e.g., items produced by a decomposition step). The
+   sub-template invocation is verified against the parent execution's
+   policy before the sub-artifact executes. Recursive depth is enforced
+   globally by the host. See the `recursive-spawn` primitive in section 9.
 3. **History feedback.** Decide which execution metrics influence future
    planning and how to avoid leaking sensitive data into planner prompts.
 4. **Gate timeout.** *(Decided: indefinite wait, optional timeout kwarg.)*
