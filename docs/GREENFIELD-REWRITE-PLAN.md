@@ -1,107 +1,578 @@
-# RLM-Scheme Greenfield Rewrite Plan
+# RLM-Scheme Implementation Plan v2
 
-Complete implementation plan for rewriting RLM-Scheme from scratch. No backward
-compatibility required. The existing codebase serves only as a feature inventory
-for runtime behavior that should be preserved — see section 21 (Success Criteria)
-for the full list.
+## Preamble
 
----
-
-## 1. North Star
-
-The MCP server should expose a structured orchestration system, not a raw code
-execution system.
-
-An agent interacts with durable objects:
+RLM-Scheme is a structured orchestration system exposed as an MCP server. An agent interacts with durable objects through a fixed pipeline:
 
 ```text
 context_id -> plan_id -> dry_run_id -> execution_id
 ```
 
-Each stage has a clear responsibility:
+Agents describe intent and data; the system classifies, selects a template, instantiates executable Scheme, verifies it against policy, and executes it in a sandboxed Racket runtime. Agents never write Scheme. The happy path is 3 tool calls after loading context: `plan_strategy` -> `dry_run_strategy` -> `execute_strategy`. The public MCP surface is exactly 10 tools. Internally, the system also creates `artifact_id` and `verification_id` records for audit and debugging, but these are not agent-managed concepts.
 
-| ID | Meaning |
-|---|---|
-| `context_id` | Stored input data plus metadata: shape, item count, modality, independence, size estimates, and optional names. |
-| `plan_id` | Task intent and planning record: objective, constraints, inferred TaskShape/DataShape, selected template, and rationale. |
-| `dry_run_id` | Structural simulation: expected calls, fan-out, recursive depth, model mix, token/cost estimates, warnings, and failure risks. |
-| `execution_id` | One real execution attempt: result, stdout, trace, call metrics, token usage, errors, checkpoints, and status history. |
+Templates are `.rkt` files containing real Scheme code with `{{slot}}` markers. The instantiator validates slots, substitutes values, and hashes the result. There is no intermediate representation. LLMs choose strategy intent and fill content slots; deterministic code validates and substitutes safely; verification checks the filled artifact before real model calls happen.
 
-Internally, the system also creates `artifact_id` (instantiated Scheme with
-code hash) and `verification_id` (pre-execution checks) records. These
-appear in responses for audit and debugging but are not agent-managed
-concepts — agents do not create or pass them between tools.
+**Conventions used in this document:**
 
-Normal agent flow:
-
-1. `load_context(data, name, metadata)` stores large input and returns a
-   `context_id`.
-2. `plan_strategy(task, context_id, hints)` classifies the work and returns a
-   `plan_id` plus a template invocation (or a template chain for multi-phase
-   Composite tasks).
-3. `dry_run_strategy(plan_id)` instantiates, simulates, and returns a
-   `dry_run_id` with call estimates and cost projections.
-4. `execute_strategy(plan_id, timeout, stream)` instantiates (or reuses a
-   cached artifact), verifies, and executes. Returns an `execution_id`.
-   With `stream=true`, partial results are delivered via MCP notifications
-   as items complete. Execution may pause at declared gates for human review;
-   `resume_execution` approves or rejects.
-5. `get_execution_trace(execution_id)`, `get_status`, `cancel_call`, and
-   `reset_runtime` inspect or control work.
-
-Instantiation (slot validation + safe substitution + hashing) and verification
-(policy checks) happen automatically inside `dry_run_strategy` and
-`execute_strategy`. If either step fails, the tool returns a structured
-error. There are no separate tools for instantiation, estimation, or
-verification.
-
-Cross-execution memoization caches LLM results by content hash. Repeated
-runs with identical inputs (same instruction, data, model, temperature)
-reuse cached results automatically, making iterative refinement cheap.
-
-Scheme is internal instantiated code. It may be inspectable through dry-run or
-execution responses for debugging, but agents should not submit arbitrary
-Scheme strings to the public MCP API.
+- Key words [MUST], [SHOULD], and [MAY] follow RFC 2119 semantics. [MUST] indicates an absolute requirement. [SHOULD] indicates a recommendation that may be deviated from with justification. [MAY] indicates an optional feature.
+- Pseudocode uses Python-style type annotations (e.g., `str`, `int | None`, `list[str]`) for parameter and return types.
+- Cross-references use the form \"See Appendix X, item Y\" rather than \"See section X.\"
+- Requirements are tagged with bracketed keywords: `[MUST]`, `[SHOULD]`, `[MAY]`.
+- Quantities are always explicit: \"ALL 23 verification checks\", \"16 template files\", \"13 TaskShape values.\"
 
 ---
 
-## 2. What Templates Store
+## Appendix A: Enum and Type Definitions
 
-Templates are the bridge between high-level planning and executable Scheme.
-They should be data, not prompts that ask an LLM to write code.
+### A.1 TaskShape Enum (13 values)
 
-There are two levels in the instantiation pipeline:
+Every plan classification [MUST] assign exactly one TaskShape. Composite tasks [MUST] also record constituent shapes.
 
-```text
-Template (Scheme code with {{slot}} markers)
-    ↓  instantiator validates slots, substitutes values, hashes result
-Artifact (executable Scheme run by the Racket sandbox)
+| Value | Description | Structural family |
+|---|---|---|
+| `Direct` | One operation on one small input. | `llm-query` only. |
+| `Batch` | Same operation over many independent items. | `map-async`, optional reduction. |
+| `Synthesize` | Combine many inputs into one output. | `tree-reduce` or `fold-sequential`. |
+| `Search` | Explore solution space and choose best result. | `parallel`, `race`, `iterate-until`. |
+| `Refine` | Improve one artifact iteratively. | `iterate-until`. |
+| `Compare` | Evaluate alternatives against criteria. | `parallel` plus selection/aggregation. |
+| `Classify` | Assign labels/categories to items. | `map-async`, optional aggregation. |
+| `Pipeline` | Distinct sequential transformations. | `sequence`. |
+| `Generate` | Create new content from scratch. | index-based `map-async`, `iterate-until`, or `fold-sequential`. |
+| `Decompose` | Break one input into structured parts. | `llm-query` JSON, `python_compute`, or `recursive`. |
+| `Validate` | Produce pass/fail/score assessments. | `map-async`, validation, aggregation. |
+| `Aggregate` | Extract metrics and compute report. | `map-async` plus `python_compute`. |
+| `Composite` | Multi-phase task combining 2+ atomic shapes. | Instantiated `sequence` of phase templates. |
+
+### A.2 DataShape Enum (10 + Unknown)
+
+Context metadata [MUST] include a DataShape value. `Unknown` is the fallback when the agent does not specify a shape.
+
+| Value | Description | Key metadata fields |
+|---|---|---|
+| `FlatList` | Independent or ordered list. | `count`, `item_size`, `independent`. |
+| `Hierarchy` | Tree or nested structure. | `depth`, `branching`, `node_count`. |
+| `Singular` | One blob that may fit in context. | `size`, `chunkable`, `boundary`. |
+| `ChunkedSingular` | Large document split into dependent chunks. | `chunk_count`, `overlap`, `dependency`. |
+| `Graph` | Connected entities and edges. | `nodes`, `edges`, `connectedness`. |
+| `TimeSeries` | Ordered observations. | `length`, `window_size`, `causal`. |
+| `Tabular` | Rows with shared schema. | `row_count`, `columns`, `grouping_keys`. |
+| `Multimodal` | Text plus images/audio. | `modality`, `count`, `model_requirements`. |
+| `Paired` | Aligned source/target pairs. | `pair_count`, `alignment_key`. |
+| `KeyValue` | Dictionary/map data. | `key_count`, `preserve_keys`. |
+| `Unknown` | Shape not specified or not determinable. | None required. |
+
+### A.3 ExecutionState Enum (7 values)
+
+Every execution record [MUST] have exactly one state at any time.
+
+| Value | Terminal? | Description |
+|---|---|---|
+| `queued` | No | Execution created but not yet started. |
+| `running` | No | Execution in progress. |
+| `awaiting_gate` | No | Execution suspended at a human-review gate. |
+| `finished` | Yes | `finish` primitive completed successfully. |
+| `failed` | Yes | Unhandled error propagated to top level. |
+| `cancelled` | Yes | `cancel_call(execution_id=...)` received. |
+| `gate_rejected` | Yes | Gate rejected via `resume_execution(decision="reject")`. |
+
+**State transitions:**
+
+| From | To | Trigger |
+|---|---|---|
+| `queued` | `running` | Executor picks up the execution. |
+| `running` | `finished` | `finish` primitive completes successfully. |
+| `running` | `failed` | Unhandled error propagates to top level (includes `BudgetExhaustedError` from checkpoint-and-stop). |
+| `running` | `cancelled` | `cancel_call(execution_id=...)` received. |
+| `running` | `awaiting_gate` | `gate` primitive fires. |
+| `awaiting_gate` | `running` | `resume_execution(decision="approve")`. |
+| `awaiting_gate` | `cancelled` | `cancel_call(execution_id=...)` while suspended. |
+| `awaiting_gate` | `gate_rejected` | `resume_execution(decision="reject")`. |
+
+No transitions out of terminal states (`finished`, `failed`, `cancelled`, `gate_rejected`).
+
+### A.4 ErrorPolicy Enum (3 values)
+
+Each template node [MUST] declare an error policy. The default is `fail_fast`.
+
+| Value | Behavior |
+|---|---|
+| `fail_fast` | First error aborts the entire node. Partial results are discarded. Default for most primitives. |
+| `collect` | Errors are collected alongside successful results. The node completes and returns a mixed result list with error markers. Consumer nodes [MUST] handle error entries. |
+| `fallback` | On error, execute the declared fallback function for that item. If fallback also fails, apply `fail_fast` or `collect` as secondary policy. |
+
+### A.5 ResetScope Enum (7 values)
+
+The `reset_runtime` tool [MUST] accept one of these scope values.
+
+| Value | Clears | Preserves |
+|---|---|---|
+| `sandbox` | Racket sandbox state only. | All durable records, caches, and configuration. |
+| `session` | Racket sandbox state, in-memory caches, active call handles, execution records and traces from current session. | Contexts, plans, artifacts, dry-runs, verifications, and checkpoints from prior sessions. |
+| `cache` | LLM result cache entries. | All durable records, sandbox state, and template catalog. |
+| `contexts` | All context records and associated data files. | Plans, artifacts, executions, cache, and sandbox state. |
+| `executions` | All execution records, traces, and associated result files. | Contexts, plans, artifacts, dry-runs, verifications, cache. |
+| `config` | Reloads model registry and template catalog from disk. | All durable records, sandbox state, and cache. |
+| `all` | All durable records and sandbox state. Fresh start. | Nothing. |
+
+### A.6 ID Prefix Table (8 prefixes)
+
+Every durable object ID [MUST] match the regex `^{prefix}[a-z0-9]{16}$`, generated via `secrets.token_hex(8)`.
+
+| Prefix | Object type | Example |
+|---|---|---|
+| `ctx_` | Context record | `ctx_7f3a1b2c4d5e6f78` |
+| `plan_` | Plan record | `plan_b2c1d3e4f5a6b7c8` |
+| `dry_` | Dry-run record | `dry_1a2b3c4d5e6f7890` |
+| `exec_` | Execution record | `exec_5e6f7a8b9c0d1e2f` |
+| `art_` | Artifact record | `art_e4d9a1b2c3d4e5f6` |
+| `ver_` | Verification record | `ver_3c4d5e6f7a8b9c0d` |
+| `call_` | LLM call record | `call_001a2b3c4d5e6f7` |
+| `ckpt_` | Checkpoint record | `ckpt_8a9b0c1d2e3f4a5b` |
+
+ID generation pseudocode:
+
+```python
+import secrets
+
+def generate_id(prefix: str) -> str:
+    \"\"\"Generate a durable object ID. Prefix MUST be one of the 8 registered prefixes.\"\"\"
+    assert prefix in (\"ctx_\", \"plan_\", \"dry_\", \"exec_\", \"art_\", \"ver_\", \"call_\", \"ckpt_\")
+    return f\"{prefix}{secrets.token_hex(8)}\"
 ```
 
-A **template** is a `.rkt` file containing real Scheme code that uses
-primitive runtime bindings directly. Content-specific values are represented
-as `{{slot_name}}` markers — typed holes that the instantiator fills with
-concrete values. For example, a `batch_extract_reduce` template contains
-`map-async` and `tree-reduce` calls but uses `{{map_instruction}}`,
-`{{map_model}}`, and `{{max_concurrent}}` markers where content-specific
-values belong.
+---
 
-Templates are Scheme, not JSON node graphs. There is no intermediate
-representation between the template and the executable artifact. The instantiator
-validates slot values against the template's slot schema, performs safe
-substitution of `{{slot}}` markers with concrete values, and hashes the
-result. The output is executable Scheme that runs directly in the Racket
-sandbox.
+## Appendix B: Full Primitive Signatures
 
-A template file is pure Scheme. Metadata lives in `define-meta` forms at
-the top; the executable body follows. No JSON, no block comments — one
-language throughout.
+All primitives below are the public bindings available inside instantiated Scheme artifacts. Helper bindings prefixed with `__` are instantiator-private. Templates [MUST] use only these primitives and `__`-prefixed helpers; any other binding causes verification failure (see Appendix A.6, check 21 in the verification table).
 
-`define-meta` is a custom form recognized by the template loader, not
-standard Racket `define`. The loader collects all `define-meta` bindings
-into a metadata hash before evaluating the body.
+### B.1 LLM Primitives
 
-**`define-meta` grammar:**
+**`llm-query`**
+
+```
+llm-query(
+    instruction: str,
+    data: any,
+    model: str,
+    recursive: bool = False,
+    temperature: float | None = None,
+    max_tokens: int | None = None,
+    json: bool = False,
+    image: ImageInput | None = None,
+    images: list[ImageInput] = []
+) -> SyntaxObject
+```
+
+Synchronous LLM call. Returns a syntax-wrapped result. Decrements token budget after response. Logs call metadata and provenance. Supports `recursive=True` only under global recursion policy.
+
+**`llm-query-async`**
+
+```
+llm-query-async(
+    instruction: str,
+    data: any,
+    model: str,
+    temperature: float | None = None,
+    max_tokens: int | None = None,
+    json: bool = False,
+    image: ImageInput | None = None,
+    images: list[ImageInput] = []
+) -> AsyncHandle
+```
+
+Dispatches LLM call through the host future pool and returns immediately with an opaque async handle. Does not support recursive calls. Use inside `map-async`, `parallel`, and `race` bodies.
+
+### B.2 Await Primitives
+
+**`await`**
+
+```
+await(handle: AsyncHandle) -> SyntaxObject
+```
+
+Blocks until one handle completes. Propagates cancellation and provider errors. Decrements token budget when real usage is known. Wraps result as syntax.
+
+**`await-all`**
+
+```
+await-all(handles: list[AsyncHandle]) -> list[str]
+```
+
+Waits for all handles concurrently. Returns unwrapped strings in input order. Records batch wait in trace.
+
+**`await-any`**
+
+```
+await-any(handles: list[AsyncHandle]) -> tuple[str, list[AsyncHandle]]
+```
+
+Waits for the first completed handle. Returns the completed unwrapped string and the list of remaining handles. [MUST] be deterministic in dry-run mode: exactly one requested pending handle completes per call.
+
+### B.3 Parallel Primitives
+
+**`map-async`**
+
+```
+map-async(
+    fn: Callable[[any], AsyncHandle],
+    items: list[any],
+    max_concurrent: int | None = None
+) -> list[str]
+```
+
+Rolling-window fan-out over items. Preserves input order. Maintains a bounded concurrency window. Reports progress and heartbeats during long fan-outs. Error policy is declared per-node in template metadata.
+
+**`parallel`**
+
+```
+parallel(
+    thunks: list[Callable[[], AsyncHandle]],
+    max_concurrent: int | None = None
+) -> list[str]
+```
+
+Genuinely concurrent thunk execution. Preserves strategy order in output. [MUST] reject bodies that call synchronous `llm-query` directly.
+
+**`race`**
+
+```
+race(thunks: list[Callable[[], AsyncHandle]]) -> str
+```
+
+Launches all candidates. Returns first completed result. Cancels or abandons remaining handles. Records losing handles in trace as cancelled.
+
+### B.4 Reduction Primitives
+
+**`tree-reduce`**
+
+```
+tree-reduce(
+    reducer: Callable[[list[any]], any],
+    items: list[any],
+    branch_factor: int,
+    leaf_fn: Callable[[any], any] | None = None
+) -> any
+```
+
+Recursive associative reduction. Rejects empty input. Groups items by branch factor and applies reducer recursively until one result remains. Call estimate: `N + ceil(N/B) + ceil(ceil(N/B)/B) + ... + 1`.
+
+**`fold-sequential`**
+
+```
+fold-sequential(
+    reducer: Callable[[any, any], any],
+    initial: any,
+    items: list[any]
+) -> any
+```
+
+Ordered accumulation. Processes items sequentially, passing accumulator and item to reducer. High critical-path latency. Appropriate for order-sensitive synthesis.
+
+### B.5 Control Primitives
+
+**`sequence`**
+
+```
+sequence(fn1: Callable, fn2: Callable, ...) -> Callable[[any], any]
+```
+
+Left-to-right function composition. Used by the instantiator for multi-phase templates. Can be generated as `let*` when simpler.
+
+**`choose`**
+
+```
+choose(
+    predicate: Callable[[any], bool],
+    then_fn: Callable,
+    else_fn: Callable
+) -> Callable
+```
+
+Routes based on deterministic predicate. [SHOULD] not hide model calls inside predicates unless declared.
+
+**`iterate-until`**
+
+```
+iterate-until(
+    step_fn: Callable[[any], any],
+    predicate: Callable[[any], bool],
+    init: any,
+    max_iter: int
+) -> any
+```
+
+Bounded loop. Stops when predicate returns true or `max_iter` is reached. Dry-run reports worst-case iteration count unless predicate is statically known.
+
+**`recursive-spawn`**
+
+```
+recursive-spawn(
+    template_name: str,
+    slot_values: dict[str, any]
+) -> Callable[[any], SyntaxObject]
+```
+
+Returns a lambda that, when called with data: creates a temporary context, instantiates the named template with slot values plus the temporary context ID, verifies the sub-artifact against the parent execution's policy, and executes it. Global recursion depth is enforced host-side.
+
+### B.6 Delegation Primitives
+
+**`load-context`**
+
+```
+__context-ref(context_id: str, json_path: str) -> any
+```
+
+Retrieves data from a loaded context at runtime. `context_id` [MUST] be a valid `ctx_` ID. `json_path` is an RFC 9535 JSONPath expression. `\"$\"` returns the entire context value.
+
+### B.7 Modifier Primitives
+
+**`memoized`**
+
+```
+memoized(fn: Callable, key_fn: Callable[[any], str]) -> Callable
+```
+
+Caches results within one execution unless the template requests persistent caching. Key function [MUST] be deterministic. Trace records cache hits/misses.
+
+**`with-validation`**
+
+```
+with-validation(fn: Callable, validator: Callable[[any], bool]) -> Callable
+```
+
+Runs `fn`, validates result, returns result or raises structured validation error. [SHOULD] include schema path or validation rule in errors.
+
+**`try-fallback`**
+
+```
+try-fallback(primary_fn: Callable, fallback_fn: Callable) -> Callable
+```
+
+Catches declared error classes. Executes fallback with original args. Records both primary failure and fallback result in trace.
+
+### B.8 State Primitives
+
+**`gate`**
+
+```
+gate(
+    name: str,
+    value: any,
+    message: str,
+    required: bool = False
+) -> any
+```
+
+Suspends execution for human review. Transitions state to `awaiting_gate`. On approve, returns `value` unchanged. On reject, raises structured gate-rejection error. `required=False` means gate fires only when execution policy includes `require_gates: true`.
+
+**`finish`**
+
+```
+finish(value: any) -> NoReturn
+```
+
+Terminates the current execution and sets its result to `value`. If the template declares `output-schema`, the runtime validates `value` against it before accepting. Exactly one `finish` call per execution [MUST] occur.
+
+**`checkpoint`**
+
+```
+checkpoint(key: str, value: any) -> any
+```
+
+Persists a durable partial result keyed by execution/artifact namespace. Values [MUST] be JSON-serializable. Returns the value unchanged.
+
+**`checkpoint-restore`**
+
+```
+restore(key: str) -> any | None
+```
+
+Retrieves a previously checkpointed value, or `None` if no checkpoint exists for the key.
+
+### B.9 Compute Primitives
+
+**`python-compute` / `py-exec`**
+
+```
+py-exec(code: str) -> str
+```
+
+Executes Python code in an isolated subprocess. Receives values over JSON. Cannot access MCP server internals or Racket scaffold bindings. Returns stdout as a string.
+
+**`py-eval`**
+
+```
+py-eval(expr: str) -> any
+```
+
+Evaluates a Python expression and returns the result. Same isolation as `py-exec`.
+
+**`py-call`**
+
+```
+py-call(ref: str, method: str, *args: any) -> any
+```
+
+Calls a method on a Python object reference. Same isolation as `py-exec`.
+
+**`py-set!`**
+
+```
+py-set!(name: str, value: any) -> None
+```
+
+Sets a variable in the Python bridge namespace. Value is transferred as JSON.
+
+### B.10 Helper Primitives
+
+**`syntax-e`**
+
+```
+syntax-e(stx: SyntaxObject) -> any
+```
+
+Unwraps a syntax object to its underlying value. Pass-through for non-syntax values. Logs every unwrap to the scope/provenance log. This is the explicit \"trust this LLM output\" operation.
+
+**`datum->syntax`**
+
+```
+datum->syntax(datum: any) -> SyntaxObject
+```
+
+Wraps a plain value in a syntax object with scope metadata. Logs the wrap operation. Used when template code needs to promote a computed value back into the syntax-tracked domain.
+
+---
+
+## Appendix C: Model Registry and Retry Config Schemas
+
+### C.1 Model Registry Entry Schema
+
+The model registry [MUST] be a JSON file at `config/models.json` (path configurable via `RLM_MODEL_REGISTRY` environment variable). It is loaded once at server startup and can be reloaded via `reset_runtime(scope=\"config\")`.
+
+```python
+class ModelRegistryEntry(BaseModel):
+    \"\"\"One model alias in the registry.\"\"\"
+    alias: str                          # e.g., \"fast_text_model\"
+    provider: str                       # e.g., \"openai\", \"anthropic\"
+    model_id: str                       # provider-specific model name
+    context_window_tokens: int          # max input tokens
+    max_output_tokens: int              # max completion tokens
+    capabilities: dict[str, bool]       # {\"text\": True, \"json\": True, \"image\": False}
+    cost_per_1k_prompt: float           # USD per 1,000 prompt tokens
+    cost_per_1k_completion: float       # USD per 1,000 completion tokens
+    temperature_range: tuple[float, float]  # (min, max), e.g., (0.0, 2.0)
+    supports_temperature: bool          # whether temperature kwarg is accepted
+    cost_tier: str                      # \"low\", \"medium\", \"high\"
+    fallback: str | None = None         # alias to fall back to on budget policy
+```
+
+Example registry JSON:
+
+```json
+{
+  \"schema_version\": \"1\",
+  \"aliases\": {
+    \"fast_text_model\": {
+      \"provider\": \"openai\",
+      \"model_id\": \"configured-fast-model\",
+      \"context_window_tokens\": 128000,
+      \"max_output_tokens\": 16384,
+      \"capabilities\": {\"text\": true, \"json\": true, \"image\": false},
+      \"cost_per_1k_prompt\": 0.0015,
+      \"cost_per_1k_completion\": 0.002,
+      \"temperature_range\": [0.0, 2.0],
+      \"supports_temperature\": true,
+      \"cost_tier\": \"low\",
+      \"fallback\": null
+    }
+  },
+  \"defaults\": {
+    \"planner\": \"quality_text_model\",
+    \"map\": \"fast_text_model\",
+    \"reduce\": \"quality_text_model\",
+    \"vision\": \"vision_model\"
+  }
+}
+```
+
+### C.2 Alias Validation Rules
+
+- Aliases [MUST] match the regex `^[a-z][a-z0-9_]{2,30}$`.
+- Alias names [MUST] be unique within the registry.
+- The `defaults` section [MUST] reference aliases that exist in the `aliases` section.
+- If a `fallback` alias is specified, it [MUST] exist in the registry and [MUST] have compatible capabilities (see Appendix C, item C.4).
+
+### C.3 Retry Config Schema
+
+The retry policy [MUST] be a JSON file at `config/retry.json` (path configurable via `RLM_RETRY_CONFIG` environment variable). Retries are per-call, not per-execution.
+
+```python
+class RetryConfig(BaseModel):
+    \"\"\"Global retry configuration.\"\"\"
+    max_retries: int = 3                    # maximum retry attempts per call
+    base_delay_seconds: float = 1.0         # initial backoff delay
+    max_delay_seconds: float = 60.0         # backoff ceiling
+    backoff_multiplier: float = 2.0         # exponential multiplier
+    jitter: bool = True                     # add random jitter to backoff
+    retry_on: list[str] = [                 # error types that trigger retry
+        \"rate_limit\", \"timeout\", \"server_error\"
+    ]
+    retryable_status_codes: list[int] = [429, 500, 502, 503, 504]
+```
+
+Example retry config JSON:
+
+```json
+{
+  \"schema_version\": \"1\",
+  \"defaults\": {
+    \"max_retries\": 3,
+    \"base_delay_seconds\": 1.0,
+    \"max_delay_seconds\": 60.0,
+    \"backoff_multiplier\": 2.0,
+    \"jitter\": true,
+    \"retryable_status_codes\": [429, 500, 502, 503, 504],
+    \"retry_on\": [\"rate_limit\", \"timeout\", \"server_error\"]
+  },
+  \"per_model_overrides\": {
+    \"fast_text_model\": {
+      \"max_retries\": 5,
+      \"base_delay_seconds\": 0.5
+    }
+  }
+}
+```
+
+`per_model_overrides` entries are merged with defaults: override keys replace default keys; unspecified keys inherit from `defaults`.
+
+### C.4 Error Type Mapping
+
+The host [MUST] classify provider errors into retry categories using this mapping. Only non-retryable errors reach the per-primitive error policy (see Appendix A, item A.4).
+
+| HTTP status / exception | Error type | Retry behavior |
+|---|---|---|
+| 429 (Too Many Requests) | `rate_limit` | Use `Retry-After` header if present, else exponential backoff. |
+| 408 (Request Timeout), `ETIMEDOUT`, `ECONNRESET` | `timeout` | Exponential backoff, same request. |
+| 500, 502, 503, 504 | `server_error` | Exponential backoff, same request. |
+| 400 (Bad Request) | `invalid_request` | **Not retried** -- propagate immediately. |
+| 401, 403 | `auth_error` | **Not retried** -- propagate immediately. |
+| 404, 422 | `client_error` | **Not retried** -- propagate immediately. |
+| Context length exceeded | `context_overflow` | **Not retried** -- propagate immediately. |
+| Network unreachable, DNS failure | `network_error` | **Not retried** -- propagate immediately. |
+| Provider SDK `RateLimitError` | `rate_limit` | Per `rate_limit` rules above. |
+| Provider SDK `APITimeoutError` | `timeout` | Per `timeout` rules above. |
+| Provider SDK `APIConnectionError` | `server_error` | Per `server_error` rules above. |
+| All other SDK exceptions | `client_error` | **Not retried** -- propagate immediately. |
+
+Rate-limit retries [MUST] use the `Retry-After` header when available. Token budget [MUST NOT] be consumed by failed attempts. Each retry [MUST] be logged in the execution trace.
+
+---
+
+## Appendix D: Template `define-meta` Grammar
+
+### D.1 BNF Grammar
 
 ```bnf
 meta-form    ::= '(' 'define-meta' name value ')'
@@ -109,1209 +580,118 @@ name         ::= symbol
 value        ::= atom | quoted-list
 atom         ::= string | number | boolean
 boolean      ::= '#t' | '#f'
-quoted-list  ::= "'" s-expr
+quoted-list  ::= \"'\" s-expr
 s-expr       ::= atom | '(' s-expr* ')' | '(' s-expr '.' s-expr ')'
 ```
 
-The loader recognizes `define-meta` forms at the top level of the template file. Each `define-meta` binding associates a symbol name with a value. Atomic values (strings, numbers, booleans) are stored directly. Quoted lists are stored as Scheme data structures. The loader collects all `define-meta` bindings into a hash table keyed by name; duplicate names are an error.
+The template loader recognizes `define-meta` forms at the top level of the template file. Each `define-meta` binding associates a symbol name with a value. Atomic values (strings, numbers, booleans) are stored directly. Quoted lists are stored as Scheme data structures. The loader collects ALL `define-meta` bindings into a hash table keyed by name; duplicate names [MUST] cause a loader error.
 
-Template metadata includes:
+### D.2 REQUIRED vs OPTIONAL Field Table
 
-- `name` and `version`,
-- supported TaskShape/DataShape combinations,
-- trigger and rejection conditions (quoted Scheme predicates evaluated
-  against classification hints),
-- typed slots with defaults, enums, ranges, required fields, and
-  descriptions (alists instead of JSON Schema),
-- model requirements such as JSON mode or image support,
-- output shape and schema contract (alist notation declaring the structure
-  of the value passed to `finish`),
-- expected call formulas and structural profiles,
-- verification rules and dry-run warnings,
-- `streamable` flag — whether meaningful intermediate results exist
-  (e.g., completed map items),
-- `cacheable` flag — whether LLM call results can be cached across
-  executions for content-addressed reuse,
-- `gates` — declared human-review checkpoints that suspend execution,
-- `budget-policy` — degradation behavior (model switching, checkpoint-and-stop)
-  when the token budget runs low,
-- `uses-llm-generated-code` flag — whether the template uses the code
-  interpreter pattern (`llm-query` → `py-exec`), requiring explicit
-  policy approval.
+| Field | Status | Type | Description |
+|---|---|---|---|
+| `name` | **REQUIRED** | `string` | Template name. [MUST] match the filename stem. |
+| `version` | **REQUIRED** | `string` | Semver version string. |
+| `task-shapes` | **REQUIRED** | `quoted-list` of symbols | TaskShape values this template handles (from ALL 13 values in Appendix A, item A.1). |
+| `data-shapes` | **REQUIRED** | `quoted-list` of symbols | DataShape values this template handles (from ALL 11 values in Appendix A, item A.2). |
+| `slots` | **REQUIRED** | `quoted-list` of alists | Typed slot definitions (see Appendix D, item D.3). |
+| `description` | **REQUIRED** | `string` | Human-readable summary of what the template does. |
+| `trigger` | OPTIONAL | `quoted-list` of predicates | Conditions under which the planner [SHOULD] select this template (see Appendix D, item D.5). |
+| `reject` | OPTIONAL | `quoted-list` of predicates | Conditions under which the planner [MUST NOT] select this template (see Appendix D, item D.5). |
+| `model-requirements` | OPTIONAL | `quoted-list` | Required model capabilities (e.g., `json`, `image`). |
+| `output-schema` | OPTIONAL | `quoted-list` (alist notation) | Declares the structure of the value passed to `finish` (see Appendix D, item D.4). |
+| `structural-profile` | OPTIONAL | `quoted-list` (alist notation) | Expected call formulas, max concurrency, recursive depth. |
+| `expected-calls` | OPTIONAL | `string` | Formula for expected LLM call count (e.g., `\"N + ceil(N/B) + ... + 1\"`). |
+| `streamable` | OPTIONAL | `boolean` | Whether meaningful intermediate results exist. Default: `#f`. |
+| `cacheable` | OPTIONAL | `boolean` | Whether LLM call results can be cached across executions. Default: `#f`. |
+| `gates` | OPTIONAL | `quoted-list` of alists | Declared human-review checkpoints (see Appendix D, item D.6 for example). |
+| `budget-policy` | OPTIONAL | `quoted-list` (alist notation) | Degradation behavior when token budget runs low. |
+| `uses-llm-generated-code` | OPTIONAL | `boolean` | Whether the template uses the code interpreter pattern. Default: `#f`. |
+| `verification-rules` | OPTIONAL | `quoted-list` of symbols | Named verification checks beyond the default ALL 23 checks. |
+| `dry-run-warnings` | OPTIONAL | `quoted-list` | Warnings to surface during dry-run. |
+| `error-policies` | OPTIONAL | `quoted-list` of alists | Per-node error policy declarations. |
+| `examples` | OPTIONAL | `quoted-list` | Example invocations for documentation. |
 
-**Output-schema alist syntax:** Output schemas use alist notation that maps
-1:1 to JSON Schema. Each `(key value)` pair in the alist corresponds to a
-JSON Schema keyword. Nested objects use nested alists. The conversion rule
-is: `'((type object) (properties ((name (type string))))) ` becomes
-`{"type": "object", "properties": {"name": {"type": "string"}}}`. The
-template loader validates structural well-formedness (balanced parens, known
-JSON Schema keywords at the top level: `type`, `properties`, `items`,
-`required`, `enum`, `description`) but does not validate semantic JSON
-Schema correctness — that happens at verification time.
+### D.3 Slot Schema Syntax
 
-The Scheme body uses only:
+Slots are declared as an alist where each entry names a slot and provides constraint pairs. The instantiator [MUST] validate every slot value against these constraints before substitution.
 
-- primitive runtime bindings (section 9),
-- instantiator-owned helper bindings (prefixed with `__`),
-- `{{slot_name}}` markers that the instantiator substitutes before execution.
-
-The planner reads template metadata and fills slots. The instantiator validates
-slot values, substitutes them into the template body, and stores the result
-as an immutable artifact. Agents interact only with templates (via
-`plan_strategy`); instantiation happens internally when they call
-`dry_run_strategy` or `execute_strategy`.
-
-This division is important:
-
-- LLMs choose strategy intent and content slots (template selection + slot
-  filling).
-- Deterministic code validates slots and substitutes them safely
-  (instantiation). No code generation or IR translation is involved.
-- Verification checks the instantiated artifact before real model calls happen.
-
----
-
-## 3. Public MCP API
-
-The greenfield server should expose a small, artifact-based MCP surface (10 tools).
-Instantiation, estimation, and verification happen internally — agents do not
-need separate tools for these steps.
-
-| Tool | Purpose |
-|---|---|
-| `load_context(data, name=None, metadata=None)` | Store input data and metadata; return `context_id`. |
-| `get_context(context_id)` | Inspect metadata and optionally preview stored data. |
-| `plan_strategy(task, context_id=None, hints=None)` | Classify task/data and return `plan_id` plus proposed template invocation. |
-| `dry_run_strategy(plan_id=None, template_invocation=None)` | Instantiate, simulate, and estimate without real LLM calls. Return `dry_run_id`. |
-| `execute_strategy(plan_id=None, template_invocation=None, timeout=None)` | Instantiate, verify, and execute. Return `execution_id`. |
-| `get_execution_trace(execution_id)` | Return call hierarchy, data flow, stdout, errors, token usage, and checkpoints. |
-| `get_status(execution_id=None)` | Return server/runtime/call status. |
-| `cancel_call(call_id=None, execution_id=None)` | Cancel one call or an entire execution. |
-| `resume_execution(execution_id, gate, decision, reason=None)` | Approve or reject a gate to resume or terminate a suspended execution. |
-| `reset_runtime(scope="session")` | Reset sandbox state without deleting durable records by default. |
-
-Target FastMCP function signatures:
-
-```python
-def load_context(
-    data: str,
-    name: str | None = None,
-    metadata_json: str | None = None,
-) -> str: ...
-
-def get_context(
-    context_id: str,
-    include_preview: bool = True,
-    include_data: bool = False,
-) -> str: ...
-
-def plan_strategy(
-    task: str,
-    context_id: str | None = None,
-    hints_json: str | None = None,
-) -> str: ...
-
-def dry_run_strategy(
-    plan_id: str | None = None,
-    template_invocation_json: str | None = None,
-    options_json: str | None = None,
-) -> str: ...
-
-async def execute_strategy(
-    plan_id: str | None = None,
-    template_invocation_json: str | None = None,
-    timeout_seconds: int | None = None,
-    stream: bool = False,
-    policy_json: str | None = None,
-    runtime_options_json: str | None = None,
-    ctx: Context = None,  # FastMCP-injected dependency for notifications, not user-facing
-) -> str: ...
-
-def get_execution_trace(
-    execution_id: str,
-    include_scope_log: bool = True,
-    include_calls: bool = True,
-    include_stdout: bool = True,
-) -> str: ...
-
-def get_status(execution_id: str | None = None) -> str: ...
-
-def cancel_call(
-    call_id: str | None = None,
-    execution_id: str | None = None,
-    reason: str | None = None,
-) -> str: ...
-
-def reset_runtime(scope: str = "session") -> str: ...
-
-async def resume_execution(
-    execution_id: str,
-    gate: str,
-    decision: str,
-    reason: str | None = None,
-) -> str: ...
+```scheme
+(define-meta slots
+  '((slot_name   (type TYPE) [(CONSTRAINT VALUE)] ...)
+    ...))
 ```
 
-`*_json` parameters are JSON strings because MCP clients vary in how reliably
-they support nested structured arguments. The server should parse and validate
-them into typed internal models immediately.
+Supported constraint keys:
 
-At least one of `plan_id` or `template_invocation_json` is required for
-`dry_run_strategy` and `execute_strategy`. If `plan_id` is provided and
-already contains a recommended template invocation, the tool uses it
-directly.
-
-Do not expose these as public tools:
-
-- `execute_scheme(code, ...)`,
-- `dry_run_scheme(code, ...)`,
-- arbitrary raw code import,
-- public unsafe interpolation/overwrite/eval helpers.
-
-Internal test helpers may still invoke lower-level runtime functions, but the
-MCP contract should only expose artifact-based orchestration.
-
----
-
-## 4. MCP Request And Response Schemas
-
-All public MCP tools should return JSON strings. Each response should include a
-stable top-level `status` field so agents can handle errors mechanically.
-
-Common response shape:
-
-```json
-{
-  "status": "ok | warn | error",
-  "id": "optional primary id",
-  "warnings": [],
-  "errors": [],
-  "next_actions": []
-}
-```
-
-Errors should be structured:
-
-```json
-{
-  "status": "error",
-  "error": {
-    "code": "verification_failed",
-    "message": "Artifact failed verification.",
-    "details": {
-      "artifact_id": "art_...",
-      "failed_checks": ["call_count_limit"]
-    },
-    "retryable": false
-  }
-}
-```
-
-### 4.1 `load_context`
-
-Purpose: store input data and metadata so plans reference data by ID instead of
-copying it through every tool call.
-
-Request:
-
-```json
-{
-  "data": "string | JSON-serializable value",
-  "name": "optional human-readable name",
-  "metadata": {
-    "data_shape": "FlatList | Hierarchy | Singular | ChunkedSingular | Graph | TimeSeries | Tabular | Multimodal | Paired | KeyValue | Unknown",
-    "item_count": 100,
-    "item_size_estimate_tokens": 500,
-    "total_size_estimate_tokens": 50000,
-    "independent": true,
-    "ordered": false,
-    "modality": ["text"],
-    "chunking": {
-      "chunk_count": 100,
-      "overlap_tokens": 100,
-      "boundary": "paragraph"
-    },
-    "source": {
-      "kind": "inline | file | url | generated",
-      "uri": "optional source identifier"
-    },
-    "schema": {
-      "type": "optional JSON schema or table schema"
-    }
-  }
-}
-```
-
-Response:
-
-```json
-{
-  "status": "ok",
-  "context_id": "ctx_01HX...",
-  "name": "papers",
-  "metadata": {
-    "data_shape": "FlatList",
-    "item_count": 100,
-    "total_size_estimate_tokens": 50000,
-    "independent": true,
-    "modality": ["text"]
-  },
-  "preview": "first 500 characters or structured preview",
-  "next_actions": [
-    "Call plan_strategy with context_id=ctx_01HX..."
-  ]
-}
-```
-
-### 4.2 `get_context`
-
-Request:
-
-```json
-{
-  "context_id": "ctx_01HX...",
-  "include_preview": true,
-  "include_data": false
-}
-```
-
-Response:
-
-```json
-{
-  "status": "ok",
-  "context": {
-    "context_id": "ctx_01HX...",
-    "name": "papers",
-    "created_at": "2026-06-03T12:00:00Z",
-    "metadata": {},
-    "preview": "...",
-    "data_hash": "sha256:..."
-  }
-}
-```
-
-`include_data=true` should be allowed only for contexts under 100 KB
-(serialized JSON size) or when the caller sets an explicit debug flag.
-Large context retrieval should default to previews and metadata. The server
-returns `"data_too_large": true` in the response when `include_data=true`
-is requested but the context exceeds 100 KB, and omits the data field.
-
-### 4.3 `plan_strategy`
-
-Purpose: classify task/data, choose a template, and persist a planning record.
-
-Request:
-
-```json
-{
-  "task": "Analyze every paper for ACE2 mentions and synthesize findings.",
-  "context_id": "ctx_01HX...",
-  "hints": {
-    "task_shape": null,
-    "data_shape": "FlatList",
-    "item_count": 100,
-    "independent": true,
-    "output_type": "one",
-    "operation": "extract_then_synthesize",
-    "has_second_phase": true,
-    "sub_operations": ["extract", "synthesize"],
-    "priority": "balanced",
-    "latency_priority": "medium",
-    "quality_priority": "high",
-    "budget_limit_usd": 5.0,
-    "max_concurrent": 20,
-    "preferred_models": {
-      "map": "fast_text_model",
-      "reduce": "quality_text_model"
-    }
-  }
-}
-```
-
-Response:
-
-```json
-{
-  "status": "ok",
-  "plan_id": "plan_01HX...",
-  "classification": {
-    "task_shape": "Composite",
-    "constituent_shapes": ["Batch", "Synthesize"],
-    "data_shape": "FlatList",
-    "confidence": 0.92,
-    "rationale": "Independent per-paper extraction followed by one synthesis output."
-  },
-  "recommended": {
-    "kind": "template_invocation",
-    "template_name": "batch_extract_reduce",
-    "template_version": "1.0.0",
-    "slot_values": {
-      "context_id": "ctx_01HX...",
-      "map_instruction": "Extract ACE2 mentions, evidence, and uncertainty as JSON.",
-      "reduce_instruction": "Synthesize ACE2 findings into a concise report.",
-      "map_model": "fast_text_model",
-      "reduce_model": "quality_text_model",
-      "max_concurrent": 20,
-      "branch_factor": 5,
-      "json_mode": true
-    }
-  },
-  "alternatives": [
-    {
-      "template_name": "batch_extract_fold",
-      "tradeoff": "Preserves order but has higher latency."
-    }
-  ],
-  "next_actions": [
-    "Call dry_run_strategy(plan_id=plan_01HX...)",
-    "Call execute_strategy(plan_id=plan_01HX...)"
-  ]
-}
-```
-
-For Composite tasks, `plan_strategy` can return a template chain instead of a
-single template invocation:
-
-```json
-{
-  "status": "ok",
-  "plan_id": "plan_01HX...",
-  "classification": {
-    "task_shape": "Composite",
-    "constituent_shapes": ["Batch", "Synthesize"],
-    "data_shape": "FlatList",
-    "confidence": 0.95
-  },
-  "recommended": {
-    "kind": "template_chain",
-    "steps": [
-      {
-        "template_name": "batch_map",
-        "template_version": "1.0.0",
-        "slot_values": {
-          "context_id": "ctx_01HX...",
-          "map_instruction": "Extract ACE2 mentions as JSON.",
-          "map_model": "fast_text_model",
-          "max_concurrent": 20,
-          "json_mode": true
-        }
-      },
-      {
-        "template_name": "tree_synthesis",
-        "template_version": "1.0.0",
-        "slot_values": {
-          "input": "$previous",
-          "reduce_instruction": "Synthesize findings into a report.",
-          "reduce_model": "quality_text_model",
-          "branch_factor": 5
-        }
-      }
-    ]
-  },
-  "next_actions": [
-    "Call dry_run_strategy(plan_id=plan_01HX...)"
-  ]
-}
-```
-
-`$previous` in a step's `slot_values` resolves to the output of the preceding
-step, stored automatically as an intermediate context during execution. See
-section 11.8 for full chain execution semantics, including failure handling,
-gates in chains, and dry-run behavior.
-
-Planner output must not include raw Scheme. If no template fits, the planner
-returns a structured `no_template` response:
-
-```json
-{
-  "status": "no_template",
-  "plan_id": "plan_01HX...",
-  "classification": {
-    "task_shape": "Pipeline",
-    "data_shape": "TimeSeries",
-    "confidence": 0.85
-  },
-  "recommendation": {
-    "description": "No existing template handles Pipeline tasks over TimeSeries data with causal dependencies.",
-    "needed_template": {
-      "task_shapes": ["Pipeline"],
-      "data_shapes": ["TimeSeries"],
-      "primitives_likely": ["fold-sequential", "py-exec"],
-      "slot_suggestions": ["window_size", "causal_model"]
-    }
-  },
-  "next_actions": [
-    "Create a new template matching the recommendation above.",
-    "Or reclassify the task with different hints."
-  ]
-}
-```
-
-### 4.4 `dry_run_strategy`
-
-Purpose: instantiate a plan or template invocation into an artifact, simulate
-execution, and return the dry-run results along with cost estimates and
-artifact details — all in one call.
-
-Internally, this tool:
-
-1. Instantiates the template invocation (validates slots, substitutes `{{slot}}`
-   markers, hashes, stores the artifact record).
-2. Computes a static cost estimate from the structural profile.
-3. Simulates execution with mock LLM responses.
-
-If instantiation fails (invalid slots, unknown template, remaining markers),
-the tool returns a structured error. The agent does not need to handle
-instantiation as a separate step.
-
-Request:
-
-```json
-{
-  "plan_id": "plan_01HX...",
-  "template_invocation": null,
-  "options": {
-    "mock_prefix": "[dry-run]",
-    "deterministic_await_any": true,
-    "max_simulated_items": 1000,
-    "assumptions": {
-      "item_count": 100,
-      "avg_input_tokens": 800,
-      "avg_output_tokens": 250
-    }
-  }
-}
-```
-
-At least one of `plan_id` or `template_invocation` is required. If `plan_id`
-is provided and already contains a recommended template invocation, the tool
-uses it directly. `template_invocation` overrides the plan's recommendation.
-
-Response:
-
-```json
-{
-  "status": "ok",
-  "dry_run_id": "dry_01HX...",
-  "plan_id": "plan_01HX...",
-  "artifact": {
-    "artifact_id": "art_01HX...",
-    "template_name": "batch_extract_reduce",
-    "template_version": "1.0.0",
-    "code_hash": "sha256:...",
-    "primitives_used": ["map-async", "tree-reduce", "llm-query-async", "llm-query"]
-  },
-  "estimate": {
-    "expected_llm_calls": 125,
-    "critical_path_calls": 4,
-    "max_concurrency": 20,
-    "models": {
-      "fast_text_model": 100,
-      "quality_text_model": 25
-    },
-    "estimated_tokens": {
-      "prompt": 100000,
-      "completion": 31250,
-      "total": 131250
-    },
-    "estimated_cost_usd": {
-      "low": 1.20,
-      "high": 3.50
-    }
-  },
-  "simulation": {
-    "llm_calls": 125,
-    "max_concurrency": 20,
-    "recursive_depth": 0,
-    "critical_path_calls": 4,
-    "checkpoints": 0,
-    "python_phases": 0
-  },
-  "call_graph": [
-    {
-      "node_id": "map.extract",
-      "primitive": "map-async",
-      "calls": 100,
-      "model": "fast_text_model",
-      "concurrency": 20
-    },
-    {
-      "node_id": "reduce.synthesize",
-      "primitive": "tree-reduce",
-      "calls": 25,
-      "model": "quality_text_model",
-      "branch_factor": 5
-    }
-  ],
-  "warnings": [],
-  "next_actions": [
-    "Call execute_strategy(plan_id=plan_01HX...)"
-  ]
-}
-```
-
-The response also includes `output_schema` from the template's `define-meta`
-when present, and `cache_hits_expected` when a matching artifact from a prior
-execution is found in the LLM result cache.
-
-For template chains, the dry-run response includes a `steps` array with
-per-step estimates and validates that each step's output schema is compatible
-with the next step's input expectations. Aggregate totals (`total_estimated_llm_calls`,
-`total_estimated_cost_usd`) cover the entire chain.
-
-### 4.5 `execute_strategy`
-
-Purpose: instantiate (if not already instantiated), verify against policy, and execute
-the strategy — all in one call.
-
-Internally, this tool:
-
-1. Instantiates the template invocation (validates slots, substitutes markers,
-   hashes). If the same artifact was already instantiated (e.g. by a prior
-   dry run), the cached artifact is reused automatically via hash match.
-2. Runs verification checks automatically (hash integrity, primitive
-   allowlist, policy limits). If verification fails, returns a structured
-   error — the agent does not call a separate verify tool.
-3. Executes the instantiated Scheme in the sandbox.
-
-Request:
-
-```json
-{
-  "plan_id": "plan_01HX...",
-  "template_invocation": null,
-  "timeout_seconds": 900,
-  "runtime_options": {
-    "progress_interval_seconds": 2,
-    "checkpoint_prefix": "ace2-run",
-    "max_stdout_chars": 4000
-  },
-  "policy": {
-    "max_llm_calls": 500,
-    "max_concurrency": 50,
-    "max_recursive_depth": 3,
-    "allow_python_bridge": true,
-    "allow_multimodal": true
-  }
-}
-```
-
-At least one of `plan_id` or `template_invocation` is required. If `policy`
-is omitted, server defaults apply.
-
-Response:
-
-```json
-{
-  "status": "ok",
-  "execution_id": "exec_01HX...",
-  "artifact_id": "art_01HX...",
-  "verification": {
-    "verification_id": "ver_01HX...",
-    "decision": "pass",
-    "checks": [
-      {
-        "name": "artifact_hash",
-        "status": "pass",
-        "message": "Generated code hash matches stored artifact."
-      },
-      {
-        "name": "primitive_allowlist",
-        "status": "pass",
-        "message": "Only primitive runtime names are used."
-      },
-      {
-        "name": "policy_limits",
-        "status": "pass",
-        "message": "Estimated calls (125) within limit (500)."
-      }
-    ]
-  },
-  "result": {
-    "value": "final answer or JSON value",
-    "stdout": "optional truncated stdout"
-  },
-  "execution": {
-    "state": "finished",
-    "elapsed_seconds": 182.4,
-    "llm_calls": 125,
-    "tokens": 131250,
-    "models": {
-      "fast_text_model": 100,
-      "quality_text_model": 25
-    },
-    "checkpoints_written": 0
-  },
-  "next_actions": [
-    "Call get_execution_trace(execution_id=exec_01HX...)"
-  ]
-}
-```
-
-If verification fails, the response has `status: "verification_failed"` with
-the failing checks and no execution is attempted. The agent can adjust
-policy limits or the template invocation and retry.
-
-**Streaming:** When `stream=true`, the server emits `notifications/partial_result`
-messages during execution:
-
-```json
-{
-  "type": "notifications/partial_result",
-  "execution_id": "exec_01HX...",
-  "node_id": "extract",
-  "primitive": "map-async",
-  "item_index": 42,
-  "items_completed": 43,
-  "items_total": 100,
-  "value": "{ ... extracted data ... }"
-}
-```
-
-The final response still contains the complete result. Agents that don't
-support notifications get the same behavior as without streaming.
-
-**Gates:** If the template declares a gate and execution reaches it, the response
-returns early with `"state": "awaiting_gate"`:
-
-```json
-{
-  "status": "ok",
-  "execution_id": "exec_01HX...",
-  "execution": {
-    "state": "awaiting_gate",
-    "gate": {
-      "name": "review_extractions",
-      "message": "Review 100 extractions before synthesis.",
-      "value_preview": "[{\"paper_id\":\"paper_001\",...}, ...]"
-    }
-  },
-  "next_actions": [
-    "Call resume_execution(execution_id=exec_01HX..., gate=review_extractions, decision=approve)"
-  ]
-}
-```
-
-The agent or human reviews the gate data and calls `resume_execution` to continue
-or reject. See section 4.9.
-
-**Cache and budget metrics:** The execution response `metrics` object also includes
-`cache_hits` (number of LLM calls satisfied from cross-execution cache) and
-`budget_policy_activations` (number of times the budget policy triggered, e.g.
-model switching or checkpoint-and-stop).
-
-### 4.6 `get_execution_trace`
-
-Request:
-
-```json
-{
-  "execution_id": "exec_01HX...",
-  "include_scope_log": true,
-  "include_calls": true,
-  "include_stdout": true
-}
-```
-
-Response:
-
-```json
-{
-  "status": "ok",
-  "execution_id": "exec_01HX...",
-  "trace": {
-    "artifact_id": "art_01HX...",
-    "plan_id": "plan_01HX...",
-    "events": [
-      {
-        "type": "llm_call_started",
-        "call_id": "call_001",
-        "node_id": "map.extract",
-        "model": "fast_text_model",
-        "depth": 0
-      }
-    ],
-    "scope_log": [
-      {
-        "op": "syntax-e",
-        "preview": "extracted result...",
-        "scope": "sandbox",
-        "call_id": "call_001"
-      }
-    ],
-    "stdout": ""
-  }
-}
-```
-
-### 4.7 `get_status`
-
-Request:
-
-```json
-{
-  "execution_id": "exec_01HX..."
-}
-```
-
-Response:
-
-```json
-{
-  "status": "ok",
-  "runtime": {
-    "racket_alive": true,
-    "python_bridge_alive": true,
-    "sandbox_memory_limit_mb": 256
-  },
-  "active_calls": [
-    {
-      "call_id": "call_001",
-      "execution_id": "exec_01HX...",
-      "type": "async",
-      "model": "fast_text_model",
-      "elapsed_seconds": 12.3,
-      "depth": 0,
-      "instruction_preview": "Extract ACE2..."
-    }
-  ],
-  "token_usage": {
-    "prompt_tokens": 10000,
-    "completion_tokens": 2500,
-    "total_tokens": 12500,
-    "calls": 10
-  },
-  "rate_limits": {
-    "remaining_requests": 490,
-    "remaining_tokens": 900000,
-    "reset_requests": "..."
-  }
-}
-```
-
-### 4.8 `cancel_call`
-
-Request:
-
-```json
-{
-  "call_id": "call_001",
-  "execution_id": null,
-  "reason": "user requested cancellation"
-}
-```
-
-Response:
-
-```json
-{
-  "status": "ok",
-  "cancelled": {
-    "call_ids": ["call_001"],
-    "execution_id": "exec_01HX..."
-  }
-}
-```
-
-If `execution_id` is provided, cancel all active and queued calls for that
-execution and mark the execution as `cancelled`.
-
-### 4.9 `resume_execution`
-
-Purpose: approve or reject a gate to resume or terminate a suspended execution.
-
-Request:
-
-```json
-{
-  "execution_id": "exec_01HX...",
-  "gate": "review_extractions",
-  "decision": "approve",
-  "reason": null
-}
-```
-
-Response (approved — execution resumes and completes):
-
-```json
-{
-  "status": "ok",
-  "execution_id": "exec_01HX...",
-  "gate": {
-    "name": "review_extractions",
-    "decision": "approve",
-    "resumed_at": "2026-06-03T12:06:00Z"
-  },
-  "result": {
-    "value": "final synthesized report...",
-    "stdout": ""
-  },
-  "execution": {
-    "state": "finished",
-    "elapsed_seconds": 195.1,
-    "llm_calls": 125,
-    "tokens": 131250
-  }
-}
-```
-
-Response (rejected — execution terminates):
-
-```json
-{
-  "status": "ok",
-  "execution_id": "exec_01HX...",
-  "gate": {
-    "name": "review_extractions",
-    "decision": "reject",
-    "reason": "Too many false positives in extractions."
-  },
-  "execution": {
-    "state": "gate_rejected",
-    "elapsed_seconds": 90.2,
-    "llm_calls": 100,
-    "tokens": 100000
-  }
-}
-```
-
-If `decision` is `"reject"`, the execution terminates with state `"gate_rejected"`.
-Completed work up to the gate is preserved in the execution record and trace.
-
----
-
-## 5. Durable Record Schemas
-
-The API schemas above are request/response contracts. The server should also
-store durable records with explicit schemas so history, verification, and
-replay are reliable.
-
-**Note on internal records:** Artifact records (5.3) and verification records
-(5.5) are created internally by `dry_run_strategy` and `execute_strategy` —
-there are no dedicated MCP tools for creating them. The `artifact_id` and
-`verification_id` appear in tool responses for traceability and are stored
-durably for audit/replay, but agents never create or pass them as primary
-inputs.
-
-### 5.1 Context Record
-
-```json
-{
-  "context_id": "ctx_01HX...",
-  "schema_version": "1",
-  "name": "papers",
-  "created_at": "2026-06-03T12:00:00Z",
-  "data_ref": {
-    "storage": "filesystem",
-    "path": "contexts/ctx_01HX/data.json",
-    "hash": "sha256:...",
-    "bytes": 1234567
-  },
-  "metadata": {
-    "data_shape": "FlatList",
-    "item_count": 100,
-    "independent": true,
-    "ordered": false,
-    "modality": ["text"],
-    "total_size_estimate_tokens": 50000
-  }
-}
-```
-
-### 5.2 Plan Record
-
-```json
-{
-  "plan_id": "plan_01HX...",
-  "schema_version": "1",
-  "created_at": "2026-06-03T12:01:00Z",
-  "context_ids": ["ctx_01HX..."],
-  "task": "Analyze every paper for ACE2 mentions and synthesize findings.",
-  "hints": {},
-  "classification": {
-    "task_shape": "Composite",
-    "constituent_shapes": ["Batch", "Synthesize"],
-    "data_shape": "FlatList",
-    "confidence": 0.92
-  },
-  "recommended": {
-    "kind": "template_invocation",
-    "template_name": "batch_extract_reduce",
-    "template_version": "1.0.0",
-    "slot_values": {}
-  },
-  "alternatives": [],
-  "planner": {
-    "mode": "deterministic_with_llm_fill",
-    "model": "quality_text_model",
-    "prompt_hash": "sha256:..."
-  }
-}
-```
-
-### 5.3 Artifact Record
-
-```json
-{
-  "artifact_id": "art_01HX...",
-  "schema_version": "1",
-  "created_at": "2026-06-03T12:02:00Z",
-  "plan_id": "plan_01HX...",
-  "context_ids": ["ctx_01HX..."],
-  "source_type": "template_invocation",
-  "template_name": "batch_extract_reduce",
-  "template_version": "1.0.0",
-  "slot_values": {},
-  "instantiator": {
-    "name": "rlm-scheme-template-instantiator",
-    "version": "0.1.0"
-  },
-  "generated_scheme_ref": {
-    "path": "artifacts/art_01HX/program.rkt",
-    "hash": "sha256:..."
-  },
-  "primitives_used": ["map-async", "tree-reduce"],
-  "static_profile": {
-    "expected_calls_formula": "N + ceil(N/B) + ... + 1",
-    "max_concurrency": 20,
-    "recursive_depth": 0
-  }
-}
-```
-
-Artifacts should be immutable. Any edit creates a new `artifact_id`. Since
-templates are Scheme, the artifact's `generated_scheme_ref` points to the
-template with all `{{slot}}` markers replaced — no intermediate
-representation is stored.
-
-### 5.4 Dry-Run Record
-
-```json
-{
-  "dry_run_id": "dry_01HX...",
-  "schema_version": "1",
-  "created_at": "2026-06-03T12:03:00Z",
-  "artifact_id": "art_01HX...",
-  "mode": "deterministic",
-  "summary": {
-    "llm_calls": 125,
-    "max_concurrency": 20,
-    "recursive_depth": 0,
-    "critical_path_calls": 4
-  },
-  "call_graph": [],
-  "warnings": []
-}
-```
-
-### 5.5 Verification Record
-
-```json
-{
-  "verification_id": "ver_01HX...",
-  "schema_version": "1",
-  "created_at": "2026-06-03T12:04:00Z",
-  "artifact_id": "art_01HX...",
-  "dry_run_id": "dry_01HX...",
-  "decision": "pass | warn | fail",
-  "policy": {},
-  "checks": [
-    {
-      "name": "primitive_allowlist",
-      "status": "pass",
-      "message": "Only primitive runtime bindings used."
-    }
-  ],
-  "warnings": [],
-  "errors": []
-}
-```
-
-### 5.6 Execution Record
-
-```json
-{
-  "execution_id": "exec_01HX...",
-  "schema_version": "1",
-  "created_at": "2026-06-03T12:05:00Z",
-  "completed_at": "2026-06-03T12:08:00Z",
-  "state": "queued | running | finished | failed | cancelled | awaiting_gate | gate_rejected",
-  "artifact_id": "art_01HX...",
-  "plan_id": "plan_01HX...",
-  "verification_id": "ver_01HX...",
-  "result_ref": {
-    "path": "executions/exec_01HX/result.json",
-    "hash": "sha256:..."
-  },
-  "trace_ref": {
-    "path": "executions/exec_01HX/trace.jsonl"
-  },
-  "metrics": {
-    "elapsed_seconds": 182.4,
-    "llm_calls": 125,
-    "tokens": 131250,
-    "max_concurrency_observed": 20
-  },
-  "error": null
-}
-```
-
-**State transitions:**
-
-| From | To | Trigger |
+| Key | Values | Description |
 |---|---|---|
-| `queued` | `running` | Executor picks up the execution |
-| `running` | `finished` | `finish` primitive completes successfully |
-| `running` | `failed` | Unhandled error propagates to top level |
-| `running` | `cancelled` | `cancel_call(execution_id=...)` received |
-| `running` | `awaiting_gate` | `gate` primitive fires |
-| `awaiting_gate` | `running` | `resume_execution(decision="approve")` |
-| `awaiting_gate` | `gate_rejected` | `resume_execution(decision="reject")` |
-| `awaiting_gate` | `cancelled` | `cancel_call(execution_id=...)` while suspended |
+| `type` | `string`, `integer`, `number`, `boolean` | [REQUIRED] Slot value type. |
+| `required` | `#t`, `#f` | Whether the slot [MUST] be provided. Default: `#f`. |
+| `default` | any | Default value when slot is not provided. |
+| `min` | number | Minimum value (for `integer` and `number` types). |
+| `max` | number | Maximum value (for `integer` and `number` types). |
+| `min-length` | integer | Minimum string length (for `string` type). |
+| `max-length` | integer | Maximum string length (for `string` type). |
+| `pattern` | string (regex) | Regex pattern the value [MUST] match (for `string` type). |
+| `enum` | quoted list | Allowed values (for `string` type). |
+| `nullable` | `#t`, `#f` | Whether `#f`/null is acceptable. Default: `#f`. |
+| `description` | string | Human-readable description for planner context. |
 
-Terminal states: `finished`, `failed`, `cancelled`, `gate_rejected`. No
-transitions out of terminal states. An execution in `awaiting_gate` that
-receives no `resume_execution` remains suspended indefinitely (see gate
-timeout decision in section 20).
-
-Additional fields for advanced features:
-
-- `gates`: array of gate records `[{"name": "...", "status": "pending | approved | rejected", "decided_at": "...", "reason": "..."}]`
-- `cache_hits`: integer count of LLM calls served from cross-execution cache
-- `budget_policy_activations`: integer count of times budget policy triggered (model switch, checkpoint-and-stop)
-- `chain_step_results`: array of per-step results for chain executions (intermediate context IDs and step outcomes)
-
-### 5.7 Cache Record
-
-```json
-{
-  "cache_key": "sha256:...",
-  "schema_version": "1",
-  "created_at": "2026-06-03T12:05:30Z",
-  "instruction_hash": "sha256:...",
-  "data_hash": "sha256:...",
-  "model": "fast_text_model",
-  "temperature": 0,
-  "json_mode": false,
-  "result": "...",
-  "result_tokens": {
-    "prompt": 1000,
-    "completion": 250,
-    "total": 1250
-  },
-  "source_execution_id": "exec_01HX...",
-  "source_call_id": "call_042"
-}
-```
-
-Cache records are content-addressed: `cache_key = sha256(instruction + data +
-model + temperature + json_mode)`. Same inputs always produce the same key.
-Cache entries are immutable — a hit returns the stored result without calling
-the provider.
-
-Temperature > 0 calls are not cached by default (non-deterministic output).
-Templates can override this with `cacheable: #t` in their metadata when
-non-determinism is acceptable for caching (e.g., the template handles
-variability via validation).
-
----
-
-## 6. Slot Substitution Model
-
-Templates are Scheme files with `{{slot_name}}` markers. The instantiator fills
-these markers with concrete values to produce executable artifacts. There is
-no intermediate node graph or resolved template representation.
-
-### Slot Markers
-
-Slots use double-brace syntax: `{{slot_name}}`. The instantiator substitutes
-each marker with the corresponding value from the template invocation's
-`slot_values`. Markers can appear anywhere in the Scheme body where a
-literal value would be valid:
-
-- String positions: `#:instruction {{map_instruction}}` → `#:instruction "Extract ACE2 mentions..."`
-- Numeric positions: `#:max-concurrent {{max_concurrent}}` → `#:max-concurrent 20`
-- Boolean positions: `#:json {{json_mode}}` → `#:json #t`
-- Identifier positions: `#:model {{map_model}}` → `#:model "fast_text_model"`
-
-### Substitution Rules
-
-1. All `{{slot}}` markers must have corresponding values in `slot_values`.
-   Missing required slots are instantiation errors.
-2. Slot values are type-checked against the template's `slot_schema` before
-   substitution.
-3. String values are escaped and quoted. Numeric and boolean values are
-   inserted as Scheme literals. Context IDs are inserted as quoted strings.
-4. Substitution is safe — values cannot inject arbitrary Scheme code. The
-   instantiator rejects slot values that contain unbalanced parentheses, Scheme
-   keywords, or other code injection attempts.
-5. After substitution, the result must be syntactically valid Scheme that
-   uses only primitive runtime bindings and instantiator-owned helpers.
-
-### Context References
-
-Templates access loaded context data via the `__context-ref` helper:
+Example:
 
 ```scheme
-(define items (__context-ref "{{context_id}}" "{{items_path}}"))
+(define-meta slots
+  '((context_id         (type string) (pattern \"^ctx_\") (required #t))
+    (items_path         (type string) (default \"$\"))
+    (map_instruction    (type string) (min-length 10) (required #t))
+    (reduce_instruction (type string) (min-length 10) (required #t))
+    (map_model          (type string) (default \"fast_text_model\"))
+    (reduce_model       (type string) (default \"quality_text_model\"))
+    (max_concurrent     (type integer) (min 1) (max 50) (default 20))
+    (branch_factor      (type integer) (min 2) (max 10) (default 5))
+    (json_mode          (type boolean) (default #f))
+    (checkpoint_every   (type integer) (nullable #t) (min 1) (default #f))))
 ```
 
-`__context-ref` takes a context ID and a JSONPath expression
-([RFC 9535](https://www.rfc-editor.org/rfc/rfc9535)) and returns the
-extracted data at runtime. The instantiator validates that `context_id` slots
-contain valid context ID patterns and that `items_path` slots contain valid
-JSONPath expressions.
+### D.4 Output-Schema Alist Syntax
 
-### Allowed Primitives In Templates
+Output schemas use alist notation that maps 1:1 to JSON Schema. Each `(key value)` pair corresponds to a JSON Schema keyword. Nested objects use nested alists.
 
-Template bodies may only use the primitive runtime bindings listed in
-section 9. Specifically:
+Conversion rule: the alist `'((type object) (properties ((name (type string)))))` becomes `{\"type\": \"object\", \"properties\": {\"name\": {\"type\": \"string\"}}}`.
 
-- LLM calls: `llm-query`, `llm-query-async`
-- Await: `await`, `await-all`, `await-any`
-- Parallel: `map-async`, `parallel`, `race`
-- Reduction: `tree-reduce`, `fold-sequential`
-- Control: `sequence`, `choose`, `iterate-until`
-- Delegation: `recursive-spawn`
-- Modifiers: `memoized`, `with-validation`, `try-fallback`
-- State: `checkpoint`, `restore`, `tokens-used`, `rate-limits`, `heartbeat`
-- Compute: `py-exec`, `py-eval`, `py-call`, `py-set!`
-- Helpers: `__context-ref`, `__join-json`, `finish`, `syntax-e`, `datum->syntax`
+The template loader [MUST] validate structural well-formedness (balanced parens, known JSON Schema keywords at the top level: `type`, `properties`, `items`, `required`, `enum`, `description`). Semantic JSON Schema correctness is validated at verification time.
 
-Explicitly disallowed in templates:
-
-- any name not in the primitive runtime basis (section 9),
-- string `eval`,
-- shell commands,
-- filesystem access outside declared context/artifact/checkpoint stores.
-
----
-
-## 7. Example Template
-
-Templates are `.rkt` files with `define-meta` forms for metadata and Scheme
-code for the executable body — one language throughout.
-
-File:
-
-```text
-templates/batch_extract_reduce.rkt
-```
-
-Template:
+Example:
 
 ```scheme
-;; --- Metadata ---
+(define-meta output-schema
+  '((type object)
+    (properties
+      ((findings (type array)
+                 (items ((type object)
+                         (properties
+                           ((paper_id (type string))
+                            (ace2_mentions (type array))
+                            (evidence (type string))
+                            (uncertainty (type string)))))))
+       (summary (type string))))))
+```
 
-(define-meta name "batch_extract_reduce")
-(define-meta version "1.0.0")
-(define-meta summary
-  "Run independent extraction over many items, then synthesize results with tree reduction.")
-(define-meta task-shapes '(Batch Synthesize Composite))
-(define-meta data-shapes '(FlatList ChunkedSingular Tabular))
-(define-meta output-shape 'one)
+### D.5 Trigger and Reject Rule Evaluation
 
+Predicates in `trigger` and `reject` are evaluated in an environment where each classification hint field is bound as a variable: `item_count`, `independent`, `output_type`, `has_second_phase`, `ordered`, `modality`, `operation`, `sub_operations`, `requires_pairwise_comparison`, `order_sensitive`, and any other hint fields the agent provides.
+
+**Evaluation rules:**
+
+- Missing hints are bound to `#f`.
+- **Trigger** conditions use implicit AND: ALL predicates [MUST] return `#t` for the template to match.
+- **Reject** conditions use implicit OR: ANY predicate returning `#t` disqualifies the template.
+- Predicates that reference a potentially missing hint [SHOULD] handle the `#f` case, e.g., `(and ordered (eq? order_sensitive #t))` short-circuits to `#f` when `ordered` is missing.
+
+Example:
+
+```scheme
 (define-meta trigger
   '((> item_count 1)
     (eq? independent #t)
@@ -1323,46 +703,61 @@ Template:
     (eq? requires_pairwise_comparison #t)))
 ```
 
-**Trigger/reject evaluation context:** Predicates are evaluated in an
-environment where each classification hint field is bound as a variable:
-`item_count`, `independent`, `output_type`, `has_second_phase`, `ordered`,
-`modality`, `operation`, `sub_operations`, `requires_pairwise_comparison`,
-`order_sensitive`, and any other hint fields the agent provides. Missing
-hints are bound to `#f`. Trigger conditions use implicit AND — all
-predicates must return `#t` for the template to match. Reject conditions
-use implicit OR — any predicate returning `#t` disqualifies the template.
-Predicates that reference a potentially missing hint should be written to
-handle the `#f` case, e.g., `(and ordered (eq? order_sensitive #t))`
-short-circuits to `#f` when `ordered` is missing.
+### D.6 Reference Example Template
+
+A complete `define-meta` block with ALL 6 REQUIRED fields and representative OPTIONAL fields:
 
 ```scheme
+;; --- Metadata (ALL 6 REQUIRED fields) ---
+
+(define-meta name \"batch_extract_reduce\")
+(define-meta version \"1.0.0\")
+(define-meta description
+  \"Run independent extraction over many items, then synthesize results with tree reduction.\")
+(define-meta task-shapes '(Batch Synthesize Composite))
+(define-meta data-shapes '(FlatList ChunkedSingular Tabular))
+
 (define-meta slots
-  '((context_id         (type string) (pattern "^ctx_") (required #t))
-    (items_path         (type string) (default "$"))
-    (map_instruction    (type string) (min-length 10) (required #t))
-    (reduce_instruction (type string) (min-length 10) (required #t))
-    (map_model          (type string) (default "fast_text_model"))
-    (reduce_model       (type string) (default "quality_text_model"))
-    (max_concurrent     (type integer) (min 1) (max 50) (default 20))
-    (branch_factor      (type integer) (min 2) (max 10) (default 5))
-    (json_mode          (type boolean) (default #f))
-    (checkpoint_every   (type integer) (nullable #t) (min 1) (default #f))))
+  '((context_id         (type string) (pattern \"^ctx_\") (required #t)
+                        (description \"ID of the loaded context containing items.\"))
+    (items_path         (type string) (default \"$\")
+                        (description \"JSONPath to extract items from context.\"))
+    (map_instruction    (type string) (min-length 10) (required #t)
+                        (description \"Instruction for per-item extraction.\"))
+    (reduce_instruction (type string) (min-length 10) (required #t)
+                        (description \"Instruction for synthesis/reduction.\"))
+    (map_model          (type string) (default \"fast_text_model\")
+                        (description \"Model alias for map phase.\"))
+    (reduce_model       (type string) (default \"quality_text_model\")
+                        (description \"Model alias for reduce phase.\"))
+    (max_concurrent     (type integer) (min 1) (max 50) (default 20)
+                        (description \"Maximum parallel map calls.\"))
+    (branch_factor      (type integer) (min 2) (max 10) (default 5)
+                        (description \"Tree-reduce branching factor.\"))
+    (json_mode          (type boolean) (default #f)
+                        (description \"Whether to request JSON output from map calls.\"))
+    (checkpoint_every   (type integer) (nullable #t) (min 1) (default #f)
+                        (description \"Checkpoint after every N map items. Null disables.\"))))
+
+;; --- OPTIONAL metadata ---
+
+(define-meta trigger
+  '((> item_count 1)
+    (eq? independent #t)
+    (eq? output_type 'one)
+    (eq? has_second_phase #t)))
+
+(define-meta reject
+  '((and (eq? ordered #t) (eq? order_sensitive #t))
+    (eq? requires_pairwise_comparison #t)))
 
 (define-meta structural-profile
-  '((expected-calls "N + ceil(N/B) + ceil(ceil(N/B)/B) + ... + 1")
-    (critical-path  "1 + ceil(log_B(N))")
+  '((expected-calls \"N + ceil(N/B) + ceil(ceil(N/B)/B) + ... + 1\")
+    (critical-path  \"1 + ceil(log_B(N))\")
     (max-concurrency-slot max_concurrent)
     (recursive-depth 0)
     (uses-python-bridge #f)
     (uses-multimodal #f)))
-
-(define-meta verification-rules
-  '(context_id_exists
-    items_path_resolves_to_list
-    map_model_supports_json_if_json_mode
-    expected_calls_within_policy
-    max_concurrency_within_policy
-    only_primitive_bindings))
 
 (define-meta output-schema
   '((type object)
@@ -1376,34 +771,44 @@ short-circuits to `#f` when `ordered` is missing.
                             (uncertainty (type string)))))))
        (summary (type string))))))
 
+(define-meta verification-rules
+  '(context_id_exists
+    items_path_resolves_to_list
+    map_model_supports_json_if_json_mode
+    expected_calls_within_policy
+    max_concurrency_within_policy
+    only_primitive_bindings))
+
 (define-meta streamable #t)
 (define-meta cacheable #t)
 
 (define-meta budget-policy
   '((on-low-budget   switch-model)
     (low-budget-threshold 0.20)
-    (fallback-model  "fast_text_model")
+    (fallback-model  \"fast_text_model\")
     (on-exhausted    checkpoint-and-stop)))
 
 (define-meta gates
   '((review_extractions
-      (description "Review extraction results before synthesis")
+      (description \"Review extraction results before synthesis\")
       (required #f))))
 
 (define-meta uses-llm-generated-code #f)
 
+(define-meta error-policies
+  '((extract    (on-error fail_fast) (checkpoint-every 25))
+    (synthesize (on-error fail_fast))))
+
 (define-meta examples
-  '(((task "Extract claims from papers and synthesize a literature review.")
+  '(((task \"Extract claims from papers and synthesize a literature review.\")
      (slot_values
-       (items_path "$.papers")
-       (map_instruction "Extract the core claim, evidence, and uncertainty as JSON.")
-       (reduce_instruction "Synthesize the extracted claims into a literature review.")))))
+       (items_path \"$.papers\")
+       (map_instruction \"Extract the core claim, evidence, and uncertainty as JSON.\")
+       (reduce_instruction \"Synthesize the extracted claims into a literature review.\")))))
 
 ;; --- Body ---
-;; Scheme code with {{slot}} markers. The instantiator substitutes slot values
-;; to produce the executable artifact.
 
-(define items (__context-ref "{{context_id}}" "{{items_path}}"))
+(define items (__context-ref \"{{context_id}}\" \"{{items_path}}\"))
 
 (define extracted
   (map-async
@@ -1416,9 +821,8 @@ short-circuits to `#f` when `ordered` is missing.
     items
     #:max-concurrent {{max_concurrent}}))
 
-;; Optional gate — suspends for human review when policy requires it.
-(gate "review_extractions" extracted
-      #:message "Review extraction results before synthesis.")
+(gate \"review_extractions\" extracted
+      #:message \"Review extraction results before synthesis.\")
 
 (define synthesized
   (tree-reduce
@@ -1434,2210 +838,4310 @@ short-circuits to `#f` when `ordered` is missing.
 (finish synthesized)
 ```
 
-Example template invocation (what the planner produces):
+---
 
-```json
-{
-  "template_name": "batch_extract_reduce",
-  "template_version": "1.0.0",
-  "slot_values": {
-    "context_id": "ctx_01HX...",
-    "items_path": "$.papers",
-    "map_instruction": "Extract ACE2 mentions, evidence, and uncertainty as JSON.",
-    "reduce_instruction": "Synthesize ACE2 findings into a report with citations to source IDs.",
-    "map_model": "fast_text_model",
-    "reduce_model": "quality_text_model",
-    "max_concurrent": 20,
-    "branch_factor": 5,
-    "json_mode": true
-  }
-}
+## Batch 0: Project Skeleton and Schemas
+
+### 0.0 Purpose
+
+Establish the `v2/` directory structure, define all Pydantic v2 models for durable records and API payloads, create enumerations for classification taxonomies and runtime states, implement deterministic ID generation, define the exception hierarchy, and set up model registry configuration loading. This batch produces the foundational type system that every subsequent batch depends on.
+
+### 0.1 Depends On
+
+Nothing. This is the first batch.
+
+### 0.2 Files to Create or Modify
+
+| File | Action | Description |
+|------|--------|-------------|
+| `v2/pyproject.toml` | Create | Project metadata, dependencies (pydantic>=2.0, pyyaml, pytest) |
+| `v2/rlm_scheme/__init__.py` | Create | Package init, version string |
+| `v2/rlm_scheme/models.py` | Create | Pydantic v2 models for all 7 durable record types plus API payloads |
+| `v2/rlm_scheme/enums.py` | Create | TaskShape, DataShape, ExecutionState, ErrorPolicy, ResetScope enums |
+| `v2/rlm_scheme/ids.py` | Create | `generate_id(prefix)` and `validate_id(id_str, prefix)` functions |
+| `v2/rlm_scheme/exceptions.py` | Create | Base exception class plus specific error types |
+| `v2/rlm_scheme/config.py` | Create | Model registry loading from YAML/JSON, validation, alias resolution |
+| `v2/tests/__init__.py` | Create | Empty test package init |
+| `v2/tests/conftest.py` | Create | Shared pytest fixtures (tmp_dir, sample records, mock registry) |
+| `v2/tests/test_models.py` | Create | Schema validation tests for all record types and enums |
+
+### 0.3 Requirements
+
+- R-0.1 [MUST] All ID strings match the pattern `^{prefix}[a-z0-9]{16}$` where prefix is one of the 8 registered prefixes: `ctx_`, `plan_`, `art_`, `dry_`, `ver_`, `exec_`, `call_`, `ckpt_`.
+- R-0.2 [MUST] `generate_id(prefix)` produces cryptographically random IDs using `secrets.token_hex(8)`.
+- R-0.3 [MUST] Pydantic models exist for all 7 durable record types: ContextRecord, PlanRecord, ArtifactRecord, DryRunRecord, VerificationRecord, ExecutionRecord, CacheRecord.
+- R-0.4 [MUST] Every record model includes fields: `schema_version` (default `\"1\"`), `created_at` (UTC datetime).
+- R-0.5 [MUST] TaskShape enum has exactly 13 values: Direct, Batch, Synthesize, Search, Refine, Compare, Classify, Pipeline, Generate, Decompose, Validate, Aggregate, Composite.
+- R-0.6 [MUST] DataShape enum has 11 values: FlatList, Hierarchy, Singular, ChunkedSingular, Graph, TimeSeries, Tabular, Multimodal, Paired, KeyValue, Unknown.
+- R-0.7 [MUST] ExecutionState enum has exactly 7 values: queued, running, finished, failed, cancelled, awaiting_gate, gate_rejected.
+- R-0.8 [MUST] ErrorPolicy enum has exactly 3 values: fail_fast, collect, fallback.
+- R-0.9 [MUST] ResetScope enum has exactly 7 values: sandbox, session, cache, contexts, executions, config, all.
+- R-0.10 [MUST] Model registry loads from JSON file, path configurable via `RLM_MODEL_REGISTRY` environment variable, defaulting to `config/models.json`.
+- R-0.11 [MUST] Model registry validates that each alias has: `provider`, `model`, `capabilities` (list), `max_context_tokens` (int), `cost_tier`.
+- R-0.12 [MUST] Exception hierarchy includes: `RLMSchemeError` (base), `StoreError`, `ValidationError`, `InstantiationError`, `VerificationError`, `ExecutionError`, `ClassificationError`, `ConfigError`, `ContextNotFoundError`, `TemplateNotFoundError`, `SlotValidationError`, `PolicyViolationError`.
+- R-0.13 [SHOULD] All Pydantic models use `model_config = ConfigDict(strict=True)` to enforce type coercion rules.
+- R-0.14 [MUST] ContextRecord includes `data_ref` with fields: `storage`, `path`, `hash`, `bytes`; and `metadata` with fields: `data_shape`, `item_count`, `independent`, `ordered`, `modality`, `total_size_estimate_tokens`.
+- R-0.15 [MUST] ExecutionRecord `state` field uses the ExecutionState enum and enforces valid transitions as documented in the plan (terminal states: finished, failed, cancelled, gate_rejected).
+- R-0.16 [MAY] Model registry `defaults` section maps role names (planner, map, reduce, vision) to alias names.
+
+### 0.4 Detailed Specifications
+
+**ID Generation:**
+
+```python
+import secrets
+
+ID_PREFIXES = (\"ctx_\", \"plan_\", \"art_\", \"dry_\", \"ver_\", \"exec_\", \"call_\", \"ckpt_\")
+ID_PATTERN = re.compile(r\"^(ctx_|plan_|art_|dry_|ver_|exec_|call_|ckpt_)[a-z0-9]{16}$\")
+
+def generate_id(prefix: str) -> str:
+    \"\"\"Generate a random ID with the given prefix.\"\"\"
+    if prefix not in ID_PREFIXES:
+        raise ValueError(f\"Invalid prefix: {prefix}. Must be one of {ID_PREFIXES}\")
+    return prefix + secrets.token_hex(8)
+
+def validate_id(id_str: str, expected_prefix: str | None = None) -> bool:
+    \"\"\"Validate an ID string matches the expected format.\"\"\"
+    if not ID_PATTERN.match(id_str):
+        return False
+    if expected_prefix and not id_str.startswith(expected_prefix):
+        return False
+    return True
 ```
 
-Example instantiated artifact (after slot substitution):
+**Enum Definitions:**
 
-```scheme
-(define items (__context-ref "ctx_01HX..." "$.papers"))
+```python
+from enum import Enum
 
-(define extracted
-  (map-async
-    (lambda (item)
-      (llm-query-async
-        #:instruction "Extract ACE2 mentions, evidence, and uncertainty as JSON."
-        #:data item
-        #:model "fast_text_model"
-        #:json #t))
-    items
-    #:max-concurrent 20))
+class TaskShape(str, Enum):
+    Direct = \"Direct\"
+    Batch = \"Batch\"
+    Synthesize = \"Synthesize\"
+    Search = \"Search\"
+    Refine = \"Refine\"
+    Compare = \"Compare\"
+    Classify = \"Classify\"
+    Pipeline = \"Pipeline\"
+    Generate = \"Generate\"
+    Decompose = \"Decompose\"
+    Validate = \"Validate\"
+    Aggregate = \"Aggregate\"
+    Composite = \"Composite\"
 
-(define synthesized
-  (tree-reduce
-    (lambda group
-      (syntax-e
-        (llm-query
-          #:instruction "Synthesize ACE2 findings into a report with citations to source IDs."
-          #:data (__join-json group)
-          #:model "quality_text_model")))
-    extracted
-    #:branch-factor 5))
+class DataShape(str, Enum):
+    FlatList = \"FlatList\"
+    Hierarchy = \"Hierarchy\"
+    Singular = \"Singular\"
+    ChunkedSingular = \"ChunkedSingular\"
+    Graph = \"Graph\"
+    TimeSeries = \"TimeSeries\"
+    Tabular = \"Tabular\"
+    Multimodal = \"Multimodal\"
+    Paired = \"Paired\"
+    KeyValue = \"KeyValue\"
+    Unknown = \"Unknown\"
 
-(finish synthesized)
+class ExecutionState(str, Enum):
+    queued = \"queued\"
+    running = \"running\"
+    finished = \"finished\"
+    failed = \"failed\"
+    cancelled = \"cancelled\"
+    awaiting_gate = \"awaiting_gate\"
+    gate_rejected = \"gate_rejected\"
+
+class ErrorPolicy(str, Enum):
+    fail_fast = \"fail_fast\"
+    collect = \"collect\"
+    fallback = \"fallback\"
+
+class ResetScope(str, Enum):
+    sandbox = \"sandbox\"
+    session = \"session\"
+    cache = \"cache\"
+    contexts = \"contexts\"
+    executions = \"executions\"
+    config = \"config\"
+    all = \"all\"
 ```
 
-The instantiated artifact is the template with all `{{slot}}` markers replaced
-by concrete values. It uses only primitive runtime bindings and
-instantiator-owned helper bindings.
+**Pydantic Models (representative subset):**
+
+```python
+from pydantic import BaseModel, ConfigDict, Field
+from datetime import datetime, timezone
+
+class DataRef(BaseModel):
+    model_config = ConfigDict(strict=True)
+    storage: str = \"filesystem\"
+    path: str
+    hash: str
+    bytes: int
+
+class ContextMetadata(BaseModel):
+    model_config = ConfigDict(strict=True)
+    data_shape: DataShape = DataShape.Unknown
+    item_count: int | None = None
+    item_size_estimate_tokens: int | None = None
+    total_size_estimate_tokens: int | None = None
+    independent: bool | None = None
+    ordered: bool | None = None
+    modality: list[str] = Field(default_factory=lambda: [\"text\"])
+    chunking: dict | None = None
+    source: dict | None = None
+    schema_: dict | None = Field(default=None, alias=\"schema\")
+
+class ContextRecord(BaseModel):
+    model_config = ConfigDict(strict=True)
+    context_id: str
+    schema_version: str = \"1\"
+    name: str | None = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    data_ref: DataRef
+    metadata: ContextMetadata = Field(default_factory=ContextMetadata)
+
+class Classification(BaseModel):
+    model_config = ConfigDict(strict=True)
+    task_shape: TaskShape
+    constituent_shapes: list[TaskShape] | None = None
+    data_shape: DataShape
+    confidence: float = 1.0
+    rationale: str | None = None
+
+class TemplateInvocation(BaseModel):
+    model_config = ConfigDict(strict=True)
+    kind: str = \"template_invocation\"
+    template_name: str
+    template_version: str = \"1.0.0\"
+    slot_values: dict = Field(default_factory=dict)
+
+class TemplateChain(BaseModel):
+    model_config = ConfigDict(strict=True)
+    kind: str = \"template_chain\"
+    steps: list[TemplateInvocation]
+
+class PlanRecord(BaseModel):
+    model_config = ConfigDict(strict=True)
+    plan_id: str
+    schema_version: str = \"1\"
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    context_ids: list[str] = Field(default_factory=list)
+    task: str
+    hints: dict = Field(default_factory=dict)
+    classification: Classification
+    recommended: TemplateInvocation | TemplateChain
+    alternatives: list[dict] = Field(default_factory=list)
+
+class ArtifactRecord(BaseModel):
+    model_config = ConfigDict(strict=True)
+    artifact_id: str
+    schema_version: str = \"1\"
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    plan_id: str | None = None
+    context_ids: list[str] = Field(default_factory=list)
+    source_type: str = \"template_invocation\"
+    template_name: str
+    template_version: str
+    slot_values: dict = Field(default_factory=dict)
+    generated_scheme_ref: DataRef
+    primitives_used: list[str] = Field(default_factory=list)
+    static_profile: dict = Field(default_factory=dict)
+
+class DryRunRecord(BaseModel):
+    model_config = ConfigDict(strict=True)
+    dry_run_id: str
+    schema_version: str = \"1\"
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    artifact_id: str
+    mode: str = \"deterministic\"
+    summary: dict = Field(default_factory=dict)
+    call_graph: list[dict] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+class VerificationCheck(BaseModel):
+    model_config = ConfigDict(strict=True)
+    name: str
+    status: str  # \"pass\", \"warn\", \"fail\"
+    message: str
+
+class VerificationRecord(BaseModel):
+    model_config = ConfigDict(strict=True)
+    verification_id: str
+    schema_version: str = \"1\"
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    artifact_id: str
+    dry_run_id: str | None = None
+    decision: str  # \"pass\", \"warn\", \"fail\"
+    policy: dict = Field(default_factory=dict)
+    checks: list[VerificationCheck] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+
+class ExecutionRecord(BaseModel):
+    model_config = ConfigDict(strict=True)
+    execution_id: str
+    schema_version: str = \"1\"
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    completed_at: datetime | None = None
+    state: ExecutionState = ExecutionState.queued
+    artifact_id: str
+    plan_id: str | None = None
+    verification_id: str | None = None
+    result_ref: DataRef | None = None
+    trace_ref: dict | None = None
+    metrics: dict = Field(default_factory=dict)
+    error: dict | None = None
+    gates: list[dict] = Field(default_factory=list)
+    cache_hits: int = 0
+    budget_policy_activations: int = 0
+    chain_step_results: list[dict] = Field(default_factory=list)
+
+class CacheRecord(BaseModel):
+    model_config = ConfigDict(strict=True)
+    cache_key: str
+    schema_version: str = \"1\"
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    instruction_hash: str
+    data_hash: str
+    model: str
+    temperature: float = 0.0
+    json_mode: bool = False
+    result: str
+    result_tokens: dict = Field(default_factory=dict)
+    source_execution_id: str | None = None
+    source_call_id: str | None = None
+```
+
+**Model Registry Config:**
+
+```python
+from pydantic import BaseModel, ConfigDict
+
+class ModelAlias(BaseModel):
+    model_config = ConfigDict(strict=True)
+    provider: str
+    model: str
+    capabilities: list[str]
+    max_context_tokens: int
+    supports_temperature: bool = True
+    cost_tier: str
+    fallback: str | None = None
+
+class ModelRegistry(BaseModel):
+    model_config = ConfigDict(strict=True)
+    schema_version: str = \"1\"
+    aliases: dict[str, ModelAlias]
+    defaults: dict[str, str] = Field(default_factory=dict)
+
+def load_model_registry(path: str | None = None) -> ModelRegistry:
+    \"\"\"Load model registry from JSON/YAML file.\"\"\"
+    import os, json
+    path = path or os.environ.get(\"RLM_MODEL_REGISTRY\", \"config/models.json\")
+    with open(path) as f:
+        data = json.load(f)
+    return ModelRegistry(**data)
+```
+
+**Exception Hierarchy:**
+
+```python
+class RLMSchemeError(Exception):
+    \"\"\"Base exception for all RLM-Scheme errors.\"\"\"
+
+class StoreError(RLMSchemeError): ...
+class ValidationError(RLMSchemeError): ...
+class InstantiationError(RLMSchemeError): ...
+class VerificationError(RLMSchemeError): ...
+class ExecutionError(RLMSchemeError): ...
+class ClassificationError(RLMSchemeError): ...
+class ConfigError(RLMSchemeError): ...
+class ContextNotFoundError(StoreError): ...
+class TemplateNotFoundError(StoreError): ...
+class SlotValidationError(InstantiationError): ...
+class PolicyViolationError(VerificationError): ...
+```
+
+### 0.5 Test Specification
+
+| Test File | Test Function | Scenario | Expected |
+|-----------|---------------|----------|----------|
+| `v2/tests/test_models.py` | `test_generate_id_format` | Call `generate_id(\"ctx_\")` 100 times | All match `^ctx_[a-z0-9]{16}$`, all unique |
+| `v2/tests/test_models.py` | `test_generate_id_all_prefixes` | Call `generate_id` with each of 7 valid prefixes | All match `^{prefix}[a-z0-9]{16}$` |
+| `v2/tests/test_models.py` | `test_generate_id_invalid_prefix` | Call `generate_id(\"bad_\")` | Raises `ValueError` |
+| `v2/tests/test_models.py` | `test_validate_id_valid` | `validate_id(\"ctx_abcdef0123456789\")` | Returns `True` |
+| `v2/tests/test_models.py` | `test_validate_id_wrong_prefix` | `validate_id(\"ctx_abcdef0123456789\", \"plan_\")` | Returns `False` |
+| `v2/tests/test_models.py` | `test_validate_id_bad_format` | `validate_id(\"ctx_SHORT\")` | Returns `False` |
+| `v2/tests/test_models.py` | `test_task_shape_values` | Check `len(TaskShape)` | Equals 13 |
+| `v2/tests/test_models.py` | `test_data_shape_values` | Check `len(DataShape)` | Equals 11 |
+| `v2/tests/test_models.py` | `test_execution_state_values` | Check `len(ExecutionState)` | Equals 7 |
+| `v2/tests/test_models.py` | `test_error_policy_values` | Check `len(ErrorPolicy)` | Equals 3 |
+| `v2/tests/test_models.py` | `test_reset_scope_values` | Check `len(ResetScope)` | Equals 5 |
+| `v2/tests/test_models.py` | `test_context_record_roundtrip` | Create ContextRecord, serialize to JSON, deserialize | Fields match original |
+| `v2/tests/test_models.py` | `test_plan_record_with_invocation` | Create PlanRecord with TemplateInvocation | Serializes/deserializes correctly |
+| `v2/tests/test_models.py` | `test_plan_record_with_chain` | Create PlanRecord with TemplateChain | `recommended.kind == \"template_chain\"`, steps accessible |
+| `v2/tests/test_models.py` | `test_artifact_record_fields` | Create ArtifactRecord with all fields | All fields accessible, `source_type == \"template_invocation\"` |
+| `v2/tests/test_models.py` | `test_execution_record_state_default` | Create ExecutionRecord without explicit state | `state == ExecutionState.queued` |
+| `v2/tests/test_models.py` | `test_dry_run_record_fields` | Create DryRunRecord with summary dict | `mode == \"deterministic\"`, summary accessible |
+| `v2/tests/test_models.py` | `test_verification_record_checks` | Create VerificationRecord with 3 checks | `len(checks) == 3`, decision accessible |
+| `v2/tests/test_models.py` | `test_cache_record_fields` | Create CacheRecord with all fields | `cache_key`, `result`, `model` all accessible |
+| `v2/tests/test_models.py` | `test_model_registry_load` | Load registry from fixture JSON file | Aliases parsed, defaults parsed, `ModelAlias` fields validated |
+| `v2/tests/test_models.py` | `test_model_registry_missing_field` | Load registry with alias missing `provider` | Raises `ValidationError` |
+| `v2/tests/test_models.py` | `test_model_registry_env_var` | Set `RLM_MODEL_REGISTRY` env var, call `load_model_registry()` | Loads from env-specified path |
+| `v2/tests/test_models.py` | `test_exception_hierarchy` | Catch `ContextNotFoundError` as `StoreError` and `RLMSchemeError` | Both catches succeed |
+| `v2/tests/test_models.py` | `test_all_records_have_schema_version` | Instantiate all 7 record types | All have `schema_version == \"1\"` |
+| `v2/tests/test_models.py` | `test_all_records_have_created_at` | Instantiate all 7 record types | All have `created_at` as UTC datetime |
+
+### 0.6 Acceptance Gates
+
+```bash
+# All tests pass
+cd v2 && python -m pytest tests/test_models.py -v
+# Expected: 25 passed
+
+# Pydantic models compile without errors
+cd v2 && python -c \"from rlm_scheme.models import *; from rlm_scheme.enums import *; from rlm_scheme.ids import *; from rlm_scheme.exceptions import *; from rlm_scheme.config import ModelRegistry; print('All imports OK')\"
+# Expected: \"All imports OK\"
+
+# ID generation produces valid format
+cd v2 && python -c \"from rlm_scheme.ids import generate_id; import re; ids = [generate_id(p) for p in ('ctx_','plan_','art_','dry_','ver_','exec_','call_')]; assert all(re.match(r'^(ctx_|plan_|art_|dry_|ver_|exec_|call_)[a-z0-9]{16}$', i) for i in ids); print('ID format OK')\"
+# Expected: \"ID format OK\"
+
+# Enum cardinalities
+cd v2 && python -c \"from rlm_scheme.enums import *; assert len(TaskShape)==13; assert len(DataShape)==11; assert len(ExecutionState)==7; assert len(ErrorPolicy)==3; assert len(ResetScope)==5; print('Enum counts OK')\"
+# Expected: \"Enum counts OK\"
+```
+
+### 0.7 Checklist
+
+- [ ] `v2/pyproject.toml` created with dependencies: pydantic>=2.0, pyyaml, pytest
+- [ ] `v2/rlm_scheme/__init__.py` created with version string
+- [ ] `v2/rlm_scheme/ids.py` implements `generate_id()` and `validate_id()`
+- [ ] `v2/rlm_scheme/enums.py` defines all 5 enum classes with correct cardinalities
+- [ ] `v2/rlm_scheme/models.py` defines all 7 record types plus supporting models
+- [ ] `v2/rlm_scheme/exceptions.py` defines exception hierarchy (12 classes)
+- [ ] `v2/rlm_scheme/config.py` implements `load_model_registry()` with env var support
+- [ ] `v2/tests/conftest.py` provides shared fixtures
+- [ ] `v2/tests/test_models.py` has 25+ tests covering all record types, enums, IDs
+- [ ] All tests pass: `python -m pytest tests/test_models.py -v`
 
 ---
 
-## 8. Model Registry
+## Batch 1: Durable Store, LLM Provider, and MCP Skeleton
 
-Templates should refer to model aliases, not hardcoded provider model names.
-The server resolves aliases at instantiation or execution time through a model
-registry.
+### 1.0 Purpose
 
-The registry is a JSON configuration file at `config/models.json` (path
-configurable via environment variable `RLM_MODEL_REGISTRY`). It is loaded once
-at server startup and can be reloaded via `reset_runtime(scope="config")`.
-There is no MCP tool to modify it — registry changes are an operator concern,
-not an agent concern.
+Implement the filesystem-based durable store for all record types, create the abstract LLM provider adapter with a mock implementation for testing, and stand up the FastMCP server skeleton with all 10 tool stubs wired to return structured responses. This batch establishes the storage layer and the public API surface that all subsequent batches wire real logic into.
 
-Example registry (`config/models.json`):
+### 1.1 Depends On
 
-```json
-{
-  "schema_version": "1",
-  "aliases": {
-    "fast_text_model": {
-      "provider": "openai",
-      "model": "configured-fast-model",
-      "capabilities": ["text", "json"],
-      "max_context_tokens": 128000,
-      "supports_temperature": true,
-      "cost_tier": "low"
-    },
-    "quality_text_model": {
-      "provider": "openai",
-      "model": "configured-quality-model",
-      "capabilities": ["text", "json"],
-      "max_context_tokens": 128000,
-      "supports_temperature": true,
-      "cost_tier": "high",
-      "fallback": "fast_text_model"
-    },
-    "vision_model": {
-      "provider": "openai",
-      "model": "configured-vision-model",
-      "capabilities": ["text", "json", "image"],
-      "max_context_tokens": 128000,
-      "supports_temperature": true,
-      "cost_tier": "high"
-    }
-  },
-  "defaults": {
-    "planner": "quality_text_model",
-    "map": "fast_text_model",
-    "reduce": "quality_text_model",
-    "vision": "vision_model"
-  }
-}
+Batch 0 (models, enums, IDs, exceptions, config).
+
+### 1.2 Files to Create or Modify
+
+| File | Action | Description |
+|------|--------|-------------|
+| `v2/rlm_scheme/store.py` | Create | Namespace-based key-value store backed by JSON files on disk |
+| `v2/rlm_scheme/llm_adapter.py` | Create | Abstract LLM provider interface + MockLLMProvider for testing |
+| `v2/rlm_scheme/mcp_server.py` | Create | FastMCP server with all 10 tool stubs |
+| `v2/tests/test_store.py` | Create | Store CRUD tests, namespace isolation, reset scopes |
+| `v2/tests/test_llm_adapter.py` | Create | Mock provider tests, response format validation |
+
+### 1.3 Requirements
+
+- R-1.1 [MUST] Store supports namespaces: `contexts`, `plans`, `artifacts`, `dry_runs`, `verifications`, `executions`, `cache`.
+- R-1.2 [MUST] Store operations: `put(namespace, id, record)`, `get(namespace, id)`, `list(namespace)`, `delete(namespace, id)`, `clear(namespace)`.
+- R-1.3 [MUST] Store persists records as JSON files at `{base_dir}/{namespace}/{id}.json`.
+- R-1.4 [MUST] Store `get()` returns `None` for missing keys (does not raise).
+- R-1.5 [MUST] Store supports `reset(scope: ResetScope)` that clears records per the scoping rules: `sandbox` clears nothing durable, `session` clears executions from current session, `all` clears everything, `cache` clears only cache namespace, `config` clears nothing (handled by caller).
+- R-1.6 [MUST] `LLMProvider` abstract base class defines `async def query(instruction, data, model, temperature, max_tokens, json_mode, images) -> LLMResponse`.
+- R-1.7 [MUST] `MockLLMProvider` returns deterministic responses: empty string `\"\"` for text calls, `\"{}\"` for JSON-mode calls.
+- R-1.8 [MUST] `LLMResponse` includes fields: `content` (str), `prompt_tokens` (int), `completion_tokens` (int), `model` (str).
+- R-1.9 [MUST] FastMCP server registers all 10 tools with correct names and parameter signatures matching Appendix B (primitive signatures).
+- R-1.10 [MUST] Each stub tool returns a valid JSON string with `\"status\"` field.
+- R-1.11 [MUST] `reset_runtime` stub accepts `scope` parameter with valid `ResetScope` values.
+- R-1.12 [SHOULD] Store validates that record IDs match expected prefix for their namespace (e.g., `contexts` namespace requires `ctx_` prefix).
+- R-1.13 [MUST] MockLLMProvider tracks call count and can be queried for total calls made.
+- R-1.14 [MAY] Store supports an optional `session_id` field to scope session-level resets.
+
+### 1.4 Detailed Specifications
+
+**Store class:**
+
+```python
+import json, os
+from pathlib import Path
+from rlm_scheme.enums import ResetScope
+
+class Store:
+    NAMESPACES = (
+        \"contexts\", \"plans\", \"artifacts\", \"dry_runs\",
+        \"verifications\", \"executions\", \"cache\"
+    )
+
+    def __init__(self, base_dir: str | Path):
+        self.base_dir = Path(base_dir)
+        self.session_id: str | None = None
+        for ns in self.NAMESPACES:
+            (self.base_dir / ns).mkdir(parents=True, exist_ok=True)
+
+    def put(self, namespace: str, record_id: str, data: dict) -> None:
+        \"\"\"Store a record. Overwrites if exists.\"\"\"
+        self._validate_namespace(namespace)
+        path = self.base_dir / namespace / f\"{record_id}.json\"
+        path.write_text(json.dumps(data, default=str, indent=2))
+
+    def get(self, namespace: str, record_id: str) -> dict | None:
+        \"\"\"Retrieve a record by ID. Returns None if not found.\"\"\"
+        path = self.base_dir / namespace / f\"{record_id}.json\"
+        if not path.exists():
+            return None
+        return json.loads(path.read_text())
+
+    def list(self, namespace: str) -> list[str]:
+        \"\"\"List all record IDs in a namespace.\"\"\"
+        self._validate_namespace(namespace)
+        ns_dir = self.base_dir / namespace
+        return [p.stem for p in ns_dir.glob(\"*.json\")]
+
+    def delete(self, namespace: str, record_id: str) -> bool:
+        \"\"\"Delete a record. Returns True if deleted, False if not found.\"\"\"
+        path = self.base_dir / namespace / f\"{record_id}.json\"
+        if path.exists():
+            path.unlink()
+            return True
+        return False
+
+    def clear(self, namespace: str) -> int:
+        \"\"\"Clear all records in a namespace. Returns count deleted.\"\"\"
+        ns_dir = self.base_dir / namespace
+        count = 0
+        for p in ns_dir.glob(\"*.json\"):
+            p.unlink()
+            count += 1
+        return count
+
+    def reset(self, scope: ResetScope) -> dict:
+        \"\"\"Reset store per scope rules. Returns summary of what was cleared.\"\"\"
+        if scope == ResetScope.all:
+            total = sum(self.clear(ns) for ns in self.NAMESPACES)
+            return {\"cleared\": \"all\", \"records_deleted\": total}
+        elif scope == ResetScope.cache:
+            count = self.clear(\"cache\")
+            return {\"cleared\": \"cache\", \"records_deleted\": count}
+        elif scope == ResetScope.session:
+            count = self.clear(\"executions\")
+            return {\"cleared\": \"session\", \"records_deleted\": count}
+        elif scope == ResetScope.sandbox:
+            return {\"cleared\": \"sandbox\", \"records_deleted\": 0}
+        elif scope == ResetScope.config:
+            return {\"cleared\": \"config\", \"records_deleted\": 0}
+
+    def _validate_namespace(self, namespace: str) -> None:
+        if namespace not in self.NAMESPACES:
+            raise ValueError(f\"Invalid namespace: {namespace}\")
 ```
 
-Verification should check aliases against the registry:
+**LLM Provider Adapter:**
 
-- alias exists,
-- required capabilities are present,
-- JSON mode is supported when requested,
-- image inputs target an image-capable alias,
-- context estimates fit the alias context window,
-- temperature/max-token settings are compatible with the resolved model.
-- fallback alias exists and has compatible capabilities when budget-policy
-  references it.
+```python
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
 
-Provider model names should live in configuration, not in templates or planner
-prompts. Documentation examples should use aliases unless they are describing
-provider configuration.
+@dataclass
+class LLMResponse:
+    content: str
+    prompt_tokens: int
+    completion_tokens: int
+    model: str
+
+class LLMProvider(ABC):
+    @abstractmethod
+    async def query(
+        self,
+        instruction: str,
+        data: str,
+        model: str,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        json_mode: bool = False,
+        images: list | None = None,
+    ) -> LLMResponse: ...
+
+class MockLLMProvider(LLMProvider):
+    def __init__(self):
+        self.call_count = 0
+        self.calls: list[dict] = []
+
+    async def query(self, instruction, data, model, temperature=None,
+                    max_tokens=None, json_mode=False, images=None) -> LLMResponse:
+        self.call_count += 1
+        self.calls.append({
+            \"instruction\": instruction, \"data\": data, \"model\": model,
+            \"json_mode\": json_mode
+        })
+        content = \"{}\" if json_mode else \"\"
+        return LLMResponse(
+            content=content,
+            prompt_tokens=len(instruction) + len(str(data)),
+            completion_tokens=len(content) or 10,
+            model=model
+        )
+```
+
+**MCP Server Skeleton (tool signatures):**
+
+```python
+from fastmcp import FastMCP, Context
+
+mcp = FastMCP(\"rlm-scheme-v2\")
+
+@mcp.tool()
+def load_context(data: str, name: str | None = None,
+                 metadata_json: str | None = None) -> str: ...
+
+@mcp.tool()
+def get_context(context_id: str, include_preview: bool = True,
+                include_data: bool = False) -> str: ...
+
+@mcp.tool()
+def plan_strategy(task: str, context_id: str | None = None,
+                  hints_json: str | None = None) -> str: ...
+
+@mcp.tool()
+def dry_run_strategy(plan_id: str | None = None,
+                     template_invocation_json: str | None = None,
+                     options_json: str | None = None) -> str: ...
+
+@mcp.tool()
+async def execute_strategy(plan_id: str | None = None,
+                           template_invocation_json: str | None = None,
+                           timeout_seconds: int | None = None,
+                           stream: bool = False,
+                           policy_json: str | None = None,
+                           runtime_options_json: str | None = None,
+                           ctx: Context = None) -> str: ...
+
+@mcp.tool()
+def get_execution_trace(execution_id: str, include_scope_log: bool = True,
+                        include_calls: bool = True,
+                        include_stdout: bool = True) -> str: ...
+
+@mcp.tool()
+def get_status(execution_id: str | None = None) -> str: ...
+
+@mcp.tool()
+def cancel_call(call_id: str | None = None, execution_id: str | None = None,
+                reason: str | None = None) -> str: ...
+
+@mcp.tool()
+def reset_runtime(scope: str = \"session\") -> str: ...
+
+@mcp.tool()
+async def resume_execution(execution_id: str, gate: str, decision: str,
+                           reason: str | None = None) -> str: ...
+```
+
+### 1.5 Test Specification
+
+| Test File | Test Function | Scenario | Expected |
+|-----------|---------------|----------|----------|
+| `v2/tests/test_store.py` | `test_put_and_get` | Store a context record, retrieve it | Retrieved data matches stored data |
+| `v2/tests/test_store.py` | `test_get_missing` | Get a nonexistent ID | Returns `None` |
+| `v2/tests/test_store.py` | `test_list_namespace` | Store 3 records, list namespace | Returns 3 IDs |
+| `v2/tests/test_store.py` | `test_list_empty_namespace` | List empty namespace | Returns empty list |
+| `v2/tests/test_store.py` | `test_delete_record` | Store then delete | Delete returns `True`, subsequent get returns `None` |
+| `v2/tests/test_store.py` | `test_delete_missing` | Delete nonexistent ID | Returns `False` |
+| `v2/tests/test_store.py` | `test_clear_namespace` | Store 5 records, clear | Returns 5, list returns empty |
+| `v2/tests/test_store.py` | `test_namespace_isolation` | Store in `contexts`, list `plans` | Plans list is empty |
+| `v2/tests/test_store.py` | `test_invalid_namespace` | `put(\"invalid\", ...)` | Raises `ValueError` |
+| `v2/tests/test_store.py` | `test_reset_all` | Store records in multiple namespaces, reset(all) | All namespaces empty |
+| `v2/tests/test_store.py` | `test_reset_cache` | Store in contexts and cache, reset(cache) | Cache empty, contexts intact |
+| `v2/tests/test_store.py` | `test_reset_sandbox` | Store records, reset(sandbox) | All records intact |
+| `v2/tests/test_store.py` | `test_put_overwrites` | Put same ID twice with different data | Get returns second data |
+| `v2/tests/test_llm_adapter.py` | `test_mock_text_response` | Query with json_mode=False | `content == \"\"`, tokens > 0 |
+| `v2/tests/test_llm_adapter.py` | `test_mock_json_response` | Query with json_mode=True | `content == \"{}\"` |
+| `v2/tests/test_llm_adapter.py` | `test_mock_call_tracking` | Make 5 queries | `call_count == 5`, `len(calls) == 5` |
+| `v2/tests/test_llm_adapter.py` | `test_mock_model_passthrough` | Query with model=\"test_model\" | `response.model == \"test_model\"` |
+
+### 1.6 Acceptance Gates
+
+```bash
+# Store tests pass
+cd v2 && python -m pytest tests/test_store.py -v
+# Expected: 13 passed
+
+# LLM adapter tests pass
+cd v2 && python -m pytest tests/test_llm_adapter.py -v
+# Expected: 4 passed
+
+# MCP server imports and all 10 tools are registered
+cd v2 && python -c \"from rlm_scheme.mcp_server import mcp; tools = mcp.list_tools(); names = sorted([t.name for t in tools]); expected = sorted(['cancel_call','dry_run_strategy','execute_strategy','get_context','get_execution_trace','get_status','load_context','plan_strategy','reset_runtime','resume_execution']); assert names == expected, f'{names} != {expected}'; print(f'{len(tools)} tools registered: OK')\"
+# Expected: \"10 tools registered: OK\"
+
+# Each stub returns valid JSON with status field
+cd v2 && python -c \"
+import json
+from rlm_scheme.mcp_server import load_context, get_status, reset_runtime
+r = json.loads(load_context('test'))
+assert 'status' in r
+r = json.loads(get_status())
+assert 'status' in r
+r = json.loads(reset_runtime('session'))
+assert 'status' in r
+print('Stub responses OK')
+\"
+# Expected: \"Stub responses OK\"
+```
+
+### 1.7 Checklist
+
+- [ ] `v2/rlm_scheme/store.py` implements Store with 7 namespaces and all CRUD operations
+- [ ] `v2/rlm_scheme/llm_adapter.py` defines LLMProvider ABC and MockLLMProvider
+- [ ] `v2/rlm_scheme/mcp_server.py` registers all 10 MCP tools with correct signatures
+- [ ] Each MCP tool stub returns valid JSON with `\"status\"` field
+- [ ] `v2/tests/test_store.py` covers CRUD, namespace isolation, all reset scopes
+- [ ] `v2/tests/test_llm_adapter.py` covers mock responses and call tracking
+- [ ] All tests pass: `python -m pytest tests/test_store.py tests/test_llm_adapter.py -v`
 
 ---
 
-## 9. Runtime Basis
+## Batch 2: Context Primitives
 
-The Racket runtime should be small and primitive-only. Higher-level patterns
-are expressed as template-level compositions of primitives.
+### 2.0 Purpose
 
-### Keep As Runtime Primitives
+Implement the ContextManager that stores, retrieves, and lists contexts with rich metadata, including automatic data analysis for shape detection, item counting, independence inference, modality detection, and size estimation. Wire the `load_context` and `get_context` MCP tools to real implementations that persist context records in the durable store and return structured responses with previews.
 
-| Group | Primitive | Notes |
-|---|---|---|
-| LLM | `llm-query` | Synchronous call; returns syntax-wrapped result. |
-| LLM | `llm-query-async` | Starts async call; returns handle only. |
-| Await | `await` | Await one handle. |
-| Await | `await-all` | Await all handles. |
-| Await | `await-any` | Await first completed handle and return remaining handles. |
-| Parallel | `map-async` | Rolling-window fan-out with `#:max-concurrent`. |
-| Parallel | `parallel` | Concurrent async thunk execution, not sequential `map`. |
-| Parallel | `race` | First completed async thunk wins. |
-| Reduction | `tree-reduce` | Recursive associative reduction. |
-| Reduction | `fold-sequential` | Ordered accumulation. |
-| Control | `sequence` | Function pipeline. |
-| Control | `choose` | Conditional dispatch. |
-| Control | `iterate-until` | Bounded loop. |
-| Control | `gate` | Suspend execution for human review. |
-| Delegation | `recursive-spawn` | Nested orchestration with global depth limit. |
-| Modifier | `memoized` | Cache by explicit key. |
-| Modifier | `with-validation` | Wrap result validation. |
-| Modifier | `try-fallback` | Error recovery. |
-| State | `checkpoint` / `restore` | Durable partial results. |
-| State | `tokens-used` / `rate-limits` | Runtime accounting. |
-| State | `heartbeat` | Keep long executions alive. |
-| Compute | `py-exec` / `py-eval` / `py-call` / `py-set!` | Controlled Python bridge for parsing, aggregation, and local computation. |
+### 2.1 Depends On
 
-### Primitive Signatures And Semantics
+Batch 0 (models, enums, IDs, exceptions), Batch 1 (store, MCP skeleton).
 
-The signatures below are the target public bindings inside instantiated
-Scheme artifacts. Some helper bindings can be private and prefixed with `__`.
+### 2.2 Files to Create or Modify
 
-#### `llm-query`
+| File | Action | Description |
+|------|--------|-------------|
+| `v2/rlm_scheme/context.py` | Create | ContextManager with store/retrieve/list/analyze/preview |
+| `v2/rlm_scheme/mcp_server.py` | Modify | Wire `load_context` and `get_context` to real ContextManager |
+| `v2/tests/test_context.py` | Create | Context storage, retrieval, analysis, preview tests |
 
-```scheme
-(llm-query #:instruction string
-           #:data any
-           #:model string
-           #:recursive boolean
-           #:temperature number-or-#f
-           #:max-tokens integer-or-#f
-           #:json boolean
-           #:image image-or-#f
-           #:images list)
-  -> syntax-object
+### 2.3 Requirements
+
+- R-2.1 [MUST] `ContextManager.store(data, name, metadata)` stores data to disk, computes SHA-256 hash, persists ContextRecord, returns `context_id`.
+- R-2.2 [MUST] `ContextManager.get(context_id, include_preview, include_data)` retrieves context record with optional preview and data.
+- R-2.3 [MUST] `ContextManager.list()` returns list of context IDs with names and metadata summaries.
+- R-2.4 [MUST] Data analysis auto-detects `item_count` when data is a JSON array.
+- R-2.5 [MUST] Data analysis infers `data_shape` as `FlatList` for JSON arrays, `Singular` for strings, `KeyValue` for JSON objects, `Tabular` for arrays of objects with consistent keys.
+- R-2.6 [MUST] Preview generation returns first 500 characters for string data, or first 3 items serialized for array data.
+- R-2.7 [MUST] `get_context` with `include_data=True` returns data only when serialized size is under 100 KB; otherwise returns `\"data_too_large\": true`.
+- R-2.8 [MUST] `load_context` MCP tool returns JSON response with `context_id`, `name`, `metadata`, `preview`, and `next_actions`.
+- R-2.9 [MUST] `get_context` MCP tool returns JSON response with context details.
+- R-2.10 [SHOULD] Metadata provided by the caller overrides auto-detected values.
+- R-2.11 [MUST] Data is stored as a separate file at `contexts/{context_id}/data.json`, not embedded in the record.
+- R-2.12 [SHOULD] Token size estimation uses a heuristic of `len(text) / 4` for English text.
+
+### 2.4 Detailed Specifications
+
+**ContextManager:**
+
+```python
+import hashlib, json
+from pathlib import Path
+from rlm_scheme.ids import generate_id
+from rlm_scheme.models import ContextRecord, ContextMetadata, DataRef
+from rlm_scheme.store import Store
+from rlm_scheme.enums import DataShape
+
+class ContextManager:
+    def __init__(self, store: Store):
+        self.store = store
+
+    def store_context(self, data: str, name: str | None = None,
+                      metadata: dict | None = None) -> ContextRecord:
+        context_id = generate_id(\"ctx_\")
+        # Store raw data
+        data_dir = self.store.base_dir / \"contexts\" / context_id
+        data_dir.mkdir(parents=True, exist_ok=True)
+        data_path = data_dir / \"data.json\"
+        data_bytes = data.encode(\"utf-8\")
+        data_path.write_bytes(data_bytes)
+        data_hash = \"sha256:\" + hashlib.sha256(data_bytes).hexdigest()
+
+        # Auto-detect metadata
+        detected = self._analyze_data(data)
+        if metadata:
+            detected.update({k: v for k, v in metadata.items() if v is not None})
+
+        record = ContextRecord(
+            context_id=context_id,
+            name=name,
+            data_ref=DataRef(
+                storage=\"filesystem\",
+                path=f\"contexts/{context_id}/data.json\",
+                hash=data_hash,
+                bytes=len(data_bytes)
+            ),
+            metadata=ContextMetadata(**detected)
+        )
+        self.store.put(\"contexts\", context_id, record.model_dump(mode=\"json\"))
+        return record
+
+    def get_context(self, context_id: str, include_preview: bool = True,
+                    include_data: bool = False) -> dict:
+        record_data = self.store.get(\"contexts\", context_id)
+        if not record_data:
+            return None
+        result = {\"context\": record_data}
+        if include_preview:
+            raw = self._load_raw_data(context_id)
+            result[\"preview\"] = self._generate_preview(raw)
+        if include_data:
+            raw = self._load_raw_data(context_id)
+            if len(raw.encode(\"utf-8\")) <= 100_000:
+                result[\"data\"] = raw
+            else:
+                result[\"data_too_large\"] = True
+        return result
+
+    def list_contexts(self) -> list[dict]:
+        ids = self.store.list(\"contexts\")
+        return [self.store.get(\"contexts\", cid) for cid in ids]
+
+    def _analyze_data(self, data: str) -> dict:
+        \"\"\"Auto-detect data shape, item count, and modality.\"\"\"
+        result = {\"modality\": [\"text\"]}
+        try:
+            parsed = json.loads(data)
+        except (json.JSONDecodeError, TypeError):
+            # Plain text
+            result[\"data_shape\"] = DataShape.Singular.value
+            result[\"total_size_estimate_tokens\"] = len(data) // 4
+            return result
+
+        if isinstance(parsed, list):
+            result[\"item_count\"] = len(parsed)
+            result[\"total_size_estimate_tokens\"] = len(data) // 4
+            if len(parsed) > 0 and all(isinstance(item, dict) for item in parsed):
+                keys = set(parsed[0].keys())
+                if all(set(item.keys()) == keys for item in parsed):
+                    result[\"data_shape\"] = DataShape.Tabular.value
+                else:
+                    result[\"data_shape\"] = DataShape.FlatList.value
+                result[\"independent\"] = True
+            else:
+                result[\"data_shape\"] = DataShape.FlatList.value
+                result[\"independent\"] = True
+        elif isinstance(parsed, dict):
+            result[\"data_shape\"] = DataShape.KeyValue.value
+            result[\"item_count\"] = len(parsed)
+            result[\"total_size_estimate_tokens\"] = len(data) // 4
+        else:
+            result[\"data_shape\"] = DataShape.Singular.value
+            result[\"total_size_estimate_tokens\"] = len(data) // 4
+        return result
+
+    def _generate_preview(self, data: str) -> str:
+        try:
+            parsed = json.loads(data)
+            if isinstance(parsed, list) and len(parsed) > 3:
+                return json.dumps(parsed[:3], indent=2)[:500]
+            return data[:500]
+        except (json.JSONDecodeError, TypeError):
+            return data[:500]
+
+    def _load_raw_data(self, context_id: str) -> str:
+        path = self.store.base_dir / \"contexts\" / context_id / \"data.json\"
+        return path.read_text()
 ```
 
-Semantics:
+### 2.5 Test Specification
 
-- calls the host model provider synchronously,
-- returns a syntax object,
-- decrements token budget after response,
-- logs call metadata and provenance,
-- supports image inputs only when model capabilities allow them,
-- supports `#:recursive #t` only under global recursion policy.
+| Test File | Test Function | Scenario | Expected |
+|-----------|---------------|----------|----------|
+| `v2/tests/test_context.py` | `test_store_and_retrieve` | Store a JSON array, retrieve by ID | Record exists, data_ref has hash, context_id matches |
+| `v2/tests/test_context.py` | `test_store_with_name` | Store with name=\"papers\" | Record name == \"papers\" |
+| `v2/tests/test_context.py` | `test_auto_detect_flat_list` | Store `[1, 2, 3]` | `data_shape == \"FlatList\"`, `item_count == 3` |
+| `v2/tests/test_context.py` | `test_auto_detect_tabular` | Store `[{\"a\":1},{\"a\":2}]` | `data_shape == \"Tabular\"`, `item_count == 2` |
+| `v2/tests/test_context.py` | `test_auto_detect_singular` | Store `\"plain text\"` | `data_shape == \"Singular\"` |
+| `v2/tests/test_context.py` | `test_auto_detect_key_value` | Store `{\"key1\": \"val1\"}` | `data_shape == \"KeyValue\"` |
+| `v2/tests/test_context.py` | `test_metadata_override` | Store array with `metadata={\"data_shape\": \"Hierarchy\"}` | `data_shape == \"Hierarchy\"` (overrides auto-detect) |
+| `v2/tests/test_context.py` | `test_preview_string` | Store 1000-char string | Preview is first 500 chars |
+| `v2/tests/test_context.py` | `test_preview_array` | Store 10-item array | Preview contains first 3 items |
+| `v2/tests/test_context.py` | `test_include_data_small` | Get with include_data=True, data < 100KB | Response includes `data` field |
+| `v2/tests/test_context.py` | `test_include_data_large` | Get with include_data=True, data > 100KB | Response includes `data_too_large: true`, no `data` field |
+| `v2/tests/test_context.py` | `test_get_nonexistent` | Get with invalid context_id | Returns `None` |
+| `v2/tests/test_context.py` | `test_list_contexts` | Store 3 contexts, list | Returns 3 records |
+| `v2/tests/test_context.py` | `test_data_hash_consistency` | Store same data twice | Both records have same `data_ref.hash` value |
+| `v2/tests/test_context.py` | `test_token_estimate` | Store 400-char text | `total_size_estimate_tokens == 100` |
+| `v2/tests/test_context.py` | `test_mcp_load_context` | Call `load_context` MCP tool with JSON array | Response has `status: \"ok\"`, `context_id`, `preview`, `next_actions` |
+| `v2/tests/test_context.py` | `test_mcp_get_context` | Load then get via MCP tools | Response has `status: \"ok\"`, context data |
 
-Instantiation rule: use this for reduce/synthesis/refinement steps where the next
-Scheme expression needs the completed value immediately.
+### 2.6 Acceptance Gates
 
-#### `llm-query-async`
+```bash
+# Context tests pass
+cd v2 && python -m pytest tests/test_context.py -v
+# Expected: 17 passed
 
-```scheme
-(llm-query-async #:instruction string
-                 #:data any
-                 #:model string
-                 #:temperature number-or-#f
-                 #:max-tokens integer-or-#f
-                 #:json boolean
-                 #:image image-or-#f
-                 #:images list)
-  -> async-handle
+# MCP load_context returns real context_id
+cd v2 && python -c \"
+import json
+from rlm_scheme.mcp_server import load_context
+r = json.loads(load_context('[1,2,3]', name='test'))
+assert r['status'] == 'ok'
+assert r['context_id'].startswith('ctx_')
+assert r['metadata']['item_count'] == 3
+print('load_context OK')
+\"
+# Expected: \"load_context OK\"
 ```
 
-Semantics:
-
-- dispatches model call through the host future pool,
-- returns immediately with an opaque async handle,
-- does not support recursive calls,
-- validates image/model compatibility before dispatch when possible,
-- records call metadata in the execution registry.
-
-Instantiation rule: use this inside `map-async`, `parallel`, and `race` bodies.
-
-#### `await`
-
-```scheme
-(await async-handle) -> syntax-object
-```
-
-Semantics:
-
-- blocks until one handle completes,
-- propagates cancellation and provider errors,
-- decrements token budget when the real usage is known,
-- wraps result as syntax.
-
-#### `await-all`
-
-```scheme
-(await-all (list async-handle ...)) -> (list string ...)
-```
-
-Semantics:
-
-- waits for all handles concurrently,
-- returns unwrapped strings in input order,
-- records batch wait in trace.
-
-If syntax preservation is needed, the runtime may also expose a private
-instantiator-only `__await-all-syntax`.
-
-#### `await-any`
-
-```scheme
-(await-any (list async-handle ...)) -> (values string (list async-handle ...))
-```
-
-Semantics:
-
-- waits for the first completed handle,
-- returns the completed unwrapped string and reconstructed remaining handles,
-- must be deterministic in dry-run mode: exactly one requested pending handle
-  completes per `await-any` call.
-
-#### `map-async`
-
-```scheme
-(map-async (lambda (item) async-handle)
-           items
-           #:max-concurrent integer-or-#f)
-  -> (list string ...)
-```
-
-Semantics:
-
-- preserves input order,
-- maintains a rolling concurrency window,
-- validates that the lambda returns async handles,
-- reports progress and heartbeats during long fan-outs,
-- propagates per-item errors according to instantiator-selected error policy.
-
-Error policy is declared per-node in the template's `define-meta`
-`error-policies` alist. Each entry names a logical node (matching template
-body structure) and specifies the policy:
-
-```scheme
-(define-meta error-policies
-  '((extract (on-error fail_fast) (checkpoint-every 25))
-    (synthesize (on-error fail_fast))))
-```
-
-Valid `on-error` values: `fail_fast` (default), `collect`, `fallback`.
-When `fallback` is specified, the corresponding template body node must
-use `try-fallback` to provide the fallback function. The instantiator
-validates that declared error policies match the template body structure.
-
-#### `parallel`
-
-```scheme
-(parallel (list (lambda () async-handle) ...)
-          #:max-concurrent integer-or-#f)
-  -> (list string ...)
-```
-
-Semantics:
-
-- genuinely concurrent, not sequential thunk invocation,
-- accepts thunks that return async handles,
-- preserves strategy order in output,
-- uses the same concurrency policy as `map-async`.
-
-The instantiator should reject `parallel` bodies that call synchronous
-`llm-query` directly unless it rewrites them into async equivalents.
-
-#### `race`
-
-```scheme
-(race (list (lambda () async-handle) ...)) -> string
-```
-
-Semantics:
-
-- launches all candidates,
-- returns first completed result,
-- cancels or abandons remaining handles according to runtime policy,
-- records losing handles in trace as cancelled or ignored.
-
-#### `tree-reduce`
-
-```scheme
-(tree-reduce reducer items
-             #:branch-factor integer
-             #:leaf-fn procedure)
-  -> any
-```
-
-Semantics:
-
-- rejects empty input,
-- optionally applies `leaf-fn`,
-- groups items by branch factor,
-- applies reducer recursively until one result remains,
-- suitable only for associative or order-insensitive reductions.
-
-Call estimate:
-
-```text
-N + ceil(N/B) + ceil(ceil(N/B)/B) + ... + 1
-```
-
-The `N` term is present when the tree reduction follows a map/leaf LLM call.
-For a pure reduce over already computed values, omit the leaf-call term.
-
-#### `fold-sequential`
-
-```scheme
-(fold-sequential reducer initial items) -> any
-```
-
-Semantics:
-
-- processes items in order,
-- passes accumulator and item to reducer,
-- has high critical-path latency,
-- appropriate for order-sensitive synthesis and rolling summaries.
-
-#### `sequence`
-
-```scheme
-(sequence fn1 fn2 ...) -> (lambda (input) output)
-```
-
-Semantics:
-
-- left-to-right function composition,
-- used by instantiator for multi-phase templates,
-- can be generated as `let*` when simpler.
-
-#### `choose`
-
-```scheme
-(choose predicate then-fn else-fn) -> procedure
-```
-
-Semantics:
-
-- routes based on deterministic predicate or predicate function,
-- should not hide model calls inside predicates unless declared.
-
-#### `iterate-until`
-
-```scheme
-(iterate-until step-fn predicate init #:max-iter integer) -> any
-```
-
-Semantics:
-
-- bounded loop,
-- stops when predicate returns true or `max-iter` is reached,
-- used for refine/critique loops,
-- dry-run reports worst-case iteration count unless predicate is statically
-  known.
-
-#### `gate`
-
-```scheme
-(gate name value #:message string #:required boolean) -> value
-```
-
-Semantics:
-
-- suspends execution and transitions state to `"awaiting_gate"`,
-- stores the gate name, value preview, and message in the execution record,
-- waits for `resume_execution` to approve or reject,
-- on approve, returns `value` unchanged — downstream code sees the same data,
-- on reject, raises a structured gate-rejection error,
-- `#:required #t` means the gate always fires; `#:required #f` means it fires
-  only when the execution policy includes `require_gates: true`,
-- in dry-run mode, gates are recorded in the simulation output but do not
-  suspend — the dry-run reports `"gates": ["review_extractions"]` so the
-  agent knows execution will pause.
-
-Gate is a pass-through — it does not transform data. Templates place gates
-between phases where human review adds value (e.g., between extraction and
-synthesis).
-
-**Gate lifecycle:**
-
-```text
-Template declares gate       →  Verification checks gate names match
-  ↓                               define-meta gates declarations
-Execution reaches gate call  →  State transitions to awaiting_gate
-  ↓                               Value + message stored in execution record
-Agent calls resume_execution
-  ├─ decision=approve        →  State returns to running, gate returns value
-  └─ decision=reject         →  State transitions to gate_rejected,
-                                  structured error raised, partial work preserved
-```
-
-Gates with `#:required #f` only fire when the execution policy includes
-`require_gates: true`. This allows the same template to run interactively
-(with gates) or autonomously (skipping gates). In dry-run mode, gates are
-recorded but never suspend — the response lists gate names so the agent
-knows to expect pauses during real execution.
-
-#### `recursive-spawn`
-
-```scheme
-(recursive-spawn template-name slot-values) -> (lambda (data) syntax-object)
-```
-
-`template-name` is a string naming a template in the catalog.
-`slot-values` is an alist of slot bindings for the sub-template (excluding
-the data slot, which is provided by the returned lambda).
-
-Semantics:
-
-- returns a lambda that, when called with `data`:
-  1. creates a temporary context from `data`,
-  2. instantiates the named template with `slot-values` plus the
-     temporary context ID,
-  3. verifies the sub-artifact against the parent execution's policy,
-  4. executes the sub-artifact in the same sandbox,
-- sub-artifacts are instantiated at runtime, not ahead of time, because
-  the data they operate on may not exist until execution (e.g., items
-  produced by a decomposition step),
-- global recursion depth is enforced host-side — the host increments a
-  depth counter on each `recursive-spawn` invocation and rejects
-  instantiation when `policy.max_recursive_depth` is exceeded,
-- the sub-execution inherits the parent's token budget, policy, and
-  execution record (sub-calls appear in the parent's trace),
-- inherits explicitly passed context refs only,
-- appears as recursive depth in dry-run and trace.
-
-Do not include a public `#:depth` keyword — depth enforcement is
-host-side only.
-
-#### `memoized`
-
-```scheme
-(memoized fn #:key-fn key-fn) -> procedure
-```
-
-Semantics:
-
-- caches within one execution unless the template requests persistent caching,
-- key function must be deterministic,
-- trace should record cache hits/misses for LLM-call avoidance.
-
-#### `with-validation`
-
-```scheme
-(with-validation fn validator) -> procedure
-```
-
-Semantics:
-
-- runs `fn`,
-- validates result,
-- returns result or raises structured validation error,
-- should include schema path or validation rule in errors.
-
-#### `try-fallback`
-
-```scheme
-(try-fallback primary-fn fallback-fn) -> procedure
-```
-
-Semantics:
-
-- catches declared error classes,
-- executes fallback with the original args,
-- records both primary failure and fallback result in trace.
-
-#### `checkpoint` / `restore`
-
-```scheme
-(checkpoint key value) -> value
-(restore key) -> value-or-#f
-```
-
-Semantics:
-
-- keys are namespaced by execution/artifact unless explicitly shared,
-- values must be JSON-serializable,
-- checkpoints should be visible in execution trace and status.
-
-#### `tokens-used` / `rate-limits` / `heartbeat`
-
-```scheme
-(tokens-used) -> hash
-(rate-limits) -> hash
-(heartbeat) -> void
-```
-
-Semantics:
-
-- expose host accounting to instantiated strategies,
-- `heartbeat` should also be emitted automatically by long primitives.
-
-#### Python Bridge
-
-```scheme
-(py-set! name value) -> void
-(py-exec code) -> string
-(py-eval expr) -> any
-(py-call ref method . args) -> any
-```
-
-Semantics:
-
-- runs in an isolated Python subprocess,
-- receives values over JSON, not string interpolation,
-- can access declared context values,
-- cannot access MCP server internals or Racket scaffold bindings,
-- should be used only by trusted templates.
-
-Allowed Python bridge use cases:
-
-- JSON parsing,
-- schema validation,
-- table aggregation,
-- grouping,
-- deduplication,
-- statistics,
-- deterministic uncertainty filtering.
-
-Disallowed by default:
-
-- arbitrary filesystem writes outside artifact/checkpoint stores,
-- subprocess/shell execution,
-- network access,
-- importing project secrets,
-- mutating durable records except through host APIs.
-
-### Helper Primitives
-
-#### `finish`
-
-```scheme
-(finish value) -> (terminates execution)
-```
-
-Semantics:
-
-- terminates the current execution and sets its result to `value`,
-- if the template declares `output-schema` in `define-meta`, the runtime
-  validates `value` against it before accepting — validation failure
-  produces a structured error and transitions the execution to `failed`,
-- implemented via Racket's `shift`/`reset` (delimited continuations) to
-  exit the artifact body cleanly,
-- exactly one `finish` call per execution — if the artifact body completes
-  without calling `finish`, the execution ends with `failed` and error
-  `"No finish call reached."`,
-- the value passed to `finish` becomes the `result.value` field in the
-  `execute_strategy` response.
-
-#### `syntax-e`
-
-```scheme
-(syntax-e stx) -> any
-```
-
-Semantics:
-
-- unwraps a syntax object to its underlying value (typically a string),
-- pass-through for non-syntax values (plain strings, numbers, etc.),
-- logs every unwrap operation to the scope/provenance log with a preview
-  of the unwrapped value and the scope it originated from,
-- this is the explicit "trust this LLM output" operation — model output
-  is data until `syntax-e` is called.
-
-#### `datum->syntax`
-
-```scheme
-(datum->syntax datum) -> syntax-object
-```
-
-Semantics:
-
-- wraps a plain value (string, number, etc.) in a syntax object with
-  scope metadata,
-- logs the wrap operation to the scope/provenance log,
-- used when template code needs to promote a computed value back into the
-  syntax-tracked domain (e.g., wrapping Python bridge output for
-  downstream consumption by syntax-aware primitives).
-
-#### `__context-ref`
-
-```scheme
-(__context-ref context-id json-path) -> any
-```
-
-Semantics:
-
-- retrieves data from a loaded context at runtime,
-- `context-id` must be a valid `ctx_` ID that exists in the store,
-- `json-path` is an RFC 9535 JSONPath expression evaluated against the
-  stored context data,
-- `"$"` returns the entire context value (use when data is a raw array),
-- the instantiator validates that `context_id` slots match `^ctx_` and
-  that `json-path` slots are syntactically valid JSONPath at
-  instantiation time; runtime resolution failures are structured errors.
-
-#### `__join-json`
-
-```scheme
-(__join-json items) -> string
-```
-
-Semantics:
-
-- takes a list of JSON strings and produces a single JSON array string
-  containing all items: `"[item1, item2, ...]"`,
-- each item is parsed to verify JSON well-formedness; malformed items
-  produce a structured error,
-- used in `tree-reduce` bodies to aggregate multiple results into a
-  single string suitable as `#:data` input for an LLM call.
-
-### Error Propagation Model
-
-Each primitive must define how errors are handled. Templates declare an error
-policy per primitive usage in their metadata; the instantiator validates the
-corresponding error handling in the template body.
-
-**Error policies** (declared per-node in templates):
-
-| Policy | Behavior |
-|---|---|
-| `fail_fast` | First error aborts the entire node. Partial results are discarded. Default for most primitives. |
-| `collect` | Errors are collected alongside successful results. The node completes and returns a mixed result list with error markers. Consumer nodes must handle error entries. |
-| `fallback` | On error, execute the declared fallback function for that item. If fallback also fails, apply `fail_fast` or `collect` as secondary policy. |
-
-**Per-primitive error semantics:**
-
-| Primitive | Default policy | Error behavior |
-|---|---|---|
-| `llm-query` | `fail_fast` | Provider errors, timeouts, and token budget exhaustion propagate as structured errors. Rate-limit errors trigger retry (see retry policy). |
-| `llm-query-async` | `fail_fast` | Error is captured in the future. Surfaces when the handle is awaited. |
-| `await` | `fail_fast` | Re-raises the error from the awaited handle. |
-| `await-all` | `fail_fast` | If any handle errored, raises the first error. With `collect`, returns error markers in position (see error marker format below). |
-| `await-any` | `fail_fast` | If the completed handle errored, raises immediately. Remaining handles are still cancellable. |
-| `map-async` | `fail_fast` | First item error cancels remaining in-flight items and raises. With `collect`, continues all items and returns mixed results. With `fallback`, retries failed items with fallback function. |
-| `parallel` | `fail_fast` | First thunk error cancels remaining and raises. With `collect`, completes all thunks. |
-| `race` | `fail_fast` | If first completed is an error, raises immediately. Remaining are cancelled. Does not wait for a successful result. |
-| `tree-reduce` | `fail_fast` | Error at any level aborts the tree. Partial reductions from completed levels are lost. |
-| `fold-sequential` | `fail_fast` | Error on any item aborts. Accumulator state up to the error is available in checkpoint if checkpointing is enabled. |
-| `iterate-until` | `fail_fast` | Error on any iteration aborts. Last successful state is available if checkpointed. |
-| `recursive-spawn` | `fail_fast` | Sub-artifact error propagates to parent. |
-| `with-validation` | `fail_fast` | Validation failure is a structured error, not an exception. The template decides whether to retry or propagate. |
-| `try-fallback` | N/A | This IS the error recovery primitive. Primary error triggers fallback. If fallback also fails, the error propagates. |
-
-**Error marker format:** When a primitive uses the `collect` error policy,
-failed items are represented in the result list as error marker objects:
-
-```json
-{
-  "__error": true,
-  "message": "Provider returned 500: Internal Server Error",
-  "item_index": 42,
-  "call_id": "call_043",
-  "retries_attempted": 3,
-  "error_type": "server_error"
-}
-```
-
-Consumer nodes (e.g., `tree-reduce` after `map-async`) must handle error
-markers explicitly — they are not filtered out automatically. Templates
-should use `with-validation` or Python bridge filtering to separate
-successful results from error markers before passing to reduction phases.
-
-**Rate-limit and transient errors** are handled by the retry policy (see
-section 11.6) before the error policy applies. Only non-retryable errors reach
-the per-primitive error handling.
-
-**Checkpoints and partial recovery:** Templates that process large item lists
-should declare `checkpoint_every: N`. When `map-async` or `fold-sequential`
-checkpoints, a `restore` call on re-execution skips already-completed items.
-This interacts with error policies — `fail_fast` with checkpointing means the
-failed execution can be retried from the last checkpoint, not from scratch.
-
-### Common Patterns As Template Compositions
-
-The runtime does not provide pre-composed patterns. Common orchestration
-patterns are expressed as template-level compositions of primitives:
-
-| Pattern | Composed from |
-|---|---|
-| Fan-out-aggregate | `map-async` + `tree-reduce` or `fold-sequential` |
-| Critique-refine | `iterate-until` with generate/critique/refine state |
-| Ensemble | `parallel` + aggregation logic |
-| Vote | `parallel` + majority/plurality/consensus selection |
-| Tiered review | cheap `map-async` → filter → expensive review |
-| Active learning | cheap `map-async` → uncertainty filter → expensive `map-async` |
-| Code interpreter | `llm-query` + `py-exec` + `with-validation` + `iterate-until` |
-
-### Privileged Runtime Hooks
-
-The runtime does not expose `unsafe-interpolate`, `unsafe-overwrite`, or
-`unsafe-exec-sub-output` as public bindings. If the instantiator needs
-privileged hooks, they are private host-generated forms that templates
-cannot request directly.
+### 2.7 Checklist
+
+- [ ] `v2/rlm_scheme/context.py` implements ContextManager with store/get/list/analyze/preview
+- [ ] Auto-detection identifies FlatList, Tabular, Singular, KeyValue shapes
+- [ ] Preview generation works for strings (500 chars) and arrays (3 items)
+- [ ] Large data protection (100KB threshold) implemented
+- [ ] `load_context` MCP tool wired to real ContextManager
+- [ ] `get_context` MCP tool wired to real ContextManager
+- [ ] `v2/tests/test_context.py` has 17+ tests
+- [ ] All tests pass: `python -m pytest tests/test_context.py -v`
 
 ---
 
-## 10. Preserved Feature Inventory
+## Batch 3: Template Catalog and S-Expression Parser
 
-The rewrite should not accidentally lose these current capabilities.
+### 3.0 Purpose
 
-### Context Handling
+Build the S-expression parser for `define-meta` forms, implement the template loader that reads `.rkt` files and extracts structured metadata, implement the template validator that checks required fields and slot schema well-formedness, and create all 16 template `.rkt` files from the initial catalog. This batch provides the template infrastructure that the classifier, instantiator, and planner depend on.
 
-Preserve large context support as a first-class feature, not just a variable
-called `context`.
+### 3.1 Depends On
 
-Required behavior:
+Batch 0 (models, enums).
 
-- context objects get stable `context_id`s,
-- named contexts remain possible,
-- metadata captures DataShape, item count, modality, chunking, independence,
-  token estimates, and source information,
-- Python bridge receives context when needed,
-- planner can classify from metadata without reading all data,
-- artifacts reference contexts by ID instead of embedding large payloads.
+### 3.2 Files to Create or Modify
 
-### Hygiene And Provenance
+| File | Action | Description |
+|------|--------|-------------|
+| `v2/rlm_scheme/sexpr_parser.py` | Create | S-expression parser for define-meta forms |
+| `v2/rlm_scheme/template_loader.py` | Create | Template loader: reads .rkt files, extracts metadata |
+| `v2/rlm_scheme/template_validator.py` | Create | Template validator: checks required fields, slot schema |
+| `v2/rlm_scheme/templates/direct_call.rkt` | Create | Direct single-call template |
+| `v2/rlm_scheme/templates/direct_json_extract.rkt` | Create | Direct JSON extraction template |
+| `v2/rlm_scheme/templates/batch_map.rkt` | Create | Batch map-async template |
+| `v2/rlm_scheme/templates/batch_extract_reduce.rkt` | Create | Batch extract + tree-reduce template |
+| `v2/rlm_scheme/templates/batch_extract_fold.rkt` | Create | Batch extract + fold-sequential template |
+| `v2/rlm_scheme/templates/ordered_synthesis_fold.rkt` | Create | Ordered synthesis via fold template |
+| `v2/rlm_scheme/templates/tree_synthesis.rkt` | Create | Tree-reduce synthesis template |
+| `v2/rlm_scheme/templates/compare_candidates.rkt` | Create | Parallel comparison template |
+| `v2/rlm_scheme/templates/race_candidates.rkt` | Create | Race-first-wins template |
+| `v2/rlm_scheme/templates/refine_until_valid.rkt` | Create | Iterate-until with validation template |
+| `v2/rlm_scheme/templates/bounded_critique_refine.rkt` | Create | Bounded critique-refine loop template |
+| `v2/rlm_scheme/templates/tiered_review.rkt` | Create | Cheap pass + uncertainty filter + expensive review |
+| `v2/rlm_scheme/templates/tabular_extract_aggregate.rkt` | Create | Map extraction + python aggregation template |
+| `v2/rlm_scheme/templates/decompose_then_batch.rkt` | Create | JSON decomposition + map-async template |
+| `v2/rlm_scheme/templates/recursive_decompose.rkt` | Create | Recursive-spawn decomposition template |
+| `v2/rlm_scheme/templates/code_interpreter.rkt` | Create | LLM code generation + py-exec template |
+| `v2/tests/test_sexpr_parser.py` | Create | Parser tests for atoms, lists, define-meta forms |
+| `v2/tests/test_template_loader.py` | Create | Loader tests: metadata extraction, body separation, catalog listing |
 
-Preserve the core RLM-Scheme safety idea:
+### 3.3 Requirements
 
-- LLM results are syntax-wrapped by default,
-- unwrapping is explicit and logged,
-- `datum->syntax` wrapping is explicit and logged,
-- scope/provenance logs are attached to execution traces,
-- generated artifacts cannot overwrite runtime scaffold bindings.
+- R-3.1 [MUST] S-expression parser handles: strings (double-quoted with escapes), numbers (int and float), booleans (`#t`, `#f`), symbols, lists (parenthesized), quoted forms (`'expr`), dot-pairs (`(a . b)`).
+- R-3.2 [MUST] Parser extracts all `(define-meta name value)` forms from template files into a dict keyed by name.
+- R-3.3 [MUST] Duplicate `define-meta` names in a single template raise a parse error.
+- R-3.4 [MUST] Template loader separates metadata (define-meta forms) from body (remaining Scheme code).
+- R-3.5 [MUST] Template loader validates these required metadata fields: `name`, `version`, `task-shapes`, `data-shapes`, `slots`.
+- R-3.6 [MUST] Template validator checks slot schema well-formedness: each slot has `type`, required slots have `required #t`, types are one of `string`, `integer`, `boolean`, `number`.
+- R-3.7 [MUST] Template validator checks output-schema alist syntax: balanced parens, top-level keys from `type`, `properties`, `items`, `required`, `enum`, `description`.
+- R-3.8 [MUST] All 16 template `.rkt` files from the catalog (See Appendix G) are created with complete define-meta metadata and valid Scheme bodies.
+- R-3.9 [MUST] Template loader provides `list_templates()` returning all loaded template names.
+- R-3.10 [MUST] Template loader provides `get_template(name)` returning metadata + body.
+- R-3.11 [MUST] Each template declares: `name`, `version`, `summary`, `task-shapes`, `data-shapes`, `slots`, `structural-profile`, `verification-rules`.
+- R-3.12 [SHOULD] Each template declares: `trigger`, `reject`, `output-schema`, `streamable`, `cacheable`, `budget-policy`, `gates`, `uses-llm-generated-code`, `examples`.
+- R-3.13 [MUST] Template bodies contain only `{{slot_name}}` markers and references to primitive runtime bindings from Appendix B.
 
-The greenfield implementation can simplify mechanics, but it should keep the
-observable guarantee: model output is data until explicitly unwrapped.
+### 3.4 Detailed Specifications
 
-### Async Execution
+**S-Expression Parser:**
 
-Preserve the async callback architecture:
+```python
+class SExprParser:
+    \"\"\"Parse S-expressions from template files.\"\"\"
 
-- `llm-query-async` returns handles,
-- `await`, `await-all`, and `await-any` work with real futures,
-- `map-async` uses bounded concurrency and rolling completion,
-- long fan-outs report progress and heartbeat,
-- cancellation works for queued, active, and nested calls.
+    def parse(self, text: str) -> list:
+        \"\"\"Parse text into a list of S-expressions.\"\"\"
+        tokens = self._tokenize(text)
+        results = []
+        while tokens:
+            results.append(self._parse_expr(tokens))
+        return results
 
-`parallel` must be genuinely concurrent in the rewrite. It should require
-thunks that return async handles or instantiate into equivalent async structure.
+    def _tokenize(self, text: str) -> list[str]:
+        \"\"\"Tokenize S-expression text into tokens.\"\"\"
+        # Handle: ( ) ' \"strings\" #t #f ;comments numbers symbols
+        tokens = []
+        i = 0
+        while i < len(text):
+            c = text[i]
+            if c in ' \\t\
+\\r':
+                i += 1
+            elif c == ';':
+                # Skip to end of line (comment)
+                while i < len(text) and text[i] != '\
+':
+                    i += 1
+            elif c in '()':
+                tokens.append(c)
+                i += 1
+            elif c == \"'\":
+                tokens.append(\"'\")
+                i += 1
+            elif c == '\"':
+                # Parse string literal
+                j = i + 1
+                while j < len(text) and text[j] != '\"':
+                    if text[j] == '\\\\':
+                        j += 1  # skip escaped char
+                    j += 1
+                tokens.append(text[i:j+1])
+                i = j + 1
+            elif c == '#':
+                if text[i+1] in 'tf':
+                    tokens.append(text[i:i+2])
+                    i += 2
+                else:
+                    # Other # forms
+                    j = i
+                    while j < len(text) and text[j] not in ' \\t\
+\\r()':
+                        j += 1
+                    tokens.append(text[i:j])
+                    i = j
+            else:
+                # Symbol or number
+                j = i
+                while j < len(text) and text[j] not in ' \\t\
+\\r();\"':
+                    j += 1
+                tokens.append(text[i:j])
+                i = j
+        return tokens
 
-### Runtime Accounting
+    def _parse_expr(self, tokens: list) -> any:
+        \"\"\"Parse one expression from token list (mutates tokens).\"\"\"
+        if not tokens:
+            raise ValueError(\"Unexpected end of input\")
+        token = tokens.pop(0)
+        if token == '(':
+            return self._parse_list(tokens)
+        elif token == \"'\":
+            return ('quote', self._parse_expr(tokens))
+        else:
+            return self._parse_atom(token)
 
-Preserve:
+    def _parse_list(self, tokens: list) -> list | tuple:
+        \"\"\"Parse list contents until closing paren.\"\"\"
+        result = []
+        while tokens and tokens[0] != ')':
+            if tokens[0] == '.':
+                tokens.pop(0)
+                cdr = self._parse_expr(tokens)
+                assert tokens.pop(0) == ')'
+                return (result[0] if len(result) == 1 else tuple(result), cdr)
+            result.append(self._parse_expr(tokens))
+        if tokens:
+            tokens.pop(0)  # consume ')'
+        return result
 
-- token usage tracking,
-- scoped token budgets,
-- rate-limit header tracking,
-- retry behavior for rate limits/transient failures,
-- per-call model/latency/tokens/error records,
-- execution summaries.
+    def _parse_atom(self, token: str) -> any:
+        if token == '#t': return True
+        if token == '#f': return False
+        if token.startswith('\"') and token.endswith('\"'):
+            return token[1:-1].replace('\\\\\"', '\"').replace('\\\\\\\\', '\\\\')
+        try: return int(token)
+        except ValueError: pass
+        try: return float(token)
+        except ValueError: pass
+        return token  # symbol
 
-### Long-Running Workflow Support
+def extract_define_metas(exprs: list) -> tuple[dict, list]:
+    \"\"\"Separate define-meta forms from body expressions.\"\"\"
+    meta = {}
+    body = []
+    for expr in exprs:
+        if isinstance(expr, list) and len(expr) == 3 and expr[0] == 'define-meta':
+            name = expr[1]
+            if name in meta:
+                raise ValueError(f\"Duplicate define-meta: {name}\")
+            value = expr[2]
+            if isinstance(value, tuple) and len(value) == 2 and value[0] == 'quote':
+                value = value[1]
+            meta[name] = value
+        else:
+            body.append(expr)
+    return meta, body
+```
 
-Preserve:
+**Template Loader:**
 
-- checkpoint/restore,
-- heartbeat,
-- progress messages,
-- call registry,
-- cancellation,
-- execution trace retrieval after completion or failure.
+```python
+class TemplateLoader:
+    REQUIRED_META = (\"name\", \"version\", \"task-shapes\", \"data-shapes\", \"slots\")
 
-These are essential for large recursive workflows.
+    def __init__(self, templates_dir: str | Path):
+        self.templates_dir = Path(templates_dir)
+        self._cache: dict[str, dict] = {}
 
-### Multimodal Support
+    def load_template(self, name: str) -> dict:
+        \"\"\"Load and parse a template by name.\"\"\"
+        path = self.templates_dir / f\"{name}.rkt\"
+        if not path.exists():
+            raise TemplateNotFoundError(f\"Template not found: {name}\")
+        text = path.read_text()
+        parser = SExprParser()
+        exprs = parser.parse(text)
+        meta, body = extract_define_metas(exprs)
+        self._validate_required(name, meta)
+        return {\"name\": name, \"metadata\": meta, \"body_text\": self._extract_body_text(text), \"path\": str(path)}
 
-Preserve image support:
+    def list_templates(self) -> list[str]:
+        \"\"\"List all available template names.\"\"\"
+        return sorted(p.stem for p in self.templates_dir.glob(\"*.rkt\"))
 
-- file paths, data URLs, and base64 images,
-- MIME validation by magic bytes,
-- max image size checks,
-- warnings for too many images,
-- model capability checks in templates.
+    def get_template(self, name: str) -> dict:
+        if name not in self._cache:
+            self._cache[name] = self.load_template(name)
+        return self._cache[name]
+```
 
-### Python Bridge
+### 3.5 Test Specification
 
-Keep a controlled Python bridge because it is useful for:
+| Test File | Test Function | Scenario | Expected |
+|-----------|---------------|----------|----------|
+| `v2/tests/test_sexpr_parser.py` | `test_parse_string` | Parse `\"hello\"` | Returns `\"hello\"` |
+| `v2/tests/test_sexpr_parser.py` | `test_parse_number` | Parse `42` and `3.14` | Returns int 42, float 3.14 |
+| `v2/tests/test_sexpr_parser.py` | `test_parse_boolean` | Parse `#t` and `#f` | Returns True, False |
+| `v2/tests/test_sexpr_parser.py` | `test_parse_symbol` | Parse `map-async` | Returns string `\"map-async\"` |
+| `v2/tests/test_sexpr_parser.py` | `test_parse_list` | Parse `(a b c)` | Returns `[\"a\", \"b\", \"c\"]` |
+| `v2/tests/test_sexpr_parser.py` | `test_parse_nested_list` | Parse `(a (b c) d)` | Returns `[\"a\", [\"b\", \"c\"], \"d\"]` |
+| `v2/tests/test_sexpr_parser.py` | `test_parse_quoted` | Parse `'(a b)` | Returns `(\"quote\", [\"a\", \"b\"])` |
+| `v2/tests/test_sexpr_parser.py` | `test_parse_dot_pair` | Parse `(a . b)` | Returns `(\"a\", \"b\")` |
+| `v2/tests/test_sexpr_parser.py` | `test_parse_comment` | Parse `; comment\
+(a)` | Returns `[[\"a\"]]` |
+| `v2/tests/test_sexpr_parser.py` | `test_parse_string_escapes` | Parse `\"a\\\"b\\\\c\"` | Returns `'a\"b\\\\c'` |
+| `v2/tests/test_sexpr_parser.py` | `test_extract_define_metas` | Parse template with 3 define-meta forms | Meta dict has 3 keys, body has remaining exprs |
+| `v2/tests/test_sexpr_parser.py` | `test_duplicate_define_meta` | Template with duplicate name | Raises `ValueError` |
+| `v2/tests/test_sexpr_parser.py` | `test_parse_define_meta_quoted_list` | `(define-meta shapes '(Batch Synthesize))` | Meta value is `[\"Batch\", \"Synthesize\"]` |
+| `v2/tests/test_sexpr_parser.py` | `test_parse_slot_schema` | Parse full slot alist | Correct nested structure with types, defaults, required |
+| `v2/tests/test_template_loader.py` | `test_load_batch_extract_reduce` | Load batch_extract_reduce.rkt | Has name, version, task-shapes, data-shapes, slots |
+| `v2/tests/test_template_loader.py` | `test_load_all_templates` | Load all 16 templates | All parse without error, all have required fields |
+| `v2/tests/test_template_loader.py` | `test_list_templates` | Call list_templates() | Returns 16 names |
+| `v2/tests/test_template_loader.py` | `test_template_not_found` | Load nonexistent template | Raises `TemplateNotFoundError` |
+| `v2/tests/test_template_loader.py` | `test_template_has_body` | Load any template | `body_text` is non-empty, contains `{{slot}}` markers or primitive calls |
+| `v2/tests/test_template_loader.py` | `test_template_metadata_types` | Load batch_extract_reduce | `task-shapes` is list, `slots` is list of lists, `version` is string |
+| `v2/tests/test_template_loader.py` | `test_template_validator_required_fields` | Template missing `name` field | Validator raises error |
+| `v2/tests/test_template_loader.py` | `test_template_slot_schema_valid` | batch_extract_reduce slot schema | All slots have `type`, required slots have `required #t` |
+| `v2/tests/test_template_loader.py` | `test_output_schema_alist` | batch_extract_reduce output-schema | Parses to valid alist with known JSON Schema keywords |
 
-- JSON parsing and validation,
-- tabular aggregation,
-- statistics,
-- deterministic filtering,
-- grouping and deduplication,
-- local computation that should not consume LLM tokens.
+### 3.6 Acceptance Gates
 
-The bridge should not become an unrestricted public escape hatch. Templates
-should declare when Python computation is required, and the instantiator should
-generate constrained bridge calls.
+```bash
+# Parser tests pass
+cd v2 && python -m pytest tests/test_sexpr_parser.py -v
+# Expected: 14 passed
 
-### Recursive Delegation
+# Template loader tests pass
+cd v2 && python -m pytest tests/test_template_loader.py -v
+# Expected: 9 passed
 
-Preserve recursive LLM orchestration, but make it artifact-aware:
+# All 16 templates exist and load
+cd v2 && python -c \"
+from rlm_scheme.template_loader import TemplateLoader
+loader = TemplateLoader('rlm_scheme/templates')
+templates = loader.list_templates()
+assert len(templates) >= 16, f'Only {len(templates)} templates found'
+for name in templates:
+    t = loader.get_template(name)
+    assert 'name' in t['metadata']
+    assert 'slots' in t['metadata']
+print(f'{len(templates)} templates loaded OK')
+\"
+# Expected: \"16 templates loaded OK\"
 
-- recursive calls instantiate sub-strategies, not arbitrary model-written Scheme,
-- global recursion depth is enforced in one place,
-- nested executions inherit context references intentionally,
-- recursive depth appears in dry-run and trace output.
+# No template body references disallowed forms
+cd v2 && python -c \"
+from pathlib import Path
+import re
+disallowed = ['(eval ', '(system ', '(shell ']
+for p in Path('rlm_scheme/templates').glob('*.rkt'):
+    text = p.read_text()
+    for d in disallowed:
+        assert d not in text, f'{p.name} contains disallowed form: {d}'
+print('No disallowed forms found')
+\"
+# Expected: \"No disallowed forms found\"
+```
 
-Remove dead or misleading APIs such as `recursive-spawn #:depth` unless the
-keyword is wired to real enforcement.
+### 3.7 Checklist
+
+- [ ] `v2/rlm_scheme/sexpr_parser.py` handles strings, numbers, booleans, symbols, lists, quotes, dot-pairs, comments
+- [ ] `extract_define_metas()` separates metadata from body, rejects duplicates
+- [ ] `v2/rlm_scheme/template_loader.py` loads .rkt files, validates required fields
+- [ ] `v2/rlm_scheme/template_validator.py` checks slot schemas and output-schema alists
+- [ ] All 16 template `.rkt` files created with complete define-meta and valid bodies
+- [ ] `list_templates()` returns 16 names
+- [ ] `v2/tests/test_sexpr_parser.py` has 14+ tests
+- [ ] `v2/tests/test_template_loader.py` has 9+ tests
+- [ ] All tests pass
 
 ---
 
-## 11. Architecture Components
+## Batch 4: Classifier, Instantiator, and Planner
 
-### 11.1 Durable Store
+### 4.0 Purpose
 
-Start with filesystem JSON records for simplicity, but design the schema so it
-can move to SQLite, PGlite, or another embedded database.
+Implement the deterministic TaskShape/DataShape classifier using the Q0-Q9 decision tree, the template instantiator that validates slot values and performs safe `{{slot}}` substitution to produce immutable artifacts, and the planner that orchestrates classification, template selection via trigger/reject conditions, slot filling, and plan record creation. Wire the `plan_strategy` MCP tool to the real implementation.
 
-Store:
+### 4.1 Depends On
 
-- contexts,
-- plans,
-- artifacts,
-- dry-runs,
-- verification records,
-- executions,
-- traces,
-- checkpoints,
-- cache entries.
+Batch 0 (models, enums, IDs, exceptions), Batch 1 (store), Batch 2 (context), Batch 3 (template catalog, s-expression parser).
 
-Every record should include:
+### 4.2 Files to Create or Modify
 
-- ID,
-- version,
-- creation timestamp,
-- parent IDs,
-- schema version,
-- status,
-- warnings/errors.
+| File | Action | Description |
+|------|--------|-------------|
+| `v2/rlm_scheme/classifier.py` | Create | Deterministic Q0-Q9 decision tree classifier |
+| `v2/rlm_scheme/instantiator.py` | Create | Slot validation, safe substitution, artifact creation |
+| `v2/rlm_scheme/planner.py` | Create | Classification + template selection + slot filling + plan record |
+| `v2/rlm_scheme/mcp_server.py` | Modify | Wire `plan_strategy` to real planner |
+| `v2/tests/test_classifier.py` | Create | Classification tests for all TaskShape paths |
+| `v2/tests/test_instantiator.py` | Create | Slot validation, substitution, hash determinism tests |
+| `v2/tests/test_planner.py` | Create | End-to-end planner tests |
 
-**State lifecycle and persistence scoping:**
+### 4.3 Requirements
 
-All durable records are persistent by default — they survive server restarts
-and `reset_runtime` calls. The `reset_runtime` tool accepts a `scope` parameter
-that controls what is cleared:
+- R-4.1 [MUST] `classify_task_shape(hints)` implements the Q0-Q9 decision tree from Appendix F, returning a `TaskShape` enum value.
+- R-4.2 [MUST] `classify_data_shape(metadata)` infers DataShape from context metadata fields (item_count, independent, ordered, modality, etc.) per the mapping rules in Appendix F.
+- R-4.3 [MUST] `select_template(task_shape, data_shape, hints, templates)` evaluates trigger/reject conditions from template metadata to select the best matching template.
+- R-4.4 [MUST] Template trigger conditions use implicit AND (all must match). Reject conditions use implicit OR (any match disqualifies).
+- R-4.5 [MUST] Instantiator applies defaults for missing optional slots first, then validates all slot values against the template's slot schema before substitution: type checking, required fields, min/max ranges, min-length, pattern matching, enum values. A required slot with no value and no default [MUST] fail validation.
+- R-4.6 [MUST] Instantiator performs safe `{{slot_name}}` substitution: strings are escaped and quoted, numbers and booleans are inserted as Scheme literals, context IDs are quoted strings.
+- R-4.7 [MUST] Instantiator rejects slot values containing unbalanced parentheses, Scheme keywords (`define`, `lambda`, `set!`, `eval`, `require`), or code injection attempts.
+- R-4.8 [MUST] After substitution, no `{{` markers remain in the artifact code.
+- R-4.9 [MUST] Instantiation is deterministic: same template + same slot values produce the same SHA-256 code hash.
+- R-4.10 [MUST] Instantiator stores ArtifactRecord with `generated_scheme_ref` pointing to the artifact file and its hash.
+- R-4.11 [MUST] Planner returns a PlanRecord with classification, recommended template invocation, and alternatives.
+- R-4.12 [MUST] For Composite tasks (Q9 = YES), planner produces a `template_chain` with `$previous` references connecting steps.
+- R-4.13 [MUST] If no template matches, planner returns `status: \"no_template\"` with `recommendation.needed_template`.
+- R-4.14 [SHOULD] Planner fills content slots (map_instruction, reduce_instruction) via LLM call when they are required, have no default, and no agent override.
+- R-4.15 [MUST] `plan_strategy` MCP tool returns JSON with `plan_id`, `classification`, `recommended`, `alternatives`, `next_actions`.
 
-| Scope | Clears | Preserves |
-|---|---|---|
-| `"sandbox"` | Racket sandbox state, in-memory caches, active call handles. | All durable records (contexts, plans, artifacts, dry-runs, verifications, executions, traces, checkpoints). |
-| `"session"` | Everything in `"sandbox"` plus execution records and traces from the current server session. | Contexts, plans, artifacts, dry-runs, verifications, and checkpoints from prior sessions. |
-| `"all"` | All durable records and sandbox state. Fresh start. | Nothing. |
-| `"cache"` | LLM result cache entries. | All durable records, sandbox state, and template catalog. |
-| `"config"` | Reloads model registry and template catalog from disk. | All durable records and sandbox state. |
+### 4.4 Detailed Specifications
 
-Contexts, plans, and artifacts are long-lived — they represent reusable work
-products. An agent can re-execute an artifact multiple times, creating new
-execution records each time. Dry-run and verification records are linked to
-specific artifacts and remain valid as long as the artifact exists.
+**Classifier (Q0-Q9 Decision Tree):**
 
-Execution records and traces are the most voluminous. They can be pruned by
-age or count without affecting the ability to create new executions from
-existing artifacts.
+```python
+from rlm_scheme.enums import TaskShape, DataShape
 
-Checkpoints are scoped to their execution but survive `"sandbox"` resets so
-that failed long-running workflows can be resumed.
+def classify_task_shape(hints: dict) -> TaskShape:
+    \"\"\"Deterministic task shape classification. See Appendix F.\"\"\"
+    item_count = hints.get(\"item_count\", 0)
+    independent = hints.get(\"independent\", False)
+    output_type = hints.get(\"output_type\", \"one\")
+    operation = hints.get(\"operation\", \"other\")
+    has_second_phase = hints.get(\"has_second_phase\", False)
+    ordered = hints.get(\"ordered\", False)
+    sub_operations = hints.get(\"sub_operations\", [])
 
-### 11.2 Slot Substitution
+    # Q9: Multiple phases? (check first as it can override)
+    if has_second_phase and len(sub_operations) >= 2:
+        return TaskShape.Composite
 
-See section 6 for the slot substitution model, allowed primitives, and
-disallowed operations. The instantiator fills `{{slot}}` markers in template
-Scheme code with concrete values — there is no intermediate node graph or
-resolved template representation.
+    # Q0: One small input, one output, one operation, no second phase?
+    if item_count <= 1 and output_type == \"one\" and not has_second_phase:
+        # Q5: Creating content with no source items?
+        if hints.get(\"creating_content\", False):
+            return TaskShape.Generate
+        # Q6: Improving one artifact?
+        if operation in (\"refine\", \"improve\", \"iterate\"):
+            return TaskShape.Refine
+        # Q7: Breaking input into parts?
+        if operation in (\"decompose\", \"split\", \"parse\"):
+            return TaskShape.Decompose
+        # Q8: Choosing among alternatives?
+        if operation in (\"compare\", \"choose\", \"select\"):
+            return TaskShape.Compare
+        if operation in (\"search\", \"find_best\"):
+            return TaskShape.Search
+        return TaskShape.Direct
 
-### 11.3 Template Catalog
+    # Q1: Many input items?
+    if item_count > 1:
+        # Q2: Items independent?
+        if independent:
+            # Q3: Per-item operation type
+            if operation in (\"transform\", \"extract\", \"extract_then_synthesize\"):
+                return TaskShape.Batch
+            elif operation in (\"label\", \"category\", \"categorize\"):
+                return TaskShape.Classify
+            elif operation in (\"check\", \"grade\", \"audit\", \"validate\"):
+                return TaskShape.Validate
+            else:
+                return TaskShape.Batch  # default for independent items
+        else:
+            # Q4: Information accumulates across ordered items?
+            if ordered:
+                return TaskShape.Synthesize
+            else:
+                return TaskShape.Pipeline
 
-See section 7 for the full template schema, and section 15 for the initial
-template catalog. Templates live as `.rkt` files with `define-meta` forms:
+    # Fallback based on output_type
+    if output_type == \"one\":
+        return TaskShape.Synthesize
+    elif output_type == \"list\":
+        return TaskShape.Aggregate
+    return TaskShape.Direct
 
-```text
-templates/
-  batch_extract_reduce.rkt
-  batch_map.rkt
-  ordered_synthesis_fold.rkt
-  compare_candidates.rkt
-  refine_until_valid.rkt
-  tiered_review.rkt
-  ...
+def classify_data_shape(metadata: dict) -> DataShape:
+    \"\"\"Infer DataShape from context metadata.\"\"\"
+    explicit = metadata.get(\"data_shape\")
+    if explicit:
+        try:
+            return DataShape(explicit)
+        except ValueError:
+            pass
+
+    item_count = metadata.get(\"item_count\", 0)
+    modality = metadata.get(\"modality\", [\"text\"])
+    independent = metadata.get(\"independent\")
+
+    if \"image\" in modality or \"audio\" in modality:
+        return DataShape.Multimodal
+    if item_count == 0:
+        return DataShape.Singular
+    if item_count == 1:
+        return DataShape.Singular
+    if independent is True:
+        return DataShape.FlatList
+    if independent is False:
+        if metadata.get(\"ordered\"):
+            return DataShape.ChunkedSingular
+        return DataShape.FlatList
+    return DataShape.Unknown
+
+def select_template(task_shape: TaskShape, data_shape: DataShape,
+                    hints: dict, templates: list[dict]) -> str | None:
+    \"\"\"Select best matching template using trigger/reject conditions.\"\"\"
+    candidates = []
+    for tmpl in templates:
+        meta = tmpl[\"metadata\"]
+        # Check shape compatibility
+        task_shapes = meta.get(\"task-shapes\", [])
+        data_shapes = meta.get(\"data-shapes\", [])
+        if task_shape.value not in task_shapes:
+            continue
+        if data_shapes and data_shape.value not in data_shapes:
+            continue
+        # Check reject conditions (implicit OR — any match disqualifies)
+        if _evaluate_reject(meta.get(\"reject\", []), hints):
+            continue
+        # Check trigger conditions (implicit AND — all must match)
+        if _evaluate_trigger(meta.get(\"trigger\", []), hints):
+            candidates.append(tmpl)
+    if not candidates:
+        return None
+    # Return first matching (templates are loaded in priority order)
+    return candidates[0][\"metadata\"][\"name\"]
 ```
 
-Template validation is a developer/CI concern. Runtime verification assumes
-trusted templates are structurally valid, but still verifies filled artifacts.
+**Instantiator:**
 
-### 11.4 Template Instantiation (internal library)
+```python
+import hashlib, re, json
+from rlm_scheme.ids import generate_id
+from rlm_scheme.models import ArtifactRecord, DataRef
+from rlm_scheme.exceptions import SlotValidationError, InstantiationError
 
-The instantiator validates slot values and substitutes them into template Scheme
-code to produce immutable artifacts. It is invoked internally by
-`dry_run_strategy` and `execute_strategy` — there is no dedicated
-`compile_strategy` MCP tool.
-
-Responsibilities:
-
-- parse template `define-meta` forms and Scheme body,
-- validate slot values against the template's `slots` metadata,
-- substitute `{{slot}}` markers with safe, type-appropriate values,
-- reject values that could inject arbitrary Scheme code,
-- verify all markers are resolved and only allowed primitives are used,
-- calculate static structural profiles from template metadata,
-- hash the resulting Scheme code,
-- store artifact metadata.
-
-The instantiator should be deterministic: same inputs, same artifact hash.
-
-The instantiator does NOT:
-
-- generate Scheme code from a node graph,
-- translate between an IR and Scheme,
-- produce source maps (the artifact IS the template with filled slots,
-  so line numbers correspond directly).
-
-### 11.5 Racket Runtime
-
-The Racket runtime should be a sandboxed execution engine, not the planning
-interface.
-
-Responsibilities:
-
-- evaluate instantiated Scheme artifacts,
-- enforce resource limits,
-- preserve syntax hygiene,
-- call back to Python host for LLM/Python/checkpoint/rate-limit operations,
-- emit stdout, scope logs, and trace events,
-- protect scaffold bindings.
-
-### 11.6 Python Host
-
-The Python MCP server owns orchestration state around the Racket runtime.
-
-Responsibilities:
-
-- MCP tools,
-- durable object store,
-- OpenAI or model-provider calls,
-- async futures and cancellation,
-- dry-run mode,
-- verification,
-- progress/status reporting,
-- trace assembly,
-- checkpoint persistence,
-- image resolution,
-- Python bridge process management.
-
-**Retry policy:** The host retries transient provider errors (rate limits,
-server errors, timeouts) before surfacing errors to the per-primitive error
-policy. The retry policy is configurable via `config/retry.json` (path
-configurable via `RLM_RETRY_CONFIG`):
-
-```json
-{
-  "schema_version": "1",
-  "defaults": {
-    "max_retries": 3,
-    "initial_backoff_seconds": 1.0,
-    "max_backoff_seconds": 60.0,
-    "backoff_multiplier": 2.0,
-    "retryable_status_codes": [429, 500, 502, 503, 504],
-    "retryable_error_types": ["rate_limit", "timeout", "server_error"]
-  },
-  "per_model_overrides": {
-    "fast_text_model": {
-      "max_retries": 5,
-      "initial_backoff_seconds": 0.5
-    }
-  }
-}
-```
-
-Retries are per-call, not per-execution. Each retry is logged in the
-execution trace. Rate-limit retries use the `Retry-After` header when
-available, falling back to exponential backoff. Token budget is not consumed
-by failed attempts. If all retries are exhausted, the error propagates to
-the per-primitive error policy (see section 9, Error Propagation Model).
-
-**Error type mapping:** The host classifies provider errors into retry
-categories using this mapping:
-
-| HTTP status / exception | Error type | Retry behavior |
-|---|---|---|
-| 429 (Too Many Requests) | `rate_limit` | Use `Retry-After` header if present, else exponential backoff |
-| 408 (Request Timeout), `ETIMEDOUT`, `ECONNRESET` | `timeout` | Exponential backoff, same request |
-| 500, 502, 503, 504 | `server_error` | Exponential backoff, same request |
-| 400, 401, 403, 404, 422 | `client_error` | **Not retried** — propagate immediately |
-| Network unreachable, DNS failure | `network_error` | **Not retried** — propagate immediately |
-| Provider SDK exception with no HTTP status | Classified by exception type: `RateLimitError` → `rate_limit`, `APITimeoutError` → `timeout`, `APIConnectionError` → `server_error`, all others → `client_error` | Per classification |
-
-`per_model_overrides` in the retry config are **merged** with defaults
-(override keys replace default keys; unspecified keys inherit defaults).
-
-**Progress reporting:** Long-running executions report progress via MCP
-notifications (server-initiated messages on the MCP transport). The protocol:
-
-1. The host emits `notifications/progress` messages during execution. Each
-   message includes `execution_id`, `node_id`, `completed_calls`,
-   `total_expected_calls`, `elapsed_seconds`, and optional `message`.
-2. Progress interval is configurable per-execution via
-   `runtime_options.progress_interval_seconds` (default: 2 seconds).
-3. Primitives that process many items (`map-async`, `tree-reduce`) emit
-   progress after each completed item or batch.
-4. `heartbeat` calls from Racket artifacts also trigger progress notifications.
-5. Agents that don't support notifications can poll `get_status(execution_id)`
-   for the same information.
-
-**Streaming transport:** Streaming uses the MCP SDK's built-in notification
-mechanism: `ctx.session.send_notification()` (Python FastMCP). The server
-calls this method to push `notifications/partial_result` messages over the
-existing MCP transport (stdio or SSE) — no separate channel is needed.
-Clients that don't support notifications (or ignore them) still receive the
-final result normally; streaming is best-effort.
-
-**Streaming partial results:** When `stream=true`, the host emits
-`notifications/partial_result` messages in addition to progress counts.
-For `map-async`, each completed item result is emitted. For `tree-reduce`,
-each completed reduction level is emitted. The host controls emission
-rate — high-throughput fan-outs may batch multiple items per notification
-to avoid flooding the transport.
-
-**LLM result cache:** Before dispatching each LLM call to the provider,
-the host checks the content-addressed cache (see section 11.7). On hit,
-the cached result is returned immediately — no provider call, no token
-consumption, no latency. Cache hits are logged in the trace with
-`"source": "cache"`. The host also checks remaining token budget before
-each dispatch and activates the template's budget policy when the
-threshold is crossed (see section 11.8 for budget-aware degradation).
-
-### 11.7 LLM Result Cache
-
-The server maintains a content-addressed cache of LLM call results that
-persists across executions. When the same LLM call (identical instruction,
-data, model, temperature, and json_mode) occurs in a later execution, the
-cached result is returned without calling the provider.
-
-**Key computation:**
-
-```text
-cache_key = sha256(
-    canonical_json(instruction) +
-    canonical_json(data) +
-    model_alias +
-    str(temperature) +
-    str(json_mode)
+SLOT_PATTERN = re.compile(r\"\\{\\{(\\w+)\\}\\}\")
+DANGEROUS_PATTERNS = re.compile(
+    r\"\\b(define|lambda|set!|eval|require|load|include|system)\\b\"
 )
+
+class Instantiator:
+    def __init__(self, store):
+        self.store = store
+
+    def instantiate(self, template: dict, slot_values: dict,
+                    plan_id: str | None = None,
+                    context_ids: list[str] | None = None) -> ArtifactRecord:
+        meta = template[\"metadata\"]
+        slots_schema = meta.get(\"slots\", [])
+
+        # 1. Apply defaults for missing optional slots
+        filled = self._apply_defaults(slots_schema, slot_values)
+
+        # 2. Validate filled slot values against schema (after defaults applied)
+        self._validate_slots(slots_schema, filled)
+
+        # 3. Perform safe substitution
+        body = template[\"body_text\"]
+        artifact_code = self._substitute(body, filled)
+
+        # 4. Verify no remaining markers
+        remaining = SLOT_PATTERN.findall(artifact_code)
+        if remaining:
+            raise InstantiationError(f\"Unfilled slot markers: {remaining}\")
+
+        # 5. Hash the result
+        code_hash = \"sha256:\" + hashlib.sha256(
+            artifact_code.encode(\"utf-8\")
+        ).hexdigest()
+
+        # 6. Store artifact
+        artifact_id = generate_id(\"art_\")
+        artifact_dir = self.store.base_dir / \"artifacts\" / artifact_id
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+        artifact_path = artifact_dir / \"program.rkt\"
+        artifact_path.write_text(artifact_code)
+
+        # 7. Extract primitives used
+        primitives = self._detect_primitives(artifact_code)
+
+        record = ArtifactRecord(
+            artifact_id=artifact_id,
+            plan_id=plan_id,
+            context_ids=context_ids or [],
+            template_name=meta[\"name\"],
+            template_version=meta.get(\"version\", \"1.0.0\"),
+            slot_values=filled,
+            generated_scheme_ref=DataRef(
+                storage=\"filesystem\",
+                path=f\"artifacts/{artifact_id}/program.rkt\",
+                hash=code_hash,
+                bytes=len(artifact_code.encode(\"utf-8\"))
+            ),
+            primitives_used=primitives,
+            static_profile=self._extract_profile(meta)
+        )
+        self.store.put(\"artifacts\", artifact_id, record.model_dump(mode=\"json\"))
+        return record
+
+    def _validate_slots(self, schema: list, values: dict) -> None:
+        \"\"\"Validate slot values against template slot schema.\"\"\"
+        for slot_def in schema:
+            name = slot_def[0]
+            props = {p[0]: p[1] for p in slot_def[1:]}
+            required = props.get(\"required\", False)
+            if required and name not in values:
+                raise SlotValidationError(f\"Required slot missing: {name}\")
+            if name in values:
+                value = values[name]
+                self._check_type(name, value, props.get(\"type\", \"string\"))
+                self._check_injection(name, value)
+                if \"min-length\" in props and isinstance(value, str):
+                    if len(value) < props[\"min-length\"]:
+                        raise SlotValidationError(
+                            f\"Slot {name}: min-length {props['min-length']}\"
+                        )
+                if \"pattern\" in props and isinstance(value, str):
+                    if not re.match(props[\"pattern\"], value):
+                        raise SlotValidationError(
+                            f\"Slot {name}: pattern mismatch\"
+                        )
+
+    def _check_injection(self, name: str, value) -> None:
+        \"\"\"Reject values that could inject Scheme code.\"\"\"
+        if isinstance(value, str):
+            if DANGEROUS_PATTERNS.search(value):
+                raise SlotValidationError(
+                    f\"Slot {name}: contains dangerous Scheme keyword\"
+                )
+            if value.count('(') != value.count(')'):
+                raise SlotValidationError(
+                    f\"Slot {name}: unbalanced parentheses\"
+                )
+
+    def _substitute(self, body: str, values: dict) -> str:
+        \"\"\"Perform safe {{slot}} substitution.\"\"\"
+        def replacer(match):
+            name = match.group(1)
+            value = values[name]
+            if isinstance(value, bool):
+                return \"#t\" if value else \"#f\"
+            elif isinstance(value, (int, float)):
+                return str(value)
+            elif isinstance(value, str):
+                escaped = value.replace('\\\\', '\\\\\\\\').replace('\"', '\\\\\"')
+                return f'\"{escaped}\"'
+            return str(value)
+        return SLOT_PATTERN.sub(replacer, body)
 ```
 
-`canonical_json()` produces deterministic JSON: keys sorted lexicographically,
-no whitespace, no trailing commas, numbers in their shortest representation
-(no trailing zeros), Unicode escaped as `\uXXXX`. This follows the spirit of
-RFC 8785 (JCS). Use Python's `json.dumps(obj, sort_keys=True, separators=(',', ':'), ensure_ascii=True)` as the reference implementation.
+### 4.5 Test Specification
 
-**Cache behavior:**
+| Test File | Test Function | Scenario | Expected |
+|-----------|---------------|----------|----------|
+| `v2/tests/test_classifier.py` | `test_q0_direct` | hints: item_count=1, output_type=\"one\" | `TaskShape.Direct` |
+| `v2/tests/test_classifier.py` | `test_q1_q2_q3_batch` | hints: item_count=100, independent=True, operation=\"extract\" | `TaskShape.Batch` |
+| `v2/tests/test_classifier.py` | `test_q1_q2_q3_classify` | hints: item_count=50, independent=True, operation=\"label\" | `TaskShape.Classify` |
+| `v2/tests/test_classifier.py` | `test_q1_q2_q3_validate` | hints: item_count=50, independent=True, operation=\"grade\" | `TaskShape.Validate` |
+| `v2/tests/test_classifier.py` | `test_q4_synthesize_ordered` | hints: item_count=10, independent=False, ordered=True | `TaskShape.Synthesize` |
+| `v2/tests/test_classifier.py` | `test_q4_pipeline_unordered` | hints: item_count=10, independent=False, ordered=False | `TaskShape.Pipeline` |
+| `v2/tests/test_classifier.py` | `test_q5_generate` | hints: item_count=0, creating_content=True | `TaskShape.Generate` |
+| `v2/tests/test_classifier.py` | `test_q6_refine` | hints: item_count=1, operation=\"refine\" | `TaskShape.Refine` |
+| `v2/tests/test_classifier.py` | `test_q7_decompose` | hints: item_count=1, operation=\"decompose\" | `TaskShape.Decompose` |
+| `v2/tests/test_classifier.py` | `test_q8_compare` | hints: item_count=1, operation=\"compare\" | `TaskShape.Compare` |
+| `v2/tests/test_classifier.py` | `test_q9_composite` | hints: has_second_phase=True, sub_operations=[\"extract\",\"synthesize\"] | `TaskShape.Composite` |
+| `v2/tests/test_classifier.py` | `test_data_shape_flat_list` | metadata: item_count=50, independent=True | `DataShape.FlatList` |
+| `v2/tests/test_classifier.py` | `test_data_shape_singular` | metadata: item_count=1 | `DataShape.Singular` |
+| `v2/tests/test_classifier.py` | `test_data_shape_multimodal` | metadata: modality=[\"text\",\"image\"] | `DataShape.Multimodal` |
+| `v2/tests/test_classifier.py` | `test_select_template_batch_reduce` | task_shape=Batch, data_shape=FlatList, hints matching trigger | Returns `\"batch_extract_reduce\"` |
+| `v2/tests/test_classifier.py` | `test_select_template_reject` | Template with reject condition matching hints | Template not selected |
+| `v2/tests/test_instantiator.py` | `test_instantiate_valid` | batch_map with valid slots | Artifact created, no `{{` in code |
+| `v2/tests/test_instantiator.py` | `test_instantiate_deterministic` | Same template + slots twice | Same code_hash both times |
+| `v2/tests/test_instantiator.py` | `test_instantiate_missing_required` | Omit required slot | Raises `SlotValidationError` |
+| `v2/tests/test_instantiator.py` | `test_instantiate_type_mismatch` | String for integer slot | Raises `SlotValidationError` |
+| `v2/tests/test_instantiator.py` | `test_instantiate_injection_rejected` | Slot value with `(eval ...)` | Raises `SlotValidationError` |
+| `v2/tests/test_instantiator.py` | `test_instantiate_unbalanced_parens` | Slot value with `\"(((\"` | Raises `SlotValidationError` |
+| `v2/tests/test_instantiator.py` | `test_instantiate_string_escaping` | Slot value with quotes | Properly escaped in artifact |
+| `v2/tests/test_instantiator.py` | `test_instantiate_boolean_slot` | json_mode=True | Substituted as `#t` in artifact |
+| `v2/tests/test_instantiator.py` | `test_instantiate_defaults_applied` | Omit optional slot with default | Default value used |
+| `v2/tests/test_planner.py` | `test_plan_with_full_hints` | All hints provided | No LLM call, deterministic classification |
+| `v2/tests/test_planner.py` | `test_plan_returns_invocation` | Standard batch task | Response has `recommended.template_name` |
+| `v2/tests/test_planner.py` | `test_plan_composite_chain` | Composite task hints | Response has `recommended.kind == \"template_chain\"` |
+| `v2/tests/test_planner.py` | `test_plan_no_template` | Unsupported task shape | Response has `status: \"no_template\"` |
+| `v2/tests/test_planner.py` | `test_plan_mcp_tool` | Call plan_strategy MCP tool | Response has plan_id, classification, recommended |
 
-- Cache entries are immutable — same key always returns same result.
-- Temperature = 0 calls are cached by default. Temperature > 0 calls are
-  not cached unless the template declares `cacheable: #t`.
-- Cache hits are logged in the execution trace with `"source": "cache"`.
-- Cache hits do not consume token budget.
-- `reset_runtime(scope="cache")` clears all cache entries.
+### 4.6 Acceptance Gates
 
-**Cache storage:** Alongside the durable store (filesystem or DB).
+```bash
+# Classifier tests pass
+cd v2 && python -m pytest tests/test_classifier.py -v
+# Expected: 16 passed
 
-**Eviction:** V1 uses manual-only eviction via `reset_runtime(scope="cache")`.
-No automatic LRU, TTL, or size-based eviction. This keeps the implementation
-simple and predictable — cached results are permanent until explicitly cleared.
-Automatic eviction can be added later if storage becomes a concern.
+# Instantiator tests pass
+cd v2 && python -m pytest tests/test_instantiator.py -v
+# Expected: 9 passed
 
-**Dry-run interaction:** When a dry-run instantiates an artifact that
-matches a previously-executed one, the dry-run response includes
-`cache_hits_expected` with the count of calls that would hit the cache.
-Cost estimates are adjusted accordingly.
+# Planner tests pass
+cd v2 && python -m pytest tests/test_planner.py -v
+# Expected: 5 passed
 
-### 11.8 Template Chaining
+# Classification with full hints uses no LLM calls
+cd v2 && python -c \"
+from rlm_scheme.classifier import classify_task_shape
+from rlm_scheme.enums import TaskShape
+shape = classify_task_shape({'item_count': 100, 'independent': True, 'output_type': 'one', 'has_second_phase': True, 'sub_operations': ['extract', 'synthesize']})
+assert shape == TaskShape.Composite, f'Got {shape}'
+print('Deterministic classification OK')
+\"
+# Expected: \"Deterministic classification OK\"
 
-A plan can describe a template chain — a linear sequence of template
-invocations where each step's output feeds as input context to the next.
-
-**Chain descriptor:** The plan record's `recommended` field has
-`"kind": "template_chain"` with a `"steps"` array. Each step is a
-standard template invocation. Steps reference the previous step's output
-via `"$previous"` in their `slot_values`.
-
-**Execution semantics:**
-
-1. Steps run sequentially.
-2. After step N finishes, its output is stored as an intermediate context
-   (`ctx_auto_N`) scoped to the execution.
-3. Step N+1's `"$previous"` references are resolved to `ctx_auto_N`.
-4. Step N+1 is instantiated and executed.
-5. The final step's output is the chain's result.
-
-Intermediate contexts are available in the execution trace and via
-`get_execution_trace`, but do not appear in the agent's context namespace
-(they are not returned by `get_context` unless explicitly requested).
-
-**Failure and retry:** If step N fails, the chain stops. Completed steps
-are checkpointed. Retrying the execution resumes from the failed step
-using checkpointed intermediate contexts — completed steps are not
-re-executed.
-
-**Gates in chains:** A gate at the end of step N suspends the chain
-before step N+1 begins. `resume_execution` continues the chain.
-
-**Dry-run:** Each step is instantiated and dry-run independently. The
-aggregate response includes per-step estimates and totals. Output schema
-compatibility between adjacent steps is validated at dry-run time (see
-section 12).
-
-**Scope:** Chains are linear pipelines only. Conditional branching and
-parallel fan-out stay with the outer agent. This keeps chain execution
-simple and predictable while the agent handles adaptive decisions.
-
-### 11.9 Code Interpreter Pattern
-
-The code interpreter pattern allows LLM calls to generate Python code that
-the bridge executes. This is not a new primitive — it is a composition of
-existing primitives (`llm-query` → `py-exec` → `with-validation` →
-`iterate-until`) elevated to a declared template capability.
-
-**Template declaration:**
-
-```scheme
-(define-meta uses-llm-generated-code #t)
-(define-meta code-generation-policy
-  '((max-code-length 500)
-    (allowed-imports (json csv statistics collections re))
-    (max-retries 2)
-    (sandbox-timeout-seconds 10)))
+# Instantiation determinism
+cd v2 && python -c \"
+from rlm_scheme.instantiator import Instantiator
+from rlm_scheme.template_loader import TemplateLoader
+from rlm_scheme.store import Store
+import tempfile
+store = Store(tempfile.mkdtemp())
+loader = TemplateLoader('rlm_scheme/templates')
+inst = Instantiator(store)
+tmpl = loader.get_template('batch_map')
+slots = {'context_id': 'ctx_aaaa1111bbbb2222', 'map_instruction': 'Extract data from each item.', 'map_model': 'fast_text_model', 'max_concurrent': 20, 'json_mode': True}
+a1 = inst.instantiate(tmpl, slots)
+a2 = inst.instantiate(tmpl, slots)
+assert a1.generated_scheme_ref.hash == a2.generated_scheme_ref.hash
+print('Deterministic instantiation OK')
+\"
+# Expected: \"Deterministic instantiation OK\"
 ```
 
-**Policy gating:** Verification checks `uses-llm-generated-code` against
-the execution policy. If `policy.allow_llm_generated_code` is `false`
-(the default), verification fails with a clear message. The agent must
-explicitly opt in by setting `allow_llm_generated_code: true` in the
-policy passed to `execute_strategy`.
+### 4.7 Checklist
 
-**Python bridge hardening:** When executing LLM-generated code, the bridge
-applies stricter limits than for pre-written template code:
-
-- **Import allowlist** (only modules declared in `code-generation-policy`).
-  Default allowlist: `json`, `csv`, `statistics`, `collections`, `re`,
-  `math`, `itertools`, `functools`, `datetime`, `decimal`, `fractions`,
-  `string`, `textwrap`, `operator`, `copy`, `pprint`. Templates can
-  restrict this further via `allowed-imports` in `code-generation-policy`.
-  Any `import` or `__import__` of a module not on the allowlist raises
-  `ImportError` immediately.
-- **Execution timeout:** Default 10 seconds (configurable via
-  `sandbox-timeout-seconds` in `code-generation-policy`). Pre-written
-  template code uses 30 seconds.
-- **Output size limit:** 1 MB stdout capture. Larger output is truncated
-  with a warning in the trace.
-- No filesystem, network, or subprocess access (same as existing bridge).
-
-**Standard pattern:**
-
-```scheme
-(iterate-until
-  (lambda (state)
-    (let* ((code (syntax-e
-                   (llm-query
-                     #:instruction (string-append "Write Python: " task "\nPrevious error: " (or (hash-ref state 'error) "none"))
-                     #:data data
-                     #:model code-model
-                     #:json #f)))
-           (exec-result (try-fallback
-                          (lambda () (py-exec code))
-                          (lambda () (hash 'error (current-error-message))))))
-      (hash 'code code 'result exec-result 'error #f)))
-  (lambda (state) (not (hash-ref state 'error)))
-  (hash 'error "no attempt yet")
-  #:max-iter max-retries)
-```
-
-**Dry-run interaction:** Dry-run reports `"uses_llm_generated_code": true`
-and notes that cost estimates are less precise (generated code behavior
-is not statically predictable).
+- [ ] `v2/rlm_scheme/classifier.py` implements Q0-Q9 decision tree for TaskShape
+- [ ] `v2/rlm_scheme/classifier.py` implements DataShape classification from metadata
+- [ ] `v2/rlm_scheme/classifier.py` implements template selection via trigger/reject
+- [ ] `v2/rlm_scheme/instantiator.py` validates slots, substitutes safely, hashes, stores artifacts
+- [ ] Injection protection rejects dangerous Scheme keywords and unbalanced parens
+- [ ] Instantiation is deterministic (same inputs produce same hash)
+- [ ] `v2/rlm_scheme/planner.py` orchestrates classification + selection + slot filling
+- [ ] `plan_strategy` MCP tool wired to real planner
+- [ ] `v2/tests/test_classifier.py` has 16+ tests covering all Q0-Q9 paths
+- [ ] `v2/tests/test_instantiator.py` has 9+ tests
+- [ ] `v2/tests/test_planner.py` has 5+ tests
+- [ ] All tests pass
 
 ---
 
-## 12. Dry-Run And Verification
+## Batch 5: Dry-Run, Verification, and Executor Core
 
-Dry-run and verification should be artifact-based.
+### 5.0 Purpose
 
-### Dry-Run
+Implement the dry-run simulator that computes expected LLM call counts using structural formulas without making real calls, the verification engine that runs all 23 checks from the plan against filled artifacts, the executor core that dispatches LLM calls through the provider adapter and tracks token budgets, and the trace collector that records execution events. Wire `dry_run_strategy` and `execute_strategy` MCP tools to their real implementations.
 
-Dry-run must simulate structure without real LLM calls:
+### 5.1 Depends On
 
-- use pre-resolved fake futures for async calls. Fake LLM call results are
-  deterministic empty values: `""` (empty string) for text calls, `"{}"` for
-  JSON-mode calls. This ensures dry-run is fully deterministic and does not
-  require random data generation,
-- special-case `await-any` so exactly one pending handle completes per call,
-- special-case batch await behavior deterministically,
-- record fan-out, call counts, model mix, recursive depth, and estimated tokens,
-- avoid shared global execution-mode state that can leak across concurrent MCP
-  calls — pass dry-run context as a parameter through `send()`, not as
-  mutable state on the backend instance.
+Batch 0 (models, enums, IDs, exceptions), Batch 1 (store, LLM adapter, MCP skeleton), Batch 2 (context), Batch 3 (template catalog), Batch 4 (classifier, instantiator, planner).
 
-**Dry-run behavior for concurrent primitives:**
+### 5.2 Files to Create or Modify
 
-`parallel` is genuinely concurrent in the rewrite. In dry-run mode, `parallel`
-should behave as follows:
+| File | Action | Description |
+|------|--------|-------------|
+| `v2/rlm_scheme/dry_runner.py` | Create | Dry-run simulation: call count formulas, mock execution, cost estimates |
+| `v2/rlm_scheme/cost_model.py` | Create | Token/cost estimation per model alias |
+| `v2/rlm_scheme/verification.py` | Create | All 23 verification checks |
+| `v2/rlm_scheme/executor.py` | Create | LLM dispatch, token budget tracking, execution state machine |
+| `v2/rlm_scheme/trace.py` | Create | TraceCollector: events, scope log, stdout capture |
+| `v2/rlm_scheme/mcp_server.py` | Modify | Wire `dry_run_strategy` and `execute_strategy` to real implementations |
+| `v2/tests/test_dry_run.py` | Create | Dry-run call count tests, cost estimate tests |
+| `v2/tests/test_verification.py` | Create | Tests for all 23 verification checks |
+| `v2/tests/test_executor.py` | Create | Executor dispatch, budget, state transition, trace tests |
 
-1. All thunks are invoked. Each returns a pre-resolved fake async handle.
-2. `await-all` collects results. Since handles are pre-resolved, this is
-   instant but the dry-run context records the concurrency count as
-   `len(thunks)`.
-3. The dry-run summary reports `max_concurrency` for this node as the thunk
-   count, matching real execution behavior.
+### 5.3 Requirements
 
-This works because `parallel` uses `await-all` (wait for all), not
-`await-any` (rolling window). The `await-any` special-casing is only needed
-for `map-async`'s rolling window and `race`.
+- R-5.1 [MUST] Dry-run computes tree-reduce call counts using: `N + ceil(N/B) + ceil(ceil(N/B)/B) + ... + 1`.
+- R-5.2 [MUST] Dry-run for `batch_extract_reduce` with N=100, B=5 returns `expected_llm_calls: 125` and `critical_path_calls: 4`.
+- R-5.3 [MUST] Dry-run uses mock LLM responses (empty string for text, `\"{}\"` for JSON mode) and makes zero real provider calls.
+- R-5.4 [MUST] Dry-run computes `max_concurrency`, `recursive_depth`, `critical_path_calls`, and `models` breakdown.
+- R-5.5 [MUST] Dry-run uses no global mutable state; two concurrent dry-runs produce independent results.
+- R-5.6 [MUST] Cost model estimates tokens using: prompt = item_count * avg_input_tokens, completion = item_count * avg_output_tokens.
+- R-5.7 [MUST] Verification implements all 23 checks from Appendix E: artifact_origin, artifact_hash, template_version, slots_filled, model_exists, model_capabilities, image_model, no_unsafe_forms, no_raw_import, call_count_limit, recursive_depth_limit, concurrency_limit, context_exists, output_schema_valid, output_schema_present, dry_run_warnings, code_interpreter_policy, gate_consistency, budget_policy_model, budget_policy_caps, primitive_allowlist, context_window_fit, temperature_compat.
+- R-5.8 [MUST] Verification returns overall decision: `pass` (all pass), `warn` (warnings only), `fail` (any check fails).
+- R-5.9 [MUST] Failed verification blocks execution; `execute_strategy` returns `status: \"verification_failed\"` with failing checks.
+- R-5.10 [MUST] Executor transitions execution state correctly: queued -> running -> finished/failed/cancelled.
+- R-5.11 [MUST] Executor tracks token usage per call and total; rejects calls when budget is exhausted.
+- R-5.12 [MUST] TraceCollector records events: `llm_call_started`, `llm_call_completed`, `llm_call_failed`, with call_id, model, tokens, elapsed time.
+- R-5.13 [MUST] TraceCollector records scope log entries for every `syntax-e` unwrap.
+- R-5.14 [MUST] `dry_run_strategy` MCP tool internally instantiates the template, computes estimates, simulates, and returns DryRunRecord.
+- R-5.15 [MUST] `execute_strategy` MCP tool internally instantiates (or reuses cached artifact), verifies, executes, and returns ExecutionRecord.
+- R-5.16 [MUST] Executing the same artifact twice creates two distinct execution_id values.
+- R-5.17 [SHOULD] Executor reuses a cached artifact from a prior dry-run via hash match.
+- R-5.18 [MUST] Default policy limits: max_llm_calls=1000, max_concurrency=50, max_recursive_depth=3.
 
-`race` in dry-run: all thunks are invoked, all return pre-resolved handles.
-`await-any` special-casing picks exactly one deterministically (first in
-list). Remaining handles are marked cancelled in the dry-run trace.
+### 5.4 Detailed Specifications
 
-The dry-run output should use `recursive_depth`, not `max_depth`, unless true
-combinator nesting instrumentation exists.
+**Tree-Reduce Call Count Formula:**
 
-Tree-reduce estimates should use the recursive formula:
+```python
+import math
 
-```text
-N + ceil(N / B) + ceil(ceil(N / B) / B) + ... + 1
+def tree_reduce_calls(n: int, branch_factor: int, include_leaf: bool = True) -> int:
+    \"\"\"Compute total calls for tree-reduce.
+
+    Formula: N + ceil(N/B) + ceil(ceil(N/B)/B) + ... + 1
+    The N term is the leaf/map calls. Reduction levels follow.
+    \"\"\"
+    if n <= 0:
+        return 0
+    total = n if include_leaf else 0
+    level = n
+    while level > 1:
+        level = math.ceil(level / branch_factor)
+        total += level
+    return total
+
+def critical_path_depth(n: int, branch_factor: int) -> int:
+    \"\"\"Critical path = 1 + ceil(log_B(N)) reduction levels.\"\"\"
+    if n <= 1:
+        return 1
+    return 1 + math.ceil(math.log(n) / math.log(branch_factor))
 ```
 
-Example with `N=100`, `B=5`:
+**DryRunner:**
 
-```text
-100 + 20 + 4 + 1 = 125 calls
+```python
+class DryRunner:
+    def __init__(self, store, template_loader, instantiator):
+        self.store = store
+        self.template_loader = template_loader
+        self.instantiator = instantiator
+
+    def dry_run(self, plan_id: str = None,
+                template_invocation: dict = None,
+                options: dict = None) -> dict:
+        # 1. Resolve template invocation from plan or direct input
+        invocation = self._resolve_invocation(plan_id, template_invocation)
+
+        # 2. Instantiate template -> artifact
+        template = self.template_loader.get_template(invocation[\"template_name\"])
+        artifact = self.instantiator.instantiate(
+            template, invocation[\"slot_values\"], plan_id=plan_id
+        )
+
+        # 3. Compute structural estimates
+        profile = artifact.static_profile
+        slot_values = invocation[\"slot_values\"]
+        estimates = self._compute_estimates(template, slot_values, options)
+
+        # 4. Simulate execution with mock responses
+        simulation = self._simulate(template, slot_values)
+
+        # 5. Build call graph
+        call_graph = self._build_call_graph(template, slot_values)
+
+        # 6. Store dry-run record
+        dry_run_id = generate_id(\"dry_\")
+        record = DryRunRecord(
+            dry_run_id=dry_run_id,
+            artifact_id=artifact.artifact_id,
+            summary=estimates,
+            call_graph=call_graph,
+        )
+        self.store.put(\"dry_runs\", dry_run_id, record.model_dump(mode=\"json\"))
+
+        return {
+            \"status\": \"ok\",
+            \"dry_run_id\": dry_run_id,
+            \"plan_id\": plan_id,
+            \"artifact\": {
+                \"artifact_id\": artifact.artifact_id,
+                \"template_name\": artifact.template_name,
+                \"template_version\": artifact.template_version,
+                \"code_hash\": artifact.generated_scheme_ref.hash,
+                \"primitives_used\": artifact.primitives_used,
+            },
+            \"estimate\": estimates,
+            \"simulation\": simulation,
+            \"call_graph\": call_graph,
+            \"warnings\": [],
+            \"next_actions\": [f\"Call execute_strategy(plan_id={plan_id})\"],
+        }
+
+    def _compute_estimates(self, template, slot_values, options) -> dict:
+        meta = template[\"metadata\"]
+        profile = meta.get(\"structural-profile\", [])
+        # Parse profile into dict
+        profile_dict = {p[0]: p[1] for p in profile} if profile else {}
+
+        item_count = slot_values.get(\"item_count\", 0)
+        # Try to get from context metadata
+        if not item_count:
+            ctx_id = slot_values.get(\"context_id\")
+            if ctx_id:
+                ctx = self.store.get(\"contexts\", ctx_id)
+                if ctx:
+                    item_count = ctx.get(\"metadata\", {}).get(\"item_count\", 0)
+
+        branch_factor = slot_values.get(\"branch_factor\", 5)
+        max_conc = slot_values.get(\"max_concurrent\", 20)
+
+        # Compute calls based on template type
+        template_name = meta[\"name\"]
+        if template_name in (\"batch_extract_reduce\", \"batch_extract_fold\"):
+            total_calls = tree_reduce_calls(item_count, branch_factor)
+            map_calls = item_count
+            reduce_calls = total_calls - map_calls
+        elif template_name in (\"batch_map\",):
+            total_calls = item_count
+            map_calls = item_count
+            reduce_calls = 0
+        elif template_name in (\"tree_synthesis\",):
+            total_calls = tree_reduce_calls(item_count, branch_factor,
+                                           include_leaf=False)
+            map_calls = 0
+            reduce_calls = total_calls
+        elif template_name == \"direct_call\":
+            total_calls = 1
+            map_calls = 0
+            reduce_calls = 0
+        else:
+            total_calls = item_count or 1
+            map_calls = total_calls
+            reduce_calls = 0
+
+        crit_path = critical_path_depth(item_count, branch_factor)
+
+        assumptions = (options or {}).get(\"assumptions\", {})
+        avg_input = assumptions.get(\"avg_input_tokens\", 800)
+        avg_output = assumptions.get(\"avg_output_tokens\", 250)
+
+        return {
+            \"expected_llm_calls\": total_calls,
+            \"critical_path_calls\": crit_path,
+            \"max_concurrency\": max_conc,
+            \"models\": self._model_breakdown(template, slot_values,
+                                            map_calls, reduce_calls),
+            \"estimated_tokens\": {
+                \"prompt\": total_calls * avg_input,
+                \"completion\": total_calls * avg_output,
+                \"total\": total_calls * (avg_input + avg_output),
+            },
+        }
 ```
 
-**Chain dry-runs:** For template chains, each step is instantiated and
-dry-run independently. The aggregate response includes per-step estimates
-and total pipeline cost. The dry-run also validates output-input
-compatibility between adjacent steps — if step N declares an output schema
-and step N+1's slot types expect a different structure, the dry-run reports
-a compatibility warning.
+**Verification Engine (23 checks):**
 
-**Cache hit prediction:** When a dry-run instantiates an artifact whose
-hash matches a previously-executed artifact, the dry-run checks the LLM
-result cache for matching call signatures. The response includes
-`cache_hits_expected` with the predicted count and adjusts cost estimates
-downward accordingly.
+```python
+class VerificationEngine:
+    def __init__(self, store, model_registry, template_loader):
+        self.store = store
+        self.registry = model_registry
+        self.loader = template_loader
 
-### Verification
+    def verify(self, artifact: ArtifactRecord, dry_run: DryRunRecord = None,
+               policy: dict = None) -> VerificationRecord:
+        policy = policy or self._default_policy()
+        checks = []
 
-Verification is more useful than per-call template linting. It should focus on
-the filled artifact that will actually run.
+        checks.append(self._check_artifact_origin(artifact))           # 1
+        checks.append(self._check_artifact_hash(artifact))             # 2
+        checks.append(self._check_template_version(artifact))          # 3
+        checks.append(self._check_slots_filled(artifact))              # 4
+        checks.append(self._check_model_exists(artifact))              # 5
+        checks.append(self._check_model_capabilities(artifact))        # 6
+        checks.append(self._check_image_model(artifact))               # 7
+        checks.append(self._check_no_unsafe_forms(artifact))           # 8
+        checks.append(self._check_no_raw_import(artifact))             # 9
+        checks.append(self._check_call_count_limit(artifact, dry_run, policy))  # 10
+        checks.append(self._check_recursive_depth_limit(artifact, policy))      # 11
+        checks.append(self._check_concurrency_limit(artifact, policy))          # 12
+        checks.append(self._check_context_exists(artifact))            # 13
+        checks.append(self._check_output_schema_valid(artifact))       # 14
+        checks.append(self._check_output_schema_present(artifact, policy))      # 15
+        checks.append(self._check_dry_run_warnings(dry_run))           # 16
+        checks.append(self._check_code_interpreter_policy(artifact, policy))    # 17
+        checks.append(self._check_gate_consistency(artifact))          # 18
+        checks.append(self._check_budget_policy_model(artifact))       # 19
+        checks.append(self._check_budget_policy_caps(artifact))        # 20
+        checks.append(self._check_primitive_allowlist(artifact))       # 21
+        checks.append(self._check_context_window_fit(artifact))        # 22
+        checks.append(self._check_temperature_compat(artifact))        # 23
 
-**Verification checks:**
+        failed = [c for c in checks if c.status == \"fail\"]
+        warned = [c for c in checks if c.status == \"warn\"]
 
-| # | Check | Pass condition | Failure message |
-|---|---|---|---|
-| 1 | `artifact_origin` | Artifact record exists with `source_type: "template_invocation"` | `"Artifact was not created by the instantiator."` |
-| 2 | `artifact_hash` | `sha256(artifact_code)` matches `artifact.generated_scheme_ref.hash` | `"Artifact code hash mismatch: expected {expected}, got {actual}."` |
-| 3 | `template_version` | Template name+version exists in catalog | `"Unknown template: {name} v{version}."` |
-| 4 | `slots_filled` | No `{{slot}}` markers remain in artifact code | `"Unfilled slot markers: {markers}."` |
-| 5 | `model_exists` | All model aliases in artifact resolve in registry | `"Unknown model alias: {alias}."` |
-| 6 | `model_capabilities` | JSON-mode calls target models with `json_mode: true` | `"Model {alias} does not support JSON mode."` |
-| 7 | `image_model` | Image inputs target models with `image: true` | `"Model {alias} does not support image inputs."` |
-| 8 | `no_unsafe_forms` | No `eval`, `system`, `shell`, `exec` (non-`py-exec`) in artifact | `"Unsafe form found: {form}."` |
-| 9 | `no_raw_import` | No `require`, `load`, `include` outside allowed set | `"Disallowed import: {form}."` |
-| 10 | `call_count_limit` | Expected calls <= `policy.max_llm_calls` (default: 1000) | `"Expected {n} calls exceeds limit {limit}."` |
-| 11 | `recursive_depth_limit` | Recursive depth <= `policy.max_recursive_depth` (default: 3) | `"Recursive depth {d} exceeds limit {limit}."` |
-| 12 | `concurrency_limit` | Max concurrency <= `policy.max_concurrency` (default: 50) | `"Concurrency {c} exceeds limit {limit}."` |
-| 13 | `context_exists` | All referenced `context_id` values exist in store | `"Context not found: {id}."` |
-| 14 | `output_schema_valid` | If `output-schema` declared, it is structurally valid alist notation | `"Output schema is malformed: {detail}."` |
-| 15 | `output_schema_present` | If policy requires output schema, template declares one | `"Output schema required by policy but not declared."` |
-| 16 | `dry_run_warnings` | No `error`-level warnings from dry-run | `"Dry-run produced error-level warning: {warning}."` |
-| 17 | `code_interpreter_policy` | If `uses-llm-generated-code: #t`, policy has `allow_llm_generated_code: true` | `"Template uses LLM-generated code but policy disallows it."` |
-| 18 | `gate_consistency` | Gate names in body match `define-meta gates` declarations | `"Gate '{name}' used in body but not declared in metadata."` |
-| 19 | `budget_policy_model` | If `budget-policy` declares a fallback model, it exists in registry | `"Budget fallback model '{alias}' not found in registry."` |
-| 20 | `budget_policy_caps` | Fallback model has compatible capabilities (JSON mode, images) | `"Fallback model '{alias}' lacks capability: {cap}."` |
-| 21 | `primitive_allowlist` | Only primitives from section 9 are used in artifact | `"Disallowed primitive: {name}."` |
-| 22 | `context_window_fit` | Estimated input tokens fit model's context window | `"Estimated {tokens} tokens exceeds {alias} context window of {limit}."` |
-| 23 | `temperature_compat` | Temperature and max-token settings are valid for model | `"Invalid temperature {t} for model {alias}."` |
+        if failed:
+            decision = \"fail\"
+        elif warned:
+            decision = \"warn\"
+        else:
+            decision = \"pass\"
 
-Overall verification decision: `pass` if all checks pass, `warn` if any
-produce warnings (non-blocking), `fail` if any check fails (execution
-blocked).
+        ver_id = generate_id(\"ver_\")
+        record = VerificationRecord(
+            verification_id=ver_id,
+            artifact_id=artifact.artifact_id,
+            dry_run_id=dry_run.dry_run_id if dry_run else None,
+            decision=decision,
+            policy=policy,
+            checks=checks,
+        )
+        self.store.put(\"verifications\", ver_id,
+                       record.model_dump(mode=\"json\"))
+        return record
 
-Verification can optionally run a cheap semantic model review for high-cost or
-high-risk artifacts, but deterministic checks should be the default gate.
+    def _default_policy(self) -> dict:
+        return {
+            \"max_llm_calls\": 1000,
+            \"max_concurrency\": 50,
+            \"max_recursive_depth\": 3,
+            \"allow_python_bridge\": True,
+            \"allow_multimodal\": True,
+            \"allow_llm_generated_code\": False,
+        }
+
+    # Each _check_* method returns VerificationCheck(name, status, message)
+    def _check_artifact_origin(self, artifact):
+        if artifact.source_type == \"template_invocation\":
+            return VerificationCheck(name=\"artifact_origin\", status=\"pass\",
+                message=\"Artifact was created by the instantiator.\")
+        return VerificationCheck(name=\"artifact_origin\", status=\"fail\",
+            message=\"Artifact was not created by the instantiator.\")
+
+    def _check_slots_filled(self, artifact):
+        code = self._read_artifact_code(artifact)
+        import re
+        remaining = re.findall(r\"\\{\\{\\w+\\}\\}\", code)
+        if remaining:
+            return VerificationCheck(name=\"slots_filled\", status=\"fail\",
+                message=f\"Unfilled slot markers: {remaining}.\")
+        return VerificationCheck(name=\"slots_filled\", status=\"pass\",
+            message=\"All slot markers filled.\")
+
+    def _check_call_count_limit(self, artifact, dry_run, policy):
+        if dry_run:
+            expected = dry_run.summary.get(\"expected_llm_calls\", 0)
+            limit = policy.get(\"max_llm_calls\", 1000)
+            if expected > limit:
+                return VerificationCheck(name=\"call_count_limit\", status=\"fail\",
+                    message=f\"Expected {expected} calls exceeds limit {limit}.\")
+        return VerificationCheck(name=\"call_count_limit\", status=\"pass\",
+            message=\"Call count within limits.\")
+
+    # ... remaining 20 checks follow the same pattern
+```
+
+**Executor Core:**
+
+```python
+class Executor:
+    def __init__(self, store, llm_provider, verification_engine,
+                 instantiator, template_loader, dry_runner):
+        self.store = store
+        self.llm = llm_provider
+        self.verifier = verification_engine
+        self.instantiator = instantiator
+        self.loader = template_loader
+        self.dry_runner = dry_runner
+        self.trace = TraceCollector()
+
+    async def execute(self, plan_id=None, template_invocation=None,
+                      timeout=None, policy=None, stream=False) -> dict:
+        invocation = self._resolve_invocation(plan_id, template_invocation)
+
+        # 1. Instantiate (or reuse cached artifact)
+        template = self.loader.get_template(invocation[\"template_name\"])
+        artifact = self.instantiator.instantiate(
+            template, invocation[\"slot_values\"], plan_id=plan_id
+        )
+
+        # 2. Dry-run for estimates
+        dry_run = self.dry_runner.dry_run(
+            template_invocation=invocation
+        )
+
+        # 3. Verify
+        ver = self.verifier.verify(artifact, policy=policy)
+        if ver.decision == \"fail\":
+            return {
+                \"status\": \"verification_failed\",
+                \"verification\": ver.model_dump(mode=\"json\"),
+            }
+
+        # 4. Create execution record
+        exec_id = generate_id(\"exec_\")
+        exec_record = ExecutionRecord(
+            execution_id=exec_id,
+            artifact_id=artifact.artifact_id,
+            plan_id=plan_id,
+            verification_id=ver.verification_id,
+            state=ExecutionState.running,
+        )
+        self.store.put(\"executions\", exec_id,
+                       exec_record.model_dump(mode=\"json\"))
+
+        # 5. Execute artifact
+        try:
+            result = await self._run_artifact(artifact, invocation, policy)
+            exec_record.state = ExecutionState.finished
+            exec_record.completed_at = datetime.now(timezone.utc)
+            exec_record.metrics = self.trace.get_metrics()
+        except Exception as e:
+            exec_record.state = ExecutionState.failed
+            exec_record.error = {\"message\": str(e)}
+            result = None
+
+        self.store.put(\"executions\", exec_id,
+                       exec_record.model_dump(mode=\"json\"))
+
+        return {
+            \"status\": \"ok\" if result else \"error\",
+            \"execution_id\": exec_id,
+            \"artifact_id\": artifact.artifact_id,
+            \"verification\": ver.model_dump(mode=\"json\"),
+            \"result\": {\"value\": result} if result else None,
+            \"execution\": {
+                \"state\": exec_record.state.value,
+                \"llm_calls\": self.trace.call_count,
+                \"tokens\": self.trace.total_tokens,
+            },
+        }
+
+    async def _run_artifact(self, artifact, invocation, policy) -> str:
+        \"\"\"Execute the artifact by interpreting its primitives.\"\"\"
+        # Dispatch LLM calls through the provider,
+        # track token budget, record trace events
+        ...
+```
+
+**TraceCollector:**
+
+```python
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+import time
+
+@dataclass
+class TraceEvent:
+    type: str
+    call_id: str | None = None
+    node_id: str | None = None
+    model: str | None = None
+    tokens: int = 0
+    elapsed_seconds: float = 0.0
+    timestamp: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+@dataclass
+class ScopeLogEntry:
+    op: str
+    preview: str
+    scope: str
+    call_id: str | None = None
+
+class TraceCollector:
+    def __init__(self):
+        self.events: list[TraceEvent] = []
+        self.scope_log: list[ScopeLogEntry] = []
+        self.stdout: str = \"\"
+        self.call_count: int = 0
+        self.total_tokens: int = 0
+        self._active_calls: dict[str, float] = {}
+
+    def record_call_start(self, call_id, node_id, model):
+        self._active_calls[call_id] = time.time()
+        self.events.append(TraceEvent(
+            type=\"llm_call_started\", call_id=call_id,
+            node_id=node_id, model=model
+        ))
+
+    def record_call_complete(self, call_id, tokens):
+        start = self._active_calls.pop(call_id, time.time())
+        elapsed = time.time() - start
+        self.call_count += 1
+        self.total_tokens += tokens
+        self.events.append(TraceEvent(
+            type=\"llm_call_completed\", call_id=call_id,
+            tokens=tokens, elapsed_seconds=round(elapsed, 3)
+        ))
+
+    def record_scope_unwrap(self, op, preview, scope, call_id=None):
+        self.scope_log.append(ScopeLogEntry(
+            op=op, preview=preview[:200], scope=scope, call_id=call_id
+        ))
+
+    def get_metrics(self) -> dict:
+        return {
+            \"llm_calls\": self.call_count,
+            \"tokens\": self.total_tokens,
+        }
+
+    def to_dict(self) -> dict:
+        return {
+            \"events\": [vars(e) for e in self.events],
+            \"scope_log\": [vars(s) for s in self.scope_log],
+            \"stdout\": self.stdout,
+        }
+```
+
+### 5.5 Test Specification
+
+| Test File | Test Function | Scenario | Expected |
+|-----------|---------------|----------|----------|
+| `v2/tests/test_dry_run.py` | `test_tree_reduce_100_5` | tree_reduce_calls(100, 5) | Returns 125 (100+20+4+1) |
+| `v2/tests/test_dry_run.py` | `test_tree_reduce_8_2` | tree_reduce_calls(8, 2) | Returns 15 (8+4+2+1) |
+| `v2/tests/test_dry_run.py` | `test_tree_reduce_1` | tree_reduce_calls(1, 5) | Returns 1 |
+| `v2/tests/test_dry_run.py` | `test_critical_path_100_5` | critical_path_depth(100, 5) | Returns 4 |
+| `v2/tests/test_dry_run.py` | `test_dry_run_batch_extract_reduce` | Dry-run batch_extract_reduce, N=100, B=5 | `expected_llm_calls=125`, `critical_path_calls=4`, `max_concurrency=20` |
+| `v2/tests/test_dry_run.py` | `test_dry_run_direct_call` | Dry-run direct_call | `expected_llm_calls=1` |
+| `v2/tests/test_dry_run.py` | `test_dry_run_batch_map` | Dry-run batch_map, N=50 | `expected_llm_calls=50` |
+| `v2/tests/test_dry_run.py` | `test_dry_run_no_real_calls` | Run dry-run with MockLLMProvider | `provider.call_count == 0` |
+| `v2/tests/test_dry_run.py` | `test_dry_run_independent` | Two concurrent dry-runs | Both produce independent results |
+| `v2/tests/test_dry_run.py` | `test_dry_run_creates_artifact` | Run dry-run | Artifact record stored in store |
+| `v2/tests/test_dry_run.py` | `test_dry_run_mcp_tool` | Call dry_run_strategy MCP tool | Response has dry_run_id, artifact, estimate |
+| `v2/tests/test_verification.py` | `test_verify_pass_all` | Valid artifact with all checks passing | `decision == \"pass\"`, 23 checks |
+| `v2/tests/test_verification.py` | `test_verify_fail_slots_filled` | Artifact with remaining `{{slot}}` | `decision == \"fail\"`, slots_filled check fails |
+| `v2/tests/test_verification.py` | `test_verify_fail_unsafe_forms` | Artifact containing `(eval ...)` | no_unsafe_forms check fails |
+| `v2/tests/test_verification.py` | `test_verify_fail_call_count` | Expected calls exceed policy limit | call_count_limit check fails |
+| `v2/tests/test_verification.py` | `test_verify_fail_unknown_model` | Artifact references unknown model alias | model_exists check fails |
+| `v2/tests/test_verification.py` | `test_verify_fail_code_interpreter` | `uses-llm-generated-code: #t`, policy disallows | code_interpreter_policy check fails |
+| `v2/tests/test_verification.py` | `test_verify_warn_only` | Artifact with warning-level check | `decision == \"warn\"` |
+| `v2/tests/test_verification.py` | `test_verify_primitive_allowlist` | Artifact with disallowed primitive | primitive_allowlist check fails |
+| `v2/tests/test_verification.py` | `test_verify_context_exists` | Artifact references nonexistent context | context_exists check fails |
+| `v2/tests/test_verification.py` | `test_verify_all_23_checks_run` | Valid artifact | `len(checks) == 23` |
+| `v2/tests/test_executor.py` | `test_execute_basic` | Execute direct_call template | `state == \"finished\"`, result has value |
+| `v2/tests/test_executor.py` | `test_execute_verification_fail` | Execute with policy violation | `status == \"verification_failed\"`, no execution |
+| `v2/tests/test_executor.py` | `test_execute_two_runs_distinct_ids` | Execute same artifact twice | Two different execution_ids |
+| `v2/tests/test_executor.py` | `test_execute_tracks_tokens` | Execute with MockLLMProvider | `tokens > 0` in metrics |
+| `v2/tests/test_executor.py` | `test_execute_state_transitions` | Execute successfully | State goes queued -> running -> finished |
+| `v2/tests/test_executor.py` | `test_execute_failure_state` | Execute with forced error | State is `failed`, error field populated |
+| `v2/tests/test_executor.py` | `test_trace_events` | Execute and get trace | Trace has llm_call_started and llm_call_completed events |
+| `v2/tests/test_executor.py` | `test_trace_scope_log` | Execute with syntax-e operations | Scope log has entries with op, preview, scope |
+| `v2/tests/test_executor.py` | `test_execute_mcp_tool` | Call execute_strategy MCP tool | Response has execution_id, verification, result |
+
+### 5.6 Acceptance Gates
+
+```bash
+# Dry-run tests pass
+cd v2 && python -m pytest tests/test_dry_run.py -v
+# Expected: 11 passed
+
+# Verification tests pass
+cd v2 && python -m pytest tests/test_verification.py -v
+# Expected: 11 passed
+
+# Executor tests pass
+cd v2 && python -m pytest tests/test_executor.py -v
+# Expected: 9 passed
+
+# Tree-reduce formula validation
+cd v2 && python -c \"
+from rlm_scheme.dry_runner import tree_reduce_calls, critical_path_depth
+assert tree_reduce_calls(100, 5) == 125, 'N=100 B=5 should be 125'
+assert tree_reduce_calls(8, 2) == 15, 'N=8 B=2 should be 15'
+assert critical_path_depth(100, 5) == 4, 'Critical path should be 4'
+print('Call count formulas OK')
+\"
+# Expected: \"Call count formulas OK\"
+
+# Verification runs all 23 checks
+cd v2 && python -c \"
+from rlm_scheme.verification import VerificationEngine
+# ... setup with valid artifact ...
+# assert len(result.checks) == 23
+print('23 checks verified')
+\"
+# Expected: \"23 checks verified\"
+
+# Full pipeline: plan -> dry_run -> execute
+cd v2 && python -c \"
+import json
+from rlm_scheme.mcp_server import load_context, plan_strategy, dry_run_strategy, execute_strategy
+import asyncio
+ctx = json.loads(load_context('[{\\\"id\\\":1},{\\\"id\\\":2},{\\\"id\\\":3}]', name='test'))
+plan = json.loads(plan_strategy('Extract data from items', ctx['context_id']))
+dry = json.loads(dry_run_strategy(plan_id=plan['plan_id']))
+assert dry['status'] == 'ok'
+assert 'expected_llm_calls' in dry['estimate']
+print('Pipeline OK')
+\"
+# Expected: \"Pipeline OK\"
+```
+
+### 5.7 Checklist
+
+- [ ] `v2/rlm_scheme/dry_runner.py` computes call counts, simulates execution, estimates costs
+- [ ] Tree-reduce formula: `tree_reduce_calls(100, 5) == 125`
+- [ ] Dry-run makes zero real LLM calls
+- [ ] Dry-run is stateless (no global mutable state)
+- [ ] `v2/rlm_scheme/cost_model.py` estimates tokens and cost per model
+- [ ] `v2/rlm_scheme/verification.py` implements all 23 checks
+- [ ] Verification returns pass/warn/fail decision
+- [ ] Failed verification blocks execution
+- [ ] `v2/rlm_scheme/executor.py` dispatches LLM calls, tracks budget, manages state
+- [ ] `v2/rlm_scheme/trace.py` records events, scope log, stdout
+- [ ] `dry_run_strategy` MCP tool wired to real implementation
+- [ ] `execute_strategy` MCP tool wired to real implementation
+- [ ] `v2/tests/test_dry_run.py` has 11+ tests
+- [ ] `v2/tests/test_verification.py` has 11+ tests
+- [ ] `v2/tests/test_executor.py` has 9+ tests
+- [ ] All tests pass: `python -m pytest tests/ -v`
 
 ---
 
-## 13. Planning And Classification
+## Batch 6: Cache, Gates, and Chain Execution
 
-The planner should classify work before choosing a template.
+### 6.0 Purpose
 
-The planner should use these TaskShape categories:
+Implement a content-addressed LLM result cache, a gate primitive with resume and cancel operations, and sequential template chain execution. These three components are orthogonal but all consumed by the executor layer; building them together allows the chain executor to test cache integration and gate suspension in the same batch.
 
-- Direct,
-- Batch,
-- Synthesize,
-- Search,
-- Refine,
-- Compare,
-- Classify,
-- Pipeline,
-- Generate,
-- Decompose,
-- Validate,
-- Aggregate,
-- Composite.
+### 6.1 Depends On
 
-The planner should accept structured hints:
+- Batch 1 (Store, models, exceptions)
+- Batch 2 (Context primitives)
+- Batch 3 (Template parser and validator)
+- Batch 4 (Dry-runner, cost model)
+- Batch 5 (Executor core, LLM adapter)
 
-- `item_count`,
-- `independent`,
-- `output_type`,
-- `operation`,
-- `has_second_phase`,
-- `sub_operations`,
-- `modality`,
-- `quality_priority`,
-- `latency_priority`,
-- `budget_limit`.
+### 6.2 Files to Create or Modify
 
-Composite tasks must preserve constituent shapes. For example, "extract from
-all documents, then synthesize a report" is not just `Composite`; it is:
+| File | Action | Description |
+|------|--------|-------------|
+| v2/rlm_scheme/cache.py | Create | Content-addressed LLM result cache |
+| v2/rlm_scheme/gate.py | Create | GateManager: gate registration, resume, cancel |
+| v2/rlm_scheme/chain.py | Create | ChainExecutor: step sequencing, $previous resolution |
+| v2/tests/test_cache.py | Create | Cache unit tests |
+| v2/tests/test_gate.py | Create | Gate unit tests |
+| v2/tests/test_chain.py | Create | Chain execution tests |
 
-```text
-Batch extract -> Synthesize reduce
+### 6.3 Requirements
+
+1. [MUST] R-6.1: The cache key MUST equal `sha256(canonical_json(instruction) + canonical_json(data) + model_alias + str(temperature) + str(json_mode))` where `canonical_json(x)` is `json.dumps(x, sort_keys=True, separators=(',', ':'), ensure_ascii=True)`.
+2. [MUST] R-6.2: Cache entries MUST be immutable — storing a different value under the same key MUST raise `CacheKeyCollisionError`.
+3. [MUST] R-6.3: Calls with `temperature > 0` MUST NOT be cached unless the originating template declares `cacheable: #t`.
+4. [MUST] R-6.4: Cache hits MUST NOT consume any token budget; the executor MUST detect a cache hit before dispatching to the LLM adapter.
+5. [MUST] R-6.5: `reset_runtime(scope="cache")` MUST delete all cache entries and reset hit/miss counters to zero.
+6. [MUST] R-6.6: `GateManager` MUST track pending gates per `execution_id` in a dict keyed by `(execution_id, gate_name)`.
+7. [MUST] R-6.7: `GateManager.resume(execution_id, gate, decision="approve")` MUST set the gate state to `"approved"` and return the full gate record.
+8. [MUST] R-6.8: `GateManager.resume(execution_id, gate, decision="reject")` MUST set the gate state to `"rejected"` and return the full gate record including the `reason` field.
+9. [MUST] R-6.9: `GateManager.cancel_all(execution_id)` MUST transition every pending gate for that `execution_id` to state `"cancelled"` and return the count of gates cancelled.
+10. [MUST] R-6.10: `ChainExecutor` MUST resolve any `"$previous"` string value in a step's `slot_values` to the `context_id` of the immediately preceding step's output context.
+11. [MUST] R-6.11: Chain steps MUST execute strictly sequentially; step N+1 MUST NOT begin until step N has produced an output context.
+12. [MUST] R-6.12: Each completed chain step MUST store its output as an auto-created context with an auto-generated `context_id` of the form `ctx_auto_{step_index}`.
+13. [SHOULD] R-6.13: If a chain step fails, `ChainExecutor` SHOULD preserve all previously completed steps' output contexts rather than rolling them back.
+
+### 6.4 Detailed Specifications
+
+**Cache key computation**
+
+`canonical_json` is defined as:
+
+```python
+def canonical_json(obj: object) -> str:
+    return json.dumps(obj, sort_keys=True, separators=(',', ':'), ensure_ascii=True)
 ```
 
-Planning output should be one of:
+The raw cache key material is the concatenation (with no separator) of:
 
-- a template invocation with slot values (primary path for single-phase tasks),
-- a template chain with sequenced steps (primary path for Composite tasks),
-- a short list of alternative template invocations with estimated tradeoffs,
-- a `no_template` recommendation describing the needed template for the user
-  to create.
+```
+canonical_json(instruction) + canonical_json(data) + model_alias + str(temperature) + str(json_mode)
+```
 
-For Composite tasks, the planner decomposes the task into constituent atomic
-templates and produces a `template_chain` with `$previous` references
-connecting steps. This enables combinatorial composition — the planner
-assembles pipelines from atomic templates rather than requiring a monolithic
-template for every combination.
+The stored key is `hashlib.sha256(key_material.encode()).hexdigest()`.
 
-Planning output must not include raw Scheme. If no template matches the
-classified task, the planner returns a structured recommendation for a new
-template rather than attempting to generate ad-hoc Scheme code.
+**LLMCache public interface**
+
+```python
+class LLMCache:
+    def __init__(self, store: Store) -> None: ...
+    def make_key(self, instruction: object, data: object, model_alias: str,
+                 temperature: float, json_mode: bool) -> str: ...
+    def lookup(self, key: str) -> str | None: ...
+    def store(self, key: str, result: str, metadata: dict) -> None: ...
+    def clear(self) -> None: ...
+    @property
+    def stats(self) -> dict: ...  # {"hits": int, "misses": int, "size": int}
+```
+
+`store` writes cache entries to the `Store` under the namespace `"cache"`. The `metadata` dict MUST include at minimum `{"cached_at": iso8601_utc_string}`. Raising `CacheKeyCollisionError` (defined in `exceptions.py`) when a key collision with a different value is detected satisfies R-6.2.
+
+**GateManager public interface**
+
+```python
+class GateState(str, enum.Enum):
+    PENDING   = "pending"
+    APPROVED  = "approved"
+    REJECTED  = "rejected"
+    CANCELLED = "cancelled"
+
+@dataclasses.dataclass
+class GateRecord:
+    execution_id: str
+    gate_name: str
+    state: GateState
+    decision: str | None
+    reason: str | None
+    registered_at: str     # ISO-8601 UTC
+    resolved_at: str | None
+
+class GateManager:
+    def __init__(self) -> None: ...
+    def register(self, execution_id: str, gate_name: str) -> GateRecord: ...
+    def resume(self, execution_id: str, gate_name: str,
+               decision: str, reason: str | None = None) -> GateRecord | None: ...
+    def cancel_all(self, execution_id: str) -> int: ...
+    def pending_gates(self, execution_id: str) -> list[GateRecord]: ...
+```
+
+`resume` returns `None` when no gate matching `(execution_id, gate_name)` exists in the manager.
+
+**ChainExecutor public interface**
+
+```python
+@dataclasses.dataclass
+class ChainStep:
+    template_id: str
+    slot_values: dict[str, object]
+
+@dataclasses.dataclass
+class ChainResult:
+    steps_completed: int
+    output_context_ids: list[str]   # one per completed step
+    final_context_id: str | None
+    error: str | None
+
+class ChainExecutor:
+    def __init__(self, executor: Executor, store: Store) -> None: ...
+    async def run(self, steps: list[ChainStep],
+                  execution_id: str) -> ChainResult: ...
+    def _resolve_previous(self, slot_values: dict, previous_context_id: str | None) -> dict: ...
+```
+
+`_resolve_previous` walks `slot_values` and replaces any string value equal to `"$previous"` with `previous_context_id`. If `previous_context_id` is `None` (first step) and `"$previous"` is present, it MUST raise `ChainResolutionError`.
+
+**$previous resolution example**
+
+Given the chain:
+
+```python
+steps = [
+    ChainStep("summarize", {"text": "ctx_input"}),
+    ChainStep("classify",  {"text": "$previous"}),
+]
+```
+
+After step 0 completes and produces `ctx_auto_0`, `_resolve_previous` transforms step 1's slot_values to `{"text": "ctx_auto_0"}` before execution.
+
+**Cache integration in executor**
+
+The executor (from Batch 5) MUST call `cache.lookup(key)` before dispatching to the LLM adapter. If a hit is found, the result is returned directly and the token budget is not decremented.
+
+### 6.5 Test Specification
+
+| Test File | Test Function | Scenario | Expected |
+|-----------|--------------|----------|----------|
+| test_cache.py | test_cache_hit | Store a result then look up same key | Returns cached result string |
+| test_cache.py | test_cache_miss | Look up a key that was never stored | Returns `None` |
+| test_cache.py | test_cache_key_deterministic | Call `make_key` twice with identical arguments | Both calls return the same hex string |
+| test_cache.py | test_cache_different_inputs | Two calls with different `instruction` values | Distinct keys produced |
+| test_cache.py | test_cache_clear | Store an entry then call `clear()` then lookup | Returns `None` after clear |
+| test_cache.py | test_temperature_not_cached | Attempt to store with `temperature=0.7` and `cacheable=False` | Entry not stored; `lookup` returns `None` |
+| test_cache.py | test_cache_stats_hit | Store then lookup (hit) | `stats["hits"] == 1` |
+| test_cache.py | test_cache_stats_miss | Lookup non-existent key | `stats["misses"] == 1` |
+| test_gate.py | test_register_gate | Register a gate for `execution_id="ex1"` | Returns `GateRecord` with `state="pending"` |
+| test_gate.py | test_resume_approve | Register then `resume(..., decision="approve")` | Record state is `"approved"` |
+| test_gate.py | test_resume_reject | Register then `resume(..., decision="reject", reason="bad")` | Record state is `"rejected"`, `reason="bad"` |
+| test_gate.py | test_cancel_all | Register 2 gates then `cancel_all("ex1")` | Returns `2`; both gates are `"cancelled"` |
+| test_gate.py | test_resume_nonexistent | Resume gate that was never registered | Returns `None` |
+| test_gate.py | test_pending_gates_list | Register 2 gates, approve 1, call `pending_gates` | Returns list of length 1 |
+| test_chain.py | test_resolve_previous | Call `_resolve_previous` with `"$previous"` value and a real context_id | Value replaced with context_id |
+| test_chain.py | test_resolve_previous_no_previous | Call `_resolve_previous` with `"$previous"` but `previous_context_id=None` | Raises `ChainResolutionError` |
+| test_chain.py | test_single_step_chain | One-step chain with mocked executor | `steps_completed == 1`, one output context |
+| test_chain.py | test_multi_step_chain | Two-step chain with mocked executor | `steps_completed == 2`, two output contexts |
+| test_chain.py | test_chain_intermediate_context | Two-step chain | `ctx_auto_0` context exists in store after run |
+| test_chain.py | test_chain_preserves_steps_on_failure | Two-step chain where step 2 raises | `steps_completed == 1`, `error` is set |
+
+### 6.6 Acceptance Gates
+
+```sh
+# Gate 1: all new tests pass
+cd v2 && python -m pytest tests/test_cache.py tests/test_gate.py tests/test_chain.py -v
+
+# Gate 2: cache round-trip works from a fresh store
+cd v2 && python -c "
+from rlm_scheme.cache import LLMCache
+from rlm_scheme.store import Store
+from pathlib import Path
+import tempfile, os
+with tempfile.TemporaryDirectory() as d:
+    c = LLMCache(Store(Path(d)))
+    key = c.make_key('instruction', {'x': 1}, 'gpt-4o', 0.0, False)
+    c.store(key, 'result42', {})
+    assert c.lookup(key) == 'result42', 'cache round-trip failed'
+    print('cache round-trip OK')
+"
+
+# Gate 3: gate approve/reject cycle works
+cd v2 && python -c "
+from rlm_scheme.gate import GateManager
+gm = GateManager()
+gm.register('ex1', 'human-review')
+rec = gm.resume('ex1', 'human-review', decision='approve')
+assert rec.state.value == 'approved', f'expected approved, got {rec.state}'
+print('gate cycle OK')
+"
+
+# Gate 4: full test suite still green
+cd v2 && python -m pytest tests/ -q --tb=short
+```
+
+### 6.7 Checklist
+
+- [ ] `v2/rlm_scheme/cache.py` created with `LLMCache`, `canonical_json`, `make_key`, `lookup`, `store`, `clear`, `stats`
+- [ ] `CacheKeyCollisionError` added to `v2/rlm_scheme/exceptions.py`
+- [ ] `ChainResolutionError` added to `v2/rlm_scheme/exceptions.py`
+- [ ] `v2/rlm_scheme/gate.py` created with `GateState`, `GateRecord`, `GateManager`
+- [ ] `v2/rlm_scheme/chain.py` created with `ChainStep`, `ChainResult`, `ChainExecutor`
+- [ ] Temperature-gating check implemented (R-6.3)
+- [ ] Cache lookup integrated into Batch 5 executor before LLM dispatch (R-6.4)
+- [ ] `reset_runtime(scope="cache")` wired to `LLMCache.clear()` (R-6.5)
+- [ ] `_resolve_previous` raises `ChainResolutionError` when `$previous` present but no prior context
+- [ ] All 20 tests in this batch pass
+- [ ] No regressions in Batches 1–5 tests
 
 ---
 
-## 14. Taxonomy Decision Rules
+## Batch 7: MCP Server Wiring
 
-Classification and template selection use a **two-level decision model**:
+### 7.0 Purpose
 
-**Level 1 — Deterministic (code, no LLM):** TaskShape and DataShape
-classification from structured hints, plus template selection from
-trigger/reject conditions. If all required hints are provided, this level
-runs entirely as deterministic code. The decision tree questions in sections
-14.1-14.3 below are all Level 1 — they operate on structured fields
-(`item_count`, `independent`, `output_type`, `has_second_phase`, etc.),
-not on free-text interpretation.
+Wire all 10 MCP tools to the real implementations built in Batches 1–6. After this batch the MCP server is fully functional end-to-end: load_context, get_context, plan_strategy, dry_run_strategy, execute_strategy, get_execution_trace, get_status, cancel_call, resume_execution, and reset_runtime all delegate to their respective subsystems rather than returning stubs.
 
-**Level 2 — LLM gap-filling (only when hints are missing):** When the agent
-does not provide enough structured hints to answer the decision tree, the
-planner makes a single LLM call to fill the missing fields. The LLM answers
-structured yes/no or multiple-choice questions. Once fields are filled,
-Level 1 runs deterministically on the complete fields.
+### 7.1 Depends On
 
-The LLM never chooses templates directly. It only fills missing structured
-fields that the deterministic classifier then uses.
+- Batch 1 (Store, models, exceptions)
+- Batch 2 (Context primitives, ContextManager)
+- Batch 3 (TemplateParser, TemplateValidator)
+- Batch 4 (Planner, DryRunner)
+- Batch 5 (Executor, LLM adapter, token budget)
+- Batch 6 (LLMCache, GateManager, ChainExecutor)
 
-**Trigger condition:** Level 2 fires when any field required by the first
-unanswered decision tree question (Q0-Q9 in section 14.1) is missing from
-the agent's hints. If the agent provides all fields needed to traverse the
-tree to a leaf, Level 2 is skipped entirely.
+### 7.2 Files to Create or Modify
 
-**Prompt template:**
+| File | Action | Description |
+|------|--------|-------------|
+| v2/rlm_scheme/mcp_server.py | Modify | Wire all 10 tools to real implementations |
+| v2/tests/test_mcp_server.py | Create | Integration tests covering all 10 tools |
 
-```text
-Given this task description and available metadata, answer each question
-with ONLY the specified answer format. Do not explain.
+### 7.3 Requirements
 
-Task: {task_description}
-Context metadata: {context_metadata_json}
+1. [MUST] R-7.1: `load_context` MUST accept `data: str`, `name: str | None`, and `metadata_json: str | None`; it MUST return JSON with at minimum `{"status": "ok", "context_id": "<id>"}`.
+2. [MUST] R-7.2: `get_context` MUST return a JSON object with `context_id`, `name`, `size_bytes`, and optional `preview` and `data` fields controlled by `include_preview` and `include_data` boolean parameters.
+3. [MUST] R-7.3: `plan_strategy` MUST accept `task: str`, optional `context_id: str`, and optional `hints_json: str`; it MUST return JSON with `plan_id` and `recommended_template`.
+4. [MUST] R-7.4: `dry_run_strategy` MUST accept either `plan_id` or `template_invocation_json` (at least one required) and return JSON with `dry_run_id` and an `artifact` object containing token estimates.
+5. [MUST] R-7.5: `execute_strategy` MUST accept `plan_id` or `template_invocation_json`, plus `timeout_seconds: int | None`, `stream: bool`, `policy_json: str | None`, and `runtime_options_json: str | None`.
+6. [MUST] R-7.6: `get_execution_trace` MUST return a JSON object with an `events` array, a `scope_log` array, and a `stdout` string; the `include_scope_log`, `include_calls`, and `include_stdout` boolean parameters MUST control which sections are populated.
+7. [MUST] R-7.7: `get_status` with no arguments MUST return `token_usage` and `cache_stats`; with `execution_id` MUST additionally return `execution_status`, `steps_completed`, and `errors`.
+8. [MUST] R-7.8: `cancel_call` MUST accept `call_id: str | None` and `execution_id: str | None`; at least one MUST be provided or the tool MUST return `{"status": "error", "errors": ["either call_id or execution_id required"]}`.
+9. [MUST] R-7.9: `resume_execution` MUST accept `execution_id: str`, `gate: str`, `decision: str` (either `"approve"` or `"reject"`), and optional `reason: str`; it MUST delegate to `GateManager.resume`.
+10. [MUST] R-7.10: `reset_runtime` MUST support all 7 scopes defined in Appendix A item A.5: `"sandbox"`, `"session"`, `"cache"`, `"contexts"`, `"executions"`, `"config"`, and `"all"`.
+11. [MUST] R-7.11: Every tool MUST return a JSON string whose top-level object contains a `"status"` field with value `"ok"`, `"warn"`, or `"error"`.
+12. [MUST] R-7.12: Any response with `"status": "error"` MUST include an `"errors"` array containing at least one non-empty string message.
+13. [SHOULD] R-7.13: Tool implementations SHOULD catch all exceptions from subsystems, log them, and convert them to `{"status": "error", "errors": [...]}` responses rather than raising.
+14. [SHOULD] R-7.14: `plan_strategy` SHOULD include a `reasoning` field in its response explaining the planner's template selection rationale.
 
-Questions:
-{for each missing field:}
-- {field_name}: {question_text} ({answer_format})
-{end for}
+### 7.4 Detailed Specifications
 
-Respond as JSON:
-{
-  {for each missing field:}
-  "{field_name}": <answer>
-  {end for}
-}
+**Module-level singleton setup**
+
+`mcp_server.py` MUST instantiate singletons at module load time (not inside tool functions) so that state persists across tool calls within a session:
+
+```python
+_store           = Store(Path(os.environ.get("RLM_STORE_DIR", "/tmp/rlm_scheme")))
+_context_manager = ContextManager(_store)
+_template_parser = TemplateParser()
+_planner         = Planner(_template_parser)
+_dry_runner      = DryRunner(_template_parser, CostModel())
+_llm_adapter     = LLMAdapter()
+_cache           = LLMCache(_store)
+_gate_manager    = GateManager()
+_executor        = Executor(_llm_adapter, _cache, _gate_manager, _store)
+_chain_executor  = ChainExecutor(_executor, _store)
+_token_budget    = TokenBudget()
 ```
 
-**Question bank** (one per hint field):
+**Full tool signatures**
 
-| Field | Question | Answer format |
-|---|---|---|
-| `item_count` | How many input items are there? | integer |
-| `independent` | Are the items independent of each other? | `true` or `false` |
-| `output_type` | What is the output shape? | `"one"`, `"list"`, or `"per_item"` |
-| `operation` | What is the per-item operation? | `"transform"`, `"extract"`, `"label"`, `"check"`, `"grade"`, `"other"` |
-| `has_second_phase` | Does the task have a second phase after processing items? | `true` or `false` |
-| `sub_operations` | What operations are needed? | array of strings |
-| `modality` | What data modalities are present? | array: `"text"`, `"image"`, `"audio"` |
-| `ordered` | Does item order matter? | `true` or `false` |
+```python
+@mcp.tool()
+def load_context(
+    data: str,
+    name: str | None = None,
+    metadata_json: str | None = None,
+) -> str: ...
 
-**Response schema:**
+@mcp.tool()
+def get_context(
+    context_id: str,
+    include_preview: bool = True,
+    include_data: bool = False,
+) -> str: ...
+
+@mcp.tool()
+async def plan_strategy(
+    task: str,
+    context_id: str | None = None,
+    hints_json: str | None = None,
+) -> str: ...
+
+@mcp.tool()
+def dry_run_strategy(
+    plan_id: str | None = None,
+    template_invocation_json: str | None = None,
+    options_json: str | None = None,
+) -> str: ...
+
+@mcp.tool()
+async def execute_strategy(
+    plan_id: str | None = None,
+    template_invocation_json: str | None = None,
+    timeout_seconds: int | None = None,
+    stream: bool = False,
+    policy_json: str | None = None,
+    runtime_options_json: str | None = None,
+) -> str: ...
+
+@mcp.tool()
+def get_execution_trace(
+    execution_id: str,
+    include_scope_log: bool = True,
+    include_calls: bool = True,
+    include_stdout: bool = True,
+) -> str: ...
+
+@mcp.tool()
+def get_status(
+    execution_id: str | None = None,
+) -> str: ...
+
+@mcp.tool()
+def cancel_call(
+    call_id: str | None = None,
+    execution_id: str | None = None,
+    reason: str | None = None,
+) -> str: ...
+
+@mcp.tool()
+async def resume_execution(
+    execution_id: str,
+    gate: str,
+    decision: str,
+    reason: str | None = None,
+) -> str: ...
+
+@mcp.tool()
+def reset_runtime(
+    scope: str = "session",
+) -> str: ...
+```
+
+**reset_runtime scope semantics**
+
+| Scope | Action |
+|-------|--------|
+| `"sandbox"` | Clear Racket sandbox state only; leave all durable records, caches, and config intact |
+| `"session"` | Clear execution traces, token budget counters, and sandbox state; leave contexts and cache intact |
+| `"cache"` | Call `_cache.clear()`; reset cache stats to zero |
+| `"contexts"` | Delete all contexts from the store; reset context manager |
+| `"executions"` | Clear all execution traces and cancel all pending gates |
+| `"config"` | Reload model registry and template catalog from disk |
+| `"all"` | Apply all of the above scopes |
+
+**Error response shape**
 
 ```json
 {
-  "item_count": 100,
-  "independent": true,
-  "output_type": "one",
-  "operation": "extract",
-  "has_second_phase": true,
-  "sub_operations": ["extract", "synthesize"],
-  "modality": ["text"],
-  "ordered": false
+  "status": "error",
+  "errors": ["human-readable message"]
 }
 ```
 
-The planner validates the LLM response against expected types (integer,
-boolean, enum, array) and falls back to conservative defaults if validation
-fails: `independent: false`, `output_type: "one"`, `has_second_phase: false`.
-The planner model is `quality_text_model` with `json_mode: true` and
-`temperature: 0`.
+**Warn response shape**
 
-**Level 2 content slot filling** — After template selection, the planner
-makes one additional LLM call to fill content-specific slot values that
-require natural language judgment. This is part of the same `plan_strategy`
-call, not a separate step.
+Used when the operation partially succeeded:
 
-The planner sends the agent's `task` string, the selected template's slot
-schema (names, types, descriptions, and constraints), and the context
-metadata to the planner model. The LLM returns a JSON object with values
-for each unfilled content slot:
-
-- `map_instruction`, `reduce_instruction`, and similar string slots — the
-  actual prompts that will be sent to LLM calls during execution,
-- model tier selection (e.g., choosing `fast_text_model` vs
-  `quality_text_model` based on quality/cost hints),
-- iteration counts and validation wrappers based on quality requirements.
-
-Structural slots with defaults (`max_concurrent`, `branch_factor`,
-`json_mode`) use their defaults unless the agent overrides them in
-`hints.slot_overrides`. If the agent provides explicit `slot_overrides`
-for content slots, those override the LLM-generated values — this makes
-the planner fully deterministic when the agent provides everything.
-
-**Trigger condition:** This LLM call fires when the selected template has
-required string-typed slots with no default value and no agent-provided
-override. If all slots have defaults or agent-provided values, no LLM
-call is made.
-
-The planner model is `quality_text_model` with `json_mode: true` and
-`temperature: 0`. The template's `slot_schema` constrains LLM-generated
-values with types, enums, min/max ranges, and min-length — the planner
-validates the LLM response against these constraints before storing the
-plan record.
-
-### 14.1 TaskShape
-
-| Shape | Description | Structural family |
-|---|---|---|
-| `Direct` | One operation on one small input. | `llm-query` only. |
-| `Batch` | Same operation over many independent items. | `map-async`, optional reduction. |
-| `Synthesize` | Combine many inputs into one output. | `tree-reduce` or `fold-sequential`. |
-| `Search` | Explore solution space and choose best result. | `parallel`, `race`, `iterate-until`. |
-| `Refine` | Improve one artifact iteratively. | `iterate-until`. |
-| `Compare` | Evaluate alternatives against criteria. | `parallel` plus selection/aggregation. |
-| `Classify` | Assign labels/categories to items. | `map-async`, optional aggregation. |
-| `Pipeline` | Distinct sequential transformations. | `sequence`. |
-| `Generate` | Create new content from scratch. | index-based `map-async`, `iterate-until`, or `fold-sequential`. |
-| `Decompose` | Break one input into structured parts. | `llm-query` JSON, `python_compute`, or `recursive`. |
-| `Validate` | Produce pass/fail/score assessments. | `map-async`, validation, aggregation. |
-| `Aggregate` | Extract metrics and compute report. | `map-async` plus `python_compute`. |
-| `Composite` | Multi-phase task. | instantiated `sequence` of phase templates. |
-
-TaskShape decision tree:
-
-```text
-Q0: Is this one small input, one output, one operation, no second phase?
-    YES -> Direct
-    NO  -> Q1
-
-Q1: Are there many input items?
-    YES -> Q2
-    NO  -> Q5
-
-Q2: Are items independent?
-    YES -> Q3
-    NO  -> Q4
-
-Q3: What is the per-item operation?
-    Transform/extract -> Batch
-    Label/category    -> Classify
-    Check/grade/audit -> Validate
-
-Q4: Does information accumulate across ordered items?
-    YES -> Synthesize with fold-sequential
-    NO  -> Pipeline
-
-Q5: Is the task creating content with no source item list?
-    YES -> Generate
-    NO  -> Q6
-
-Q6: Is the task improving one artifact?
-    YES -> Refine
-    NO  -> Q7
-
-Q7: Is the task breaking one input into parts?
-    YES -> Decompose
-    NO  -> Q8
-
-Q8: Is the task choosing among alternatives?
-    YES -> Compare or Search
-    NO  -> Synthesize, Aggregate, or Direct depending on output type
-
-Q9: Does the task clearly have multiple phases?
-    YES -> Composite, preserving constituent shapes
+```json
+{
+  "status": "warn",
+  "warnings": ["what was degraded"],
+  "result": { ... }
+}
 ```
 
-### 14.2 DataShape
+**plan_strategy response shape**
 
-| Shape | Description | Important fields |
-|---|---|---|
-| `FlatList` | Independent or ordered list. | count, item_size, independent. |
-| `Hierarchy` | Tree or nested structure. | depth, branching, node_count. |
-| `Singular` | One blob that may fit in context. | size, chunkable, boundary. |
-| `ChunkedSingular` | Large document split into dependent chunks. | chunk_count, overlap, dependency. |
-| `Graph` | Connected entities and edges. | nodes, edges, connectedness. |
-| `TimeSeries` | Ordered observations. | length, window_size, causal. |
-| `Tabular` | Rows with shared schema. | row_count, columns, grouping keys. |
-| `Multimodal` | Text plus images/audio. | modality, count, model requirements. |
-| `Paired` | Aligned source/target pairs. | pair_count, alignment key. |
-| `KeyValue` | Dictionary/map data. | key_count, preserve_keys. |
-
-DataShape mapping rules:
-
-```text
-FlatList { independent: true, count <= 50 }
-  -> map-async with max-concurrent = count
-
-FlatList { independent: true, count > 50 }
-  -> map-async with max-concurrent = min(count, 20)
-
-FlatList { independent: false }
-  -> fold-sequential
-
-Singular { size <= context_limit, one operation }
-  -> Direct
-
-Singular { size > context_limit, chunkable: true, chunks independent }
-  -> chunk, then FlatList
-
-ChunkedSingular { chunks dependent }
-  -> fold-sequential with explicit summary/checkpoint strategy
-
-Hierarchy { depth > 2 }
-  -> tree-reduce over matching hierarchy or recursive-spawn
-
-Tabular { row_count > 50, independent_rows: true }
-  -> map-async row extraction + python_compute aggregation
-
-Multimodal
-  -> require model with image/audio support; include image token estimates
-
-Paired
-  -> zip pairs and map-async over pair records
-
-KeyValue
-  -> preserve keys in results; aggregate by key
+```json
+{
+  "status": "ok",
+  "plan_id": "plan_<uuid>",
+  "recommended_template": "map-reduce-summarize",
+  "classification": "multi-document",
+  "reasoning": "Task contains multiple items; map-reduce is appropriate.",
+  "estimated_calls": 7
+}
 ```
 
-### 14.3 Per-Shape Template Selection
+**execute_strategy response shape**
 
-Direct:
-
-```text
-Q1: Does the input fit in one model context?
-    YES -> direct_call
-    NO  -> reclassify as Decompose, Batch, or Synthesize
-
-Q2: Is deterministic computation needed before/after the call?
-    YES -> python_compute + direct_call, or direct_call + python_compute
-    NO  -> direct_call only
+```json
+{
+  "status": "ok",
+  "execution_id": "exec_<uuid>",
+  "steps_completed": 1,
+  "output_context_id": "ctx_<uuid>",
+  "token_usage": {"prompt": 1200, "completion": 400, "total": 1600}
+}
 ```
 
-Batch:
+### 7.5 Test Specification
 
-```text
-Q1: Return a list or one combined output?
-    LIST     -> batch_map
-    COMBINED -> batch_extract_reduce
+| Test File | Test Function | Scenario | Expected |
+|-----------|--------------|----------|----------|
+| test_mcp_server.py | test_load_json_data | `load_context` with valid JSON array string | `status == "ok"`, `context_id` present |
+| test_mcp_server.py | test_load_string_data | `load_context` with plain string | `status == "ok"`, `context_id` present |
+| test_mcp_server.py | test_load_with_name | `load_context` with `name="my_doc"` | Response includes `name == "my_doc"` |
+| test_mcp_server.py | test_get_existing_context | Load then `get_context` | `status == "ok"`, `preview` non-empty |
+| test_mcp_server.py | test_get_missing_context | `get_context("ctx_does_not_exist")` | `status == "error"` |
+| test_mcp_server.py | test_get_context_include_data | Load then `get_context(include_data=True)` | Response includes `data` field |
+| test_mcp_server.py | test_plan_with_context | Load context then `plan_strategy` with context_id | `plan_id` present, `status == "ok"` |
+| test_mcp_server.py | test_plan_without_context | `plan_strategy(task="summarize this")` | `plan_id` present, `status == "ok"` |
+| test_mcp_server.py | test_plan_with_hints | `plan_strategy` with `hints_json='{"prefer": "map-reduce"}'` | `status == "ok"` |
+| test_mcp_server.py | test_dry_run_from_plan | `plan_strategy` then `dry_run_strategy(plan_id=...)` | `dry_run_id` present, `artifact` present |
+| test_mcp_server.py | test_dry_run_from_invocation | `dry_run_strategy(template_invocation_json=...)` | `status == "ok"` |
+| test_mcp_server.py | test_dry_run_no_args | `dry_run_strategy()` with no arguments | `status == "error"` |
+| test_mcp_server.py | test_execute_from_plan | `plan_strategy` then `execute_strategy(plan_id=...)` | `execution_id` present, `status == "ok"` |
+| test_mcp_server.py | test_execute_from_invocation | `execute_strategy(template_invocation_json=...)` | `status == "ok"` |
+| test_mcp_server.py | test_execute_no_args | `execute_strategy()` with no arguments | `status == "error"` |
+| test_mcp_server.py | test_trace_after_execution | Execute then `get_execution_trace` | `events` array non-empty |
+| test_mcp_server.py | test_trace_missing_execution | `get_execution_trace("exec_nonexistent")` | `status == "error"` |
+| test_mcp_server.py | test_trace_include_flags | Trace with all include flags `False` | Response has empty `events`, no `scope_log`, no `stdout` |
+| test_mcp_server.py | test_general_status | `get_status()` with no args | `token_usage` present, `cache_stats` present |
+| test_mcp_server.py | test_execution_status | Execute then `get_status(execution_id=...)` | `execution_status` present |
+| test_mcp_server.py | test_cancel_with_execution_id | Execute then `cancel_call(execution_id=...)` | `status == "ok"` |
+| test_mcp_server.py | test_cancel_no_args | `cancel_call()` with no arguments | `status == "error"` |
+| test_mcp_server.py | test_resume_no_pending_gate | `resume_execution` for execution with no registered gate | `status == "error"` |
+| test_mcp_server.py | test_resume_invalid_decision | `resume_execution(..., decision="maybe")` | `status == "error"` |
+| test_mcp_server.py | test_reset_sandbox | `reset_runtime("sandbox")` | `status == "ok"` |
+| test_mcp_server.py | test_reset_session | `reset_runtime("session")` | `status == "ok"` |
+| test_mcp_server.py | test_reset_cache | `reset_runtime("cache")` | `status == "ok"`, cache stats zeroed |
+| test_mcp_server.py | test_reset_contexts | `reset_runtime("contexts")` | `status == "ok"` |
+| test_mcp_server.py | test_reset_executions | `reset_runtime("executions")` | `status == "ok"` |
+| test_mcp_server.py | test_reset_config | `reset_runtime("config")` | `status == "ok"` |
+| test_mcp_server.py | test_reset_all | `reset_runtime("all")` | `status == "ok"` |
+| test_mcp_server.py | test_reset_invalid_scope | `reset_runtime("bogus")` | `status == "error"` |
+| test_mcp_server.py | test_e2e_pipeline | Full `load_context` → `plan_strategy` → `dry_run_strategy` → `execute_strategy` → `get_execution_trace` → `get_status` | All six calls return `status == "ok"` |
 
-Q2: If combined, is combination order-sensitive?
-    YES -> batch_extract_fold
-    NO  -> batch_extract_reduce
+### 7.6 Acceptance Gates
 
-Q3: Are some items harder or more ambiguous?
-    YES -> tiered_review template
-    NO  -> one map-async pass
+```sh
+# Gate 1: all MCP server integration tests pass
+cd v2 && python -m pytest tests/test_mcp_server.py -v
 
-Q4: Are duplicates likely?
-    YES -> memoized map phase
+# Gate 2: exactly 10 tools are registered
+cd v2 && python -c "
+from rlm_scheme.mcp_server import mcp
+tools = [t.name for t in mcp.list_tools()]
+assert len(tools) == 10, f'expected 10 tools, got {len(tools)}: {tools}'
+expected = {
+    'load_context', 'get_context', 'plan_strategy', 'dry_run_strategy',
+    'execute_strategy', 'get_execution_trace', 'get_status',
+    'cancel_call', 'resume_execution', 'reset_runtime',
+}
+assert set(tools) == expected, f'tool name mismatch: {set(tools) ^ expected}'
+print('All 10 tools registered correctly')
+"
+
+# Gate 3: every tool returns JSON with a status field
+cd v2 && python -c "
+import asyncio, json
+from rlm_scheme.mcp_server import (
+    load_context, get_context, dry_run_strategy,
+    get_status, cancel_call, reset_runtime,
+)
+results = [
+    load_context('hello world'),
+    get_context('ctx_nonexistent'),
+    dry_run_strategy(),
+    get_status(),
+    cancel_call(),
+    reset_runtime('session'),
+]
+for r in results:
+    d = json.loads(r)
+    assert 'status' in d, f'missing status in: {r}'
+print('All checked tools return status field')
+"
+
+# Gate 4: full test suite still green
+cd v2 && python -m pytest tests/ -q --tb=short
 ```
 
-Synthesize:
+### 7.7 Checklist
 
-```text
-Q1: Do all items fit in one context?
-    YES -> direct_synthesis
-    NO  -> Q2
+- [ ] All module-level singletons instantiated at the top of `mcp_server.py`
+- [ ] `load_context` wired to `ContextManager.store`
+- [ ] `get_context` wired to `ContextManager.get`, returns correct fields
+- [ ] `plan_strategy` wired to `Planner.plan`, returns `plan_id` and `recommended_template`
+- [ ] `dry_run_strategy` wired to `DryRunner.dry_run`, requires at least one of `plan_id` / `template_invocation_json`
+- [ ] `execute_strategy` wired to `Executor.execute`, requires at least one of `plan_id` / `template_invocation_json`
+- [ ] `get_execution_trace` wired to executor trace store, returns `events`, `scope_log`, `stdout`
+- [ ] `get_status` returns `token_usage` and `cache_stats` without args; execution details with `execution_id`
+- [ ] `cancel_call` returns error when both `call_id` and `execution_id` are `None`
+- [ ] `resume_execution` delegates to `GateManager.resume`, validates `decision` is `"approve"` or `"reject"`
+- [ ] `reset_runtime` handles all 7 scopes and returns error for unrecognised scope
+- [ ] All 31 tests in this batch pass
+- [ ] No regressions in Batches 1–6 tests
 
-Q2: Is order important?
-    YES -> ordered_synthesis_fold
-    NO  -> tree_synthesis
+---
 
-Q3: Is accumulator likely to exceed context?
-    YES -> fold_with_summarization
-    NO  -> exact fold-sequential
+## Batch 8: Streaming and Budget Degradation
+
+### 8.0 Purpose
+
+Implement streaming partial results emitted as MCP progress notifications during map-async and tree-reduce execution, budget monitoring that detects low-budget thresholds and activates degradation policies (switch-model or checkpoint-and-stop), and code interpreter template support with a controlled Python bridge enforcing an import allowlist.
+
+### 8.1 Depends On
+
+- Batch 1 (Store, models, exceptions)
+- Batch 2 (Context primitives)
+- Batch 3 (Template parser — map-async, tree-reduce, code interpreter structures)
+- Batch 4 (Dry-runner, cost model)
+- Batch 5 (Executor, LLM adapter, token budget)
+- Batch 6 (Cache, GateManager, ChainExecutor)
+- Batch 7 (MCP server singletons, execute_strategy stream parameter)
+
+### 8.2 Files to Create or Modify
+
+| File | Action | Description |
+|------|--------|-------------|
+| v2/rlm_scheme/streaming.py | Create | Streaming notification helpers for map-async and tree-reduce |
+| v2/rlm_scheme/budget.py | Create | BudgetMonitor: threshold detection, policy dispatch |
+| v2/rlm_scheme/python_bridge.py | Create | Controlled Python subprocess for py-exec, py-eval with import allowlist |
+| v2/rlm_scheme/executor.py | Modify | Integrate streaming notifications, budget monitor, code interpreter dispatch |
+| v2/tests/test_streaming.py | Create | Streaming integration tests |
+| v2/tests/test_budget.py | Create | Budget degradation tests |
+
+### 8.3 Requirements
+
+1. [SHOULD] R-8.1: When `stream=True`, the executor SHOULD emit MCP `notifications/partial_result` messages for each completed item in a map-async or tree-reduce node.
+2. [SHOULD] R-8.2: Progress notifications SHOULD include `execution_id`, `node_id`, `items_completed`, and `items_total` fields.
+3. [MUST] R-8.3: `BudgetMonitor` MUST fire a callback when cumulative token usage first crosses the template's `low-budget-threshold` (expressed as a fraction of `max-tokens`).
+4. [MUST] R-8.4: When the low-budget threshold is crossed, the executor MUST consult the template's `budget-policy` and dispatch to either `_apply_switch_model` or `_apply_checkpoint_and_stop`.
+5. [MUST] R-8.5: `_apply_switch_model` MUST change the `model_alias` for all remaining LLM calls in the current execution to the `fallback-model` named in `budget-policy`.
+6. [MUST] R-8.6: `_apply_checkpoint_and_stop` MUST write a checkpoint record to the store containing completed steps and their output context IDs, then raise `BudgetExhaustedError` to halt execution gracefully.
+7. [MUST] R-8.7: Any template that uses `py-exec` or `py-eval` MUST have `uses-llm-generated-code: #t` set; the executor MUST reject code interpreter dispatch without this flag.
+8. [MUST] R-8.8: The Python bridge MUST enforce the import allowlist from the template's `code-generation-policy`; any attempt to `import` a module not on the allowlist MUST raise `ImportBlockedError` and terminate the subprocess.
+9. [SHOULD] R-8.9: The Python bridge SHOULD run LLM-generated code with a 10-second execution timeout; trusted code (not LLM-generated) SHOULD use a 30-second timeout.
+10. [SHOULD] R-8.10: Streaming notifications SHOULD be best-effort; failure to deliver a notification MUST NOT abort the execution.
+
+### 8.4 Detailed Specifications
+
+**StreamingNotifier public interface**
+
+```python
+class StreamingNotifier:
+    def __init__(self, context: fastmcp.Context | None) -> None: ...
+
+    async def notify_item_complete(
+        self,
+        execution_id: str,
+        node_id: str,
+        items_completed: int,
+        items_total: int,
+        partial_result: object | None = None,
+    ) -> None: ...
+
+    async def notify_phase_complete(
+        self,
+        execution_id: str,
+        phase: str,
+    ) -> None: ...
 ```
 
-Search:
+When `context` is `None`, all notify calls are no-ops. Exceptions from `context.report_progress` MUST be caught and logged without propagation (satisfying R-8.10).
 
-```text
-Q1: Is the candidate set finite?
-    YES -> compare_candidates
-    NO  -> iterative_search
+**BudgetMonitor public interface**
 
-Q2: Is latency more important than quality?
-    YES -> race_candidates
-    NO  -> evaluate_all_then_select
+```python
+@dataclasses.dataclass
+class BudgetPolicy:
+    action: str                   # "switch-model" or "checkpoint-and-stop"
+    fallback_model: str | None    # required when action == "switch-model"
+    threshold_fraction: float     # 0.0–1.0, e.g. 0.2 means 20% remaining
+
+class BudgetMonitor:
+    def __init__(self, max_tokens: int, policy: BudgetPolicy) -> None: ...
+
+    def record_usage(self, tokens_used: int) -> bool:
+        """Return True if threshold was newly crossed, False otherwise."""
+        ...
+
+    @property
+    def threshold_crossed(self) -> bool: ...
+
+    @property
+    def tokens_remaining(self) -> int: ...
 ```
 
-Refine:
+`record_usage` MUST be idempotent regarding the `threshold_crossed` flag — once crossed it stays crossed regardless of subsequent calls.
 
-```text
-Q1: Is there a testable predicate?
-    YES -> refine_until_valid
-    NO  -> bounded_critique_refine
+**BudgetExhaustedError** is added to `exceptions.py`. Its message MUST include the checkpoint record ID.
 
-Q2: Should each iteration be validated?
-    YES -> wrap refine step with validation
+**Checkpoint record schema** (stored under namespace `"checkpoints"` in the Store):
+
+```json
+{
+  "execution_id": "exec_<uuid>",
+  "checkpoint_id": "ckpt_<uuid>",
+  "created_at": "<ISO-8601>",
+  "steps_completed": 3,
+  "output_context_ids": ["ctx_auto_0", "ctx_auto_1", "ctx_auto_2"],
+  "tokens_used_at_checkpoint": 48000
+}
 ```
 
-Compare:
+**Python bridge public interface**
 
-```text
-Q1: Compare models or strategies?
-    MODELS     -> compare_models
-    STRATEGIES -> compare_strategies
+```python
+class PythonBridge:
+    DEFAULT_TIMEOUT    = 30   # seconds, trusted code
+    LLM_CODE_TIMEOUT   = 10   # seconds, LLM-generated code
 
-Q2: Select one or synthesize all?
-    SELECT     -> parallel + python_compute/Scheme selection
-    SYNTHESIZE -> parallel + llm-query aggregator
+    def __init__(
+        self,
+        allowlist: list[str] | None = None,
+        is_llm_generated: bool = False,
+    ) -> None: ...
+
+    def exec(self, code: str, globals_dict: dict | None = None) -> dict:
+        """Execute code string; return updated globals. Raises on timeout or blocked import."""
+        ...
+
+    def eval(self, expression: str, globals_dict: dict | None = None) -> object:
+        """Evaluate expression string; return result."""
+        ...
 ```
 
-Classify:
+The import allowlist check works by wrapping the code in a `RestrictedImporter` context manager that overrides `__import__` for the duration of the call. If `allowlist` is `None`, a safe default allowlist of `["json", "math", "re", "datetime", "collections", "itertools", "functools", "typing"]` is used.
 
-```text
-Q1: One item or many?
-    ONE  -> direct_classify
-    MANY -> batch_classify
+**Executor modifications**
 
-Q2: Need distribution/report?
-    YES -> python_compute aggregation after labels
-    NO  -> return labels
+The executor's `_dispatch_node` method gains two new branches:
 
-Q3: Ambiguous categories?
-    YES -> tiered_review template
+1. **streaming branch**: after each completed item in map-async or tree-reduce, call `await notifier.notify_item_complete(...)`.
+2. **code interpreter branch**: when a node has type `py-exec` or `py-eval`, route to `PythonBridge` instead of the LLM adapter. Validate `uses-llm-generated-code` flag before dispatching (R-8.7).
+
+Budget monitoring is integrated into the executor's main execution loop:
+
+```python
+if budget_monitor and budget_monitor.record_usage(tokens_used):
+    if policy.action == "switch-model":
+        self._apply_switch_model(policy.fallback_model)
+    elif policy.action == "checkpoint-and-stop":
+        self._apply_checkpoint_and_stop(execution_id, completed_steps)
+        raise BudgetExhaustedError(checkpoint_id)
 ```
 
-Pipeline:
+### 8.5 Test Specification
 
-```text
-Q1: Are stages distinct?
-    YES -> sequence
-    NO  -> reclassify as Batch
+| Test File | Test Function | Scenario | Expected |
+|-----------|--------------|----------|----------|
+| test_streaming.py | test_streaming_flag_no_error | Execute with `stream=True`, `context=None` | No exception; execution completes normally |
+| test_streaming.py | test_notify_item_complete_no_op | `StreamingNotifier(None).notify_item_complete(...)` | Returns without error |
+| test_streaming.py | test_notify_tracks_progress | Mock `context`; call `notify_item_complete` 3 times | `context.report_progress` called 3 times |
+| test_budget.py | test_budget_monitor_not_triggered | Use 10% of budget with 20% threshold | `threshold_crossed == False` |
+| test_budget.py | test_budget_monitor_activation | Use 85% of budget with 20% threshold | `record_usage` returns `True`, `threshold_crossed == True` |
+| test_budget.py | test_budget_monitor_idempotent | Cross threshold then record more usage | Second call returns `False` (already crossed) |
+| test_budget.py | test_model_switch | Execute with budget policy `switch-model` at 50% | Active model alias changes to `fallback_model` |
+| test_budget.py | test_checkpoint_and_stop | Execute with policy `checkpoint-and-stop` at 1% threshold | `BudgetExhaustedError` raised; checkpoint in store |
+| test_budget.py | test_checkpoint_record_fields | Inspect checkpoint after stop | `execution_id`, `steps_completed`, `output_context_ids` all present |
+| test_budget.py | test_python_bridge_exec | `PythonBridge().exec("x = 2 + 2")` | Returns `{"x": 4}` in globals |
+| test_budget.py | test_python_bridge_eval | `PythonBridge().eval("3 * 7")` | Returns `21` |
+| test_budget.py | test_python_bridge_blocked_import | `exec("import os")` with default allowlist | Raises `ImportBlockedError` |
+| test_budget.py | test_python_bridge_allowed_import | `exec("import json")` with default allowlist | No error |
+| test_budget.py | test_code_interpreter_flag_missing | Dispatch `py-exec` node without `uses-llm-generated-code: True` | Raises `TemplateValidationError` |
 
-Q2: Can a stage fail?
-    YES -> fallback around that stage
+### 8.6 Acceptance Gates
 
-Q3: Does a stage need quality gating?
-    YES -> validation around that stage
+```sh
+# Gate 1: all streaming and budget tests pass
+cd v2 && python -m pytest tests/test_streaming.py tests/test_budget.py -v
+
+# Gate 2: BudgetMonitor threshold detection works
+cd v2 && python -c "
+from rlm_scheme.budget import BudgetMonitor, BudgetPolicy
+policy = BudgetPolicy(action='switch-model', fallback_model='gpt-4o-mini', threshold_fraction=0.2)
+bm = BudgetMonitor(max_tokens=10000, policy=policy)
+triggered = bm.record_usage(8500)
+assert triggered, 'threshold should have been crossed'
+assert bm.threshold_crossed
+print('BudgetMonitor threshold OK')
+"
+
+# Gate 3: PythonBridge import blocking works
+cd v2 && python -c "
+from rlm_scheme.python_bridge import PythonBridge
+from rlm_scheme.exceptions import ImportBlockedError
+pb = PythonBridge(allowlist=['json', 'math'])
+try:
+    pb.exec('import subprocess')
+    raise AssertionError('should have raised ImportBlockedError')
+except ImportBlockedError:
+    print('ImportBlockedError raised correctly')
+"
+
+# Gate 4: full test suite still green
+cd v2 && python -m pytest tests/ -q --tb=short
 ```
 
-Generate:
+### 8.7 Checklist
 
-```text
-Q1: Fixed number or until condition?
-    FIXED -> map-async over generated index list
-    UNTIL -> iterate-until
+- [ ] `v2/rlm_scheme/streaming.py` created with `StreamingNotifier`
+- [ ] `v2/rlm_scheme/budget.py` created with `BudgetPolicy`, `BudgetMonitor`
+- [ ] `v2/rlm_scheme/python_bridge.py` created with `PythonBridge`, `RestrictedImporter`
+- [ ] `BudgetExhaustedError` and `ImportBlockedError` added to `exceptions.py`
+- [ ] `executor.py` updated: streaming notifications hooked into map-async and tree-reduce dispatch
+- [ ] `executor.py` updated: `BudgetMonitor.record_usage` called after each LLM call
+- [ ] `executor.py` updated: `py-exec` / `py-eval` dispatch routes to `PythonBridge`
+- [ ] `executor.py` enforces `uses-llm-generated-code` flag check before code interpreter dispatch
+- [ ] `checkpoint-and-stop` writes checkpoint record to store and raises `BudgetExhaustedError`
+- [ ] All 14 tests in this batch pass
+- [ ] No regressions in Batches 1–7 tests
 
-Q2: Must items be mutually consistent?
-    YES -> fold-sequential
-    NO  -> map-async
+---
 
-Q3: Must items be unique?
-    YES -> python_compute deduplication and regenerate missing count
+## Batch 9: Runtime Primitives and Python Bridge Integration
+
+### 9.0 Purpose
+
+Implement the `PythonRuntimeStub` — a Python pattern-matching interpreter for template structures — and fully integrate the Python bridge for `py-exec` / `py-eval`. The stub recognizes structural patterns such as `map-async`, `tree-reduce`, and `fold-sequential` and executes them via Python async without requiring a Racket runtime. This is the complete execution substrate for the MCP server.
+
+### 9.1 Depends On
+
+- Batch 1 (Store, models, exceptions)
+- Batch 2 (Context primitives)
+- Batch 3 (Template parser — all combinator structures)
+- Batch 4 (Dry-runner — combinator call-count formulas)
+- Batch 5 (Executor, LLM adapter)
+- Batch 6 (Cache, GateManager)
+- Batch 7 (MCP server wiring)
+- Batch 8 (Streaming, BudgetMonitor, PythonBridge)
+
+### 9.2 Files to Create or Modify
+
+| File | Action | Description |
+|------|--------|-------------|
+| v2/rlm_scheme/runtime_stub.py | Create | PythonRuntimeStub: pattern-dispatch for all template combinators |
+| v2/rlm_scheme/python_bridge.py | Modify | Add `py-exec` / `py-eval` context integration |
+| v2/rlm_scheme/executor.py | Modify | Replace ad-hoc combinator dispatch with `PythonRuntimeStub` |
+| v2/tests/test_runtime_primitives.py | Create | Runtime primitive unit and integration tests |
+
+### 9.3 Requirements
+
+1. [MUST] R-9.1: `PythonRuntimeStub` MUST recognise and execute the `map-async` pattern: apply an LLM call concurrently to every item in an input list and return a list of results.
+2. [MUST] R-9.2: `PythonRuntimeStub` MUST recognise and execute the `tree-reduce` pattern: repeatedly apply a reduce call to groups of `branch_factor` items until a single result remains.
+3. [MUST] R-9.3: `PythonRuntimeStub` MUST recognise and execute the `fold-sequential` pattern: apply a fold call to items one at a time, threading an accumulator through each call.
+4. [MUST] R-9.4: `map-async` execution MUST respect the `max_concurrent` parameter using `asyncio.Semaphore`; no more than `max_concurrent` LLM calls MUST be in-flight simultaneously.
+5. [MUST] R-9.5: A `tree-reduce` over N items with branch factor B MUST produce exactly `ceil(N/B) + ceil(ceil(N/B)/B) + ...` calls, converging to a single result; for N=8 and B=2 this is 4+2+1 = 7 reduce calls plus 8 map calls = 15 total calls.
+6. [MUST] R-9.6: `fold-sequential` over N items MUST produce exactly N LLM calls; step i receives the accumulator from step i-1.
+7. [MUST] R-9.7: `llm-query` (direct single-call) pattern MUST be supported by the stub as the base case.
+8. [SHOULD] R-9.8: The stub SHOULD support `memoize` combinator: if the same `(instruction, data)` pair is seen again within the same execution, it SHOULD return the cached result without a new LLM call.
+9. [SHOULD] R-9.9: The Python bridge SHOULD support passing the current execution context (store reference, context_id) into `py-exec` via a `__rlm__` dict injected into the globals.
+10. [SHOULD] R-9.10: `PythonRuntimeStub` SHOULD emit structured log entries for each pattern dispatch, recorded in the execution trace.
+
+### 9.4 Detailed Specifications
+
+**PythonRuntimeStub public interface**
+
+```python
+class PythonRuntimeStub:
+    def __init__(
+        self,
+        llm_adapter: LLMAdapter,
+        cache: LLMCache,
+        notifier: StreamingNotifier,
+        store: Store,
+    ) -> None: ...
+
+    async def execute(
+        self,
+        node: TemplateNode,
+        slot_values: dict[str, object],
+        execution_id: str,
+        model_alias: str,
+        policy: ExecutionPolicy,
+    ) -> ExecutionResult: ...
+
+    async def _dispatch(
+        self,
+        node: TemplateNode,
+        slot_values: dict[str, object],
+        context: RuntimeContext,
+    ) -> object: ...
 ```
 
-Decompose:
+`TemplateNode` is the parsed AST node from Batch 3. `_dispatch` pattern-matches on `node.type` and routes to the appropriate handler.
 
-```text
-Q1: Known structural boundary?
-    YES -> python_compute splitter
-    NO  -> llm-query with JSON output
+**RuntimeContext dataclass**
 
-Q2: Is one pass enough?
-    YES -> parse parts and return
-    NO  -> recursive artifact-aware decomposition
-
-Q3: Process parts afterward?
-    YES -> Composite: Decompose -> Batch
+```python
+@dataclasses.dataclass
+class RuntimeContext:
+    execution_id: str
+    model_alias: str
+    policy: ExecutionPolicy
+    call_count: int            # mutable, incremented on each LLM call
+    memo_table: dict           # (instruction_key, data_key) -> result
+    trace_events: list[dict]   # appended on each dispatch
 ```
 
-Validate:
+**Pattern dispatch table**
 
-```text
-Q1: Same rubric for all items?
-    YES -> map-async validation
-    NO  -> fold-sequential if criteria evolve
+| `node.type` | Handler method | Key parameters |
+|-------------|----------------|----------------|
+| `llm-query` | `_handle_llm_query` | `instruction`, `data`, `model`, `temperature` |
+| `map-async` | `_handle_map_async` | `items`, `map_fn`, `max_concurrent` |
+| `tree-reduce` | `_handle_tree_reduce` | `items`, `map_fn`, `reduce_fn`, `branch_factor` |
+| `fold-sequential` | `_handle_fold_sequential` | `items`, `fold_fn`, `initial_accumulator` |
+| `memoize` | `_handle_memoize` | `inner_node`, delegates to `_dispatch` with memo check |
+| `py-exec` | `_handle_py_exec` | `code`, `policy.code_generation_policy` |
+| `py-eval` | `_handle_py_eval` | `expression`, `policy.code_generation_policy` |
 
-Q2: Need structured assessment?
-    YES -> JSON mode plus schema validation
+**map-async concurrency implementation**
 
-Q3: Which error is costlier?
-    FALSE POSITIVE -> expensive review of passes
-    FALSE NEGATIVE -> expensive review of failures
+```python
+async def _handle_map_async(self, node, slot_values, ctx):
+    sem = asyncio.Semaphore(node.params.get("max_concurrent", 8))
+    items = self._resolve_items(node, slot_values)
+
+    async def process_one(idx, item):
+        async with sem:
+            result = await self._dispatch(node.map_fn, {**slot_values, "item": item}, ctx)
+            await self._notifier.notify_item_complete(
+                ctx.execution_id, node.node_id, idx + 1, len(items), result
+            )
+            return result
+
+    return await asyncio.gather(*[process_one(i, item) for i, item in enumerate(items)])
 ```
 
-Aggregate:
+**tree-reduce call count formula**
 
-```text
-Q1: Pure computation after extraction?
-    YES -> map-async extraction + python_compute aggregation
-    NO  -> map-async extraction + python_compute stats + llm interpretation
+For N items and branch factor B:
 
-Q2: Grouped report?
-    YES -> python_compute groupby using extracted schema
+```
+total_map_calls    = N
+total_reduce_calls = sum(ceil(n / B) for n in sequence_until_one(N, B))
 ```
 
-Composite:
+where `sequence_until_one(N, B)` yields `N, ceil(N/B), ceil(ceil(N/B)/B), ...` until the value is 1.
 
-```text
-Q1: Identify constituent shapes in order.
-Q2: Select an atomic template for each phase.
-Q3: Produce a template chain connecting dependent phases with `$previous`.
-Q4: If phases are independent, the agent can execute them as separate plans in parallel.
+For N=8, B=2: `sequence = [8, 4, 2, 1]`; map calls = 8; reduce calls = `4 + 2 + 1 = 7`; total = 15.
+
+**fold-sequential accumulator threading**
+
+```python
+async def _handle_fold_sequential(self, node, slot_values, ctx):
+    items = self._resolve_items(node, slot_values)
+    acc = self._resolve_value(node.params.get("initial_accumulator"), slot_values)
+    for item in items:
+        acc = await self._dispatch(
+            node.fold_fn,
+            {**slot_values, "item": item, "accumulator": acc},
+            ctx,
+        )
+    return acc
+```
+
+**memoize lookup**
+
+```python
+async def _handle_memoize(self, node, slot_values, ctx):
+    memo_key = (
+        canonical_json(node.inner_node.params.get("instruction", "")),
+        canonical_json(slot_values.get("data", "")),
+    )
+    if memo_key in ctx.memo_table:
+        return ctx.memo_table[memo_key]
+    result = await self._dispatch(node.inner_node, slot_values, ctx)
+    ctx.memo_table[memo_key] = result
+    return result
+```
+
+**py-exec context injection**
+
+When dispatching `py-exec`, the bridge receives a `__rlm__` dict injected into globals:
+
+```python
+rlm_globals = {
+    "__rlm__": {
+        "store": self._store,
+        "execution_id": ctx.execution_id,
+        "slot_values": slot_values,
+    }
+}
+```
+
+### 9.5 Test Specification
+
+| Test File | Test Function | Scenario | Expected |
+|-----------|--------------|----------|----------|
+| test_runtime_primitives.py | test_llm_query_basic | Single `llm-query` node with mocked LLM | Returns string result |
+| test_runtime_primitives.py | test_map_async_basic | `map-async` over 5 items, mocked LLM | Returns list of 5 results |
+| test_runtime_primitives.py | test_map_async_concurrency | `max_concurrent=3`, 10 items, timed mock | No more than 3 concurrent calls |
+| test_runtime_primitives.py | test_map_async_returns_all | `map-async` over 7 items | List length == 7 |
+| test_runtime_primitives.py | test_tree_reduce_call_count | N=8, B=2, counting mock | Exactly 15 calls total |
+| test_runtime_primitives.py | test_tree_reduce_single_result | N=4, B=2, concat mock | Returns single combined result |
+| test_runtime_primitives.py | test_tree_reduce_n_equals_1 | N=1, B=2 | Returns immediately, 1 map call, 0 reduce calls |
+| test_runtime_primitives.py | test_fold_sequential_call_count | 5 items | Exactly 5 LLM calls |
+| test_runtime_primitives.py | test_fold_sequential_threading | Items [1,2,3], mock accumulates sum | Final result is 6 |
+| test_runtime_primitives.py | test_fold_sequential_order | Items in order A,B,C | Calls made in order A→B→C |
+| test_runtime_primitives.py | test_memoize_deduplication | Same item appears twice in map | Second occurrence uses memo, 1 LLM call not 2 |
+| test_runtime_primitives.py | test_memoize_different_items | Different items | Both call LLM |
+| test_runtime_primitives.py | test_py_exec_execution | `py-exec` with `x = 1 + 1` | Globals contain `x == 2` |
+| test_runtime_primitives.py | test_py_exec_rlm_injected | `py-exec` accessing `__rlm__` | `__rlm__["execution_id"]` is correct |
+| test_runtime_primitives.py | test_direct_call_execution | `llm-query` with full slot resolution | Returns result from mocked LLM adapter |
+| test_runtime_primitives.py | test_trace_events_recorded | Execute `map-async` over 3 items | `trace_events` has at least 3 entries |
+| test_runtime_primitives.py | test_dispatch_unknown_type | Node with `type="bogus"` | Raises `UnknownNodeTypeError` |
+
+### 9.6 Acceptance Gates
+
+```sh
+# Gate 1: all runtime primitive tests pass
+cd v2 && python -m pytest tests/test_runtime_primitives.py -v
+
+# Gate 2: map-async call count correct
+cd v2 && python -c "
+import asyncio
+from rlm_scheme.runtime_stub import PythonRuntimeStub
+from unittest.mock import AsyncMock, MagicMock
+
+call_count = 0
+async def mock_llm(instruction, data, model, temperature, json_mode):
+    global call_count
+    call_count += 1
+    return f'result_{call_count}'
+
+stub = PythonRuntimeStub.__new__(PythonRuntimeStub)
+stub._call_count_check = True
+
+# 5-item map-async check
+items = list(range(5))
+results = asyncio.run(stub._test_map_async(items, mock_llm))
+assert len(results) == 5, f'expected 5, got {len(results)}'
+print('map-async call count OK')
+" 2>/dev/null || echo "manual verification required — see test suite"
+
+# Gate 3: tree-reduce call count N=8 B=2 = 15
+cd v2 && python -c "
+from rlm_scheme.runtime_stub import tree_reduce_call_count
+total = tree_reduce_call_count(n=8, branch_factor=2)
+assert total == 15, f'expected 15, got {total}'
+print(f'tree_reduce_call_count(8,2) = {total} OK')
+"
+
+# Gate 4: full test suite still green
+cd v2 && python -m pytest tests/ -q --tb=short
+```
+
+### 9.7 Checklist
+
+- [ ] `v2/rlm_scheme/runtime_stub.py` created with `PythonRuntimeStub`, `RuntimeContext`, `tree_reduce_call_count`
+- [ ] `UnknownNodeTypeError` added to `exceptions.py`
+- [ ] All seven `_handle_*` methods implemented in `PythonRuntimeStub`
+- [ ] `map-async` uses `asyncio.Semaphore` for concurrency limiting (R-9.4)
+- [ ] `tree-reduce` call count matches formula for all N, B combinations tested (R-9.5)
+- [ ] `fold-sequential` threads accumulator correctly (R-9.6)
+- [ ] `memoize` deduplication works within a single execution (R-9.8)
+- [ ] `py-exec` injects `__rlm__` dict into bridge globals (R-9.9)
+- [ ] Trace events emitted for each dispatch (R-9.10)
+- [ ] `executor.py` updated to use `PythonRuntimeStub` for all combinator dispatch
+- [ ] All 17 tests in this batch pass
+- [ ] No regressions in Batches 1–8 tests
+
+---
+
+## Batch 10: Entry Point, Documentation, and Polish
+
+### 10.0 Purpose
+
+Add the `__main__.py` entry point so the package is runnable via `python -m rlm_scheme`, write the README showing the 3-tool happy path, run the full test suite to verify 0 failures and at least 150 tests, and fix any issues surfaced during final integration.
+
+### 10.1 Depends On
+
+- All prior batches (1–9)
+
+### 10.2 Files to Create or Modify
+
+| File | Action | Description |
+|------|--------|-------------|
+| v2/rlm_scheme/__main__.py | Create | Entry point: `python -m rlm_scheme` starts the MCP server |
+| v2/README.md | Create | Usage documentation including the 3-tool happy path |
+| v2/rlm_scheme/mcp_server.py | Modify | Verify `if __name__ == "__main__"` block is clean |
+| v2/tests/test_entry_point.py | Create | Smoke tests for the entry point and README content |
+
+### 10.3 Requirements
+
+1. [MUST] R-10.1: `python -m rlm_scheme` MUST either start the MCP server successfully or print usage information and exit with code 0 or 1.
+2. [MUST] R-10.2: `python -m rlm_scheme --help` MUST exit without raising an unhandled exception.
+3. [MUST] R-10.3: `v2/README.md` MUST document the 3-tool happy path: `plan_strategy` → `dry_run_strategy` → `execute_strategy`, with example inputs and outputs for each step.
+4. [MUST] R-10.4: `v2/README.md` MUST contain zero occurrences of the strings `execute_scheme` or `dry_run_scheme`.
+5. [MUST] R-10.5: The full test suite (`python -m pytest tests/`) MUST pass with 0 failures and 0 errors.
+6. [SHOULD] R-10.6: The full test suite SHOULD collect at least 150 test items.
+7. [SHOULD] R-10.7: `v2/README.md` SHOULD include a section listing all 10 MCP tool names with one-line descriptions.
+8. [SHOULD] R-10.8: `v2/README.md` SHOULD include a quick-start section showing how to install dependencies and run the server.
+9. [MAY] R-10.9: The entry point MAY support `--stdio` and `--port PORT` flags to select transport.
+10. [MAY] R-10.10: `v2/README.md` MAY include a troubleshooting section for common errors (`ContextNotFoundError`, `TemplateValidationError`).
+
+### 10.4 Detailed Specifications
+
+**`__main__.py` implementation**
+
+```python
+"""Entry point for python -m rlm_scheme."""
+from __future__ import annotations
+
+import argparse
+import sys
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="python -m rlm_scheme",
+        description="RLM-Scheme MCP server — LLM reasoning template engine",
+    )
+    parser.add_argument(
+        "--transport",
+        choices=["stdio", "sse"],
+        default="stdio",
+        help="MCP transport to use (default: stdio)",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=8000,
+        help="Port for SSE transport (default: 8000)",
+    )
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+
+    from rlm_scheme.mcp_server import mcp  # deferred import to allow --help without heavy deps
+
+    if args.transport == "stdio":
+        mcp.run(transport="stdio")
+    else:
+        mcp.run(transport="sse", port=args.port)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+```
+
+**README structure**
+
+The README MUST contain the following top-level sections in order:
+
+1. **RLM-Scheme** — one-paragraph overview
+2. **Quick Start** — install and run commands
+3. **The 3-Tool Happy Path** — annotated example of `plan_strategy` → `dry_run_strategy` → `execute_strategy`
+4. **All 10 MCP Tools** — table with tool name and one-line description
+5. **Template Structure** — brief overview of `map-async`, `tree-reduce`, `fold-sequential` combinators
+6. **Configuration** — environment variables (`RLM_STORE_DIR`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`)
+
+**3-tool happy path example** (MUST appear verbatim or substantially in README):
+
+```
+1. plan_strategy(task="Summarize these 8 research papers", context_id="ctx_abc123")
+   → {"status": "ok", "plan_id": "plan_xyz", "recommended_template": "map-reduce-summarize"}
+
+2. dry_run_strategy(plan_id="plan_xyz")
+   → {"status": "ok", "dry_run_id": "dr_789", "artifact": {"estimated_calls": 15, "estimated_tokens": 24000}}
+
+3. execute_strategy(plan_id="plan_xyz")
+   → {"status": "ok", "execution_id": "exec_456", "output_context_id": "ctx_result_999"}
+```
+
+**All 10 MCP tools table** (MUST appear in README):
+
+| Tool | Description |
+|------|-------------|
+| `load_context` | Store data (text, JSON, or binary) and receive a context_id |
+| `get_context` | Retrieve context metadata and optional preview or full data |
+| `plan_strategy` | Analyse a task and recommend a template with a plan_id |
+| `dry_run_strategy` | Estimate token cost and call count without executing |
+| `execute_strategy` | Execute a plan or template invocation and return results |
+| `get_execution_trace` | Retrieve events, scope log, and stdout for a completed execution |
+| `get_status` | Return global token usage and cache stats, or execution details |
+| `cancel_call` | Cancel an in-progress call or execution |
+| `resume_execution` | Approve or reject a pending human-review gate |
+| `reset_runtime` | Clear session state, cache, contexts, executions, or all |
+
+**Final integration fix protocol**
+
+Before marking this batch complete, run the full suite and address failures in this order:
+
+1. Import errors — fix missing imports or circular dependencies.
+2. `AttributeError` / `TypeError` — fix interface mismatches between batches.
+3. Assertion failures in integration tests — investigate data flow.
+4. Test count below 150 — add missing edge-case tests to the most-undercovered files.
+
+### 10.5 Test Specification
+
+| Test File | Test Function | Scenario | Expected |
+|-----------|--------------|----------|----------|
+| test_entry_point.py | test_help_exits_cleanly | `python -m rlm_scheme --help` via subprocess | Exit code 0, no stderr |
+| test_entry_point.py | test_module_importable | `import rlm_scheme` | No ImportError |
+| test_entry_point.py | test_mcp_object_exists | `from rlm_scheme.mcp_server import mcp` | `mcp` is not None |
+| test_entry_point.py | test_readme_exists | `v2/README.md` file exists | File present and non-empty |
+| test_entry_point.py | test_readme_no_execute_scheme | `grep execute_scheme v2/README.md` | Zero matches |
+| test_entry_point.py | test_readme_no_dry_run_scheme | `grep dry_run_scheme v2/README.md` | Zero matches |
+| test_entry_point.py | test_readme_has_plan_strategy | README contains `plan_strategy` | String found |
+| test_entry_point.py | test_readme_has_dry_run_strategy | README contains `dry_run_strategy` | String found |
+| test_entry_point.py | test_readme_has_execute_strategy | README contains `execute_strategy` | String found |
+| test_entry_point.py | test_readme_has_all_10_tools | README contains all 10 tool names | All 10 found |
+| test_entry_point.py | test_full_suite_count | `pytest --collect-only -q` | At least 150 items collected |
+| (all batches) | (all tests) | Complete suite run | 0 failures, 0 errors |
+
+### 10.6 Acceptance Gates
+
+```sh
+# Gate 1: entry point help works
+cd v2 && python -m rlm_scheme --help
+
+# Gate 2: README exists and contains no forbidden strings
+cd v2 && test -f README.md && echo "README exists"
+cd v2 && count=$(grep -c "execute_scheme\|dry_run_scheme" README.md 2>/dev/null || echo 0); echo "Forbidden string count: $count"; test "$count" -eq 0
+
+# Gate 3: README contains all 10 tool names
+cd v2 && python -c "
+content = open('README.md').read()
+tools = [
+    'load_context', 'get_context', 'plan_strategy', 'dry_run_strategy',
+    'execute_strategy', 'get_execution_trace', 'get_status',
+    'cancel_call', 'resume_execution', 'reset_runtime',
+]
+missing = [t for t in tools if t not in content]
+assert not missing, f'Missing from README: {missing}'
+print('All 10 tool names present in README')
+"
+
+# Gate 4: full test suite passes with >= 150 tests
+cd v2 && python -m pytest tests/ -v --tb=short 2>&1 | tee /tmp/rlm_pytest_output.txt
+cd v2 && python -m pytest tests/ --collect-only -q 2>&1 | tail -5
+
+# Gate 5: test count >= 150
+cd v2 && python -c "
+import subprocess, re
+result = subprocess.run(['python', '-m', 'pytest', 'tests/', '--collect-only', '-q'],
+                       capture_output=True, text=True)
+lines = result.stdout + result.stderr
+match = re.search(r'(\d+) test', lines)
+count = int(match.group(1)) if match else 0
+print(f'Test count: {count}')
+assert count >= 150, f'Expected >= 150 tests, got {count}'
+print('Test count gate passed')
+"
+```
+
+### 10.7 Checklist
+
+- [ ] `v2/rlm_scheme/__main__.py` created with `build_parser()` and `main()` functions
+- [ ] `python -m rlm_scheme --help` exits with code 0
+- [ ] `v2/README.md` created with all six required sections
+- [ ] README contains zero occurrences of `execute_scheme` and `dry_run_scheme`
+- [ ] README contains all 10 MCP tool names
+- [ ] README 3-tool happy path example is present and accurate
+- [ ] `test_entry_point.py` created with 12 tests covering entry point and README content
+- [ ] Full test suite runs with 0 failures and 0 errors
+- [ ] Test suite collects at least 150 items
+- [ ] Any interface mismatches discovered during final integration run are fixed
+- [ ] All import cycles resolved
+- [ ] `v2/rlm_scheme/__init__.py` exports `mcp`, `__version__`, and the ten tool functions for convenience imports
+---
+
+## Appendix E: Verification Check Registry
+
+All 23 verification checks with pass conditions, failure message templates, and Python pseudocode.
+
+### E.1 Check 1: artifact_origin
+
+**Pass condition:** Artifact record exists with `source_type: "template_invocation"`
+**Failure message:** `"Artifact was not created by the instantiator."`
+
+```python
+def check_artifact_origin(artifact, store):
+    if artifact.source_type != "template_invocation":
+        return Fail("Artifact was not created by the instantiator.")
+    return Pass()
+```
+
+### E.2 Check 2: artifact_hash
+
+**Pass condition:** `sha256(artifact_code)` matches `artifact.generated_scheme_ref.hash`
+**Failure message:** `"Artifact code hash mismatch: expected {expected}, got {actual}."`
+
+```python
+def check_artifact_hash(artifact):
+    import hashlib
+    actual = "sha256:" + hashlib.sha256(artifact.code.encode()).hexdigest()
+    expected = artifact.generated_scheme_ref.hash
+    if actual != expected:
+        return Fail(f"Artifact code hash mismatch: expected {expected}, got {actual}.")
+    return Pass()
+```
+
+### E.3 Check 3: template_version
+
+**Pass condition:** Template name+version exists in catalog
+**Failure message:** `"Unknown template: {name} v{version}."`
+
+```python
+def check_template_version(artifact, template_store):
+    name = artifact.template_name
+    version = artifact.template_version
+    if not template_store.exists(name, version):
+        return Fail(f"Unknown template: {name} v{version}.")
+    return Pass()
+```
+
+### E.4 Check 4: slots_filled
+
+**Pass condition:** No `{{slot}}` markers remain in artifact code
+**Failure message:** `"Unfilled slot markers: {markers}."`
+
+```python
+import re
+
+def check_slots_filled(artifact):
+    markers = re.findall(r"\{\{[^}]+\}\}", artifact.code)
+    if markers:
+        return Fail(f"Unfilled slot markers: {markers}.")
+    return Pass()
+```
+
+### E.5 Check 5: model_exists
+
+**Pass condition:** All model aliases in artifact resolve in registry
+**Failure message:** `"Unknown model alias: {alias}."`
+
+```python
+def check_model_exists(artifact, model_registry):
+    for alias in artifact.referenced_model_aliases:
+        if not model_registry.has(alias):
+            return Fail(f"Unknown model alias: {alias}.")
+    return Pass()
+```
+
+### E.6 Check 6: model_capabilities
+
+**Pass condition:** JSON-mode calls target models with `json_mode: true`
+**Failure message:** `"Model {alias} does not support JSON mode."`
+
+```python
+def check_model_capabilities(artifact, model_registry):
+    for call in artifact.llm_calls:
+        if call.json_mode:
+            model = model_registry.get(call.model_alias)
+            if not model.capabilities.get("json_mode", False):
+                return Fail(f"Model {call.model_alias} does not support JSON mode.")
+    return Pass()
+```
+
+### E.7 Check 7: image_model
+
+**Pass condition:** Image inputs target models with `image: true`
+**Failure message:** `"Model {alias} does not support image inputs."`
+
+```python
+def check_image_model(artifact, model_registry):
+    for call in artifact.llm_calls:
+        if call.has_image_input:
+            model = model_registry.get(call.model_alias)
+            if not model.capabilities.get("image", False):
+                return Fail(f"Model {call.model_alias} does not support image inputs.")
+    return Pass()
+```
+
+### E.8 Check 8: no_unsafe_forms
+
+**Pass condition:** No `eval`, `system`, `shell`, `exec` (non-`py-exec`) in artifact
+**Failure message:** `"Unsafe form found: {form}."`
+
+```python
+import re
+
+def check_no_unsafe_forms(artifact):
+    unsafe_patterns = [
+        r"\beval\b",
+        r"\bsystem\b",
+        r"\bshell\b",
+        r"(?<!py-)\bexec\b",
+    ]
+    for pattern in unsafe_patterns:
+        matches = re.findall(pattern, artifact.code)
+        if matches:
+            return Fail(f"Unsafe form found: {matches[0]}.")
+    return Pass()
+```
+
+### E.9 Check 9: no_raw_import
+
+**Pass condition:** No `require`, `load`, `include` outside allowed set
+**Failure message:** `"Disallowed import: {form}."`
+
+```python
+import re
+
+ALLOWED_REQUIRES = {"rlm/primitives", "rlm/runtime", "racket/base"}
+
+def check_no_raw_import(artifact):
+    import_forms = re.findall(r'\((?:require|load|include)\s+([^\)]+)\)', artifact.code)
+    for form_text in import_forms:
+        module = form_text.strip().strip('"')
+        if module not in ALLOWED_REQUIRES:
+            return Fail(f"Disallowed import: {form_text.strip()}.")
+    return Pass()
+```
+
+### E.10 Check 10: call_count_limit
+
+**Pass condition:** Expected calls <= `policy.max_llm_calls` (default: 1000)
+**Failure message:** `"Expected {n} calls exceeds limit {limit}."`
+
+```python
+def check_call_count_limit(dry_run_estimate, policy):
+    limit = policy.get("max_llm_calls", 1000)
+    n = dry_run_estimate.expected_llm_calls
+    if n > limit:
+        return Fail(f"Expected {n} calls exceeds limit {limit}.")
+    return Pass()
+```
+
+### E.11 Check 11: recursive_depth_limit
+
+**Pass condition:** Recursive depth <= `policy.max_recursive_depth` (default: 3)
+**Failure message:** `"Recursive depth {d} exceeds limit {limit}."`
+
+```python
+def check_recursive_depth_limit(dry_run_estimate, policy):
+    limit = policy.get("max_recursive_depth", 3)
+    d = dry_run_estimate.recursive_depth
+    if d > limit:
+        return Fail(f"Recursive depth {d} exceeds limit {limit}.")
+    return Pass()
+```
+
+### E.12 Check 12: concurrency_limit
+
+**Pass condition:** Max concurrency <= `policy.max_concurrency` (default: 50)
+**Failure message:** `"Concurrency {c} exceeds limit {limit}."`
+
+```python
+def check_concurrency_limit(dry_run_estimate, policy):
+    limit = policy.get("max_concurrency", 50)
+    c = dry_run_estimate.max_concurrency
+    if c > limit:
+        return Fail(f"Concurrency {c} exceeds limit {limit}.")
+    return Pass()
+```
+
+### E.13 Check 13: context_exists
+
+**Pass condition:** All referenced `context_id` values exist in store
+**Failure message:** `"Context not found: {id}."`
+
+```python
+def check_context_exists(artifact, context_store):
+    for ctx_id in artifact.referenced_context_ids:
+        if not context_store.exists(ctx_id):
+            return Fail(f"Context not found: {ctx_id}.")
+    return Pass()
+```
+
+### E.14 Check 14: output_schema_valid
+
+**Pass condition:** If `output-schema` declared, it is structurally valid alist notation
+**Failure message:** `"Output schema is malformed: {detail}."`
+
+```python
+def check_output_schema_valid(artifact):
+    schema = artifact.metadata.get("output_schema")
+    if schema is None:
+        return Pass()
+    try:
+        validate_alist_schema(schema)
+    except SchemaValidationError as e:
+        return Fail(f"Output schema is malformed: {e}.")
+    return Pass()
+
+def validate_alist_schema(schema):
+    # Schema must be a list of (key . type) pairs
+    if not isinstance(schema, list):
+        raise SchemaValidationError("Schema must be a list.")
+    for entry in schema:
+        if not (isinstance(entry, tuple) and len(entry) == 2):
+            raise SchemaValidationError(f"Entry {entry!r} is not a key-type pair.")
+        key, typ = entry
+        if not isinstance(key, str):
+            raise SchemaValidationError(f"Key {key!r} must be a string.")
+        if typ not in ("string", "number", "boolean", "list", "dict", "any"):
+            raise SchemaValidationError(f"Unknown type {typ!r}.")
+```
+
+### E.15 Check 15: output_schema_present
+
+**Pass condition:** If policy requires output schema, template declares one
+**Failure message:** `"Output schema required by policy but not declared."`
+
+```python
+def check_output_schema_present(artifact, policy):
+    if not policy.get("require_output_schema", False):
+        return Pass()
+    schema = artifact.metadata.get("output_schema")
+    if schema is None:
+        return Fail("Output schema required by policy but not declared.")
+    return Pass()
+```
+
+### E.16 Check 16: dry_run_warnings
+
+**Pass condition:** No `error`-level warnings from dry-run
+**Failure message:** `"Dry-run produced error-level warning: {warning}."`
+
+```python
+def check_dry_run_warnings(dry_run_result):
+    for warning in dry_run_result.warnings:
+        if warning.level == "error":
+            return Fail(f"Dry-run produced error-level warning: {warning.message}.")
+    return Pass()
+```
+
+### E.17 Check 17: code_interpreter_policy
+
+**Pass condition:** If `uses-llm-generated-code: #t`, policy has `allow_llm_generated_code: true`
+**Failure message:** `"Template uses LLM-generated code but policy disallows it."`
+
+```python
+def check_code_interpreter_policy(artifact, policy):
+    uses_llm_code = artifact.metadata.get("uses_llm_generated_code", False)
+    if uses_llm_code and not policy.get("allow_llm_generated_code", False):
+        return Fail("Template uses LLM-generated code but policy disallows it.")
+    return Pass()
+```
+
+### E.18 Check 18: gate_consistency
+
+**Pass condition:** Gate names in body match `define-meta gates` declarations
+**Failure message:** `"Gate '{name}' used in body but not declared in metadata."`
+
+```python
+import re
+
+def check_gate_consistency(artifact):
+    declared_gates = set(artifact.metadata.get("gates", []))
+    used_gates = set(re.findall(r'\(gate\s+"([^"]+)"', artifact.code))
+    for name in used_gates:
+        if name not in declared_gates:
+            return Fail(f"Gate '{name}' used in body but not declared in metadata.")
+    return Pass()
+```
+
+### E.19 Check 19: budget_policy_model
+
+**Pass condition:** If `budget-policy` declares a fallback model, it exists in registry
+**Failure message:** `"Budget fallback model '{alias}' not found in registry."`
+
+```python
+def check_budget_policy_model(artifact, model_registry):
+    budget_policy = artifact.metadata.get("budget_policy")
+    if budget_policy is None:
+        return Pass()
+    fallback_alias = budget_policy.get("fallback_model")
+    if fallback_alias is None:
+        return Pass()
+    if not model_registry.has(fallback_alias):
+        return Fail(f"Budget fallback model '{fallback_alias}' not found in registry.")
+    return Pass()
+```
+
+### E.20 Check 20: budget_policy_caps
+
+**Pass condition:** Fallback model has compatible capabilities (JSON mode, images)
+**Failure message:** `"Fallback model '{alias}' lacks capability: {cap}."`
+
+```python
+def check_budget_policy_caps(artifact, model_registry):
+    budget_policy = artifact.metadata.get("budget_policy")
+    if budget_policy is None:
+        return Pass()
+    fallback_alias = budget_policy.get("fallback_model")
+    if fallback_alias is None:
+        return Pass()
+    fallback_model = model_registry.get(fallback_alias)
+    required_caps = artifact.metadata.get("required_capabilities", [])
+    for cap in required_caps:
+        if not fallback_model.capabilities.get(cap, False):
+            return Fail(f"Fallback model '{fallback_alias}' lacks capability: {cap}.")
+    return Pass()
+```
+
+### E.21 Check 21: primitive_allowlist
+
+**Pass condition:** Only primitives from the approved list are used in artifact
+**Failure message:** `"Disallowed primitive: {name}."`
+
+```python
+ALLOWED_PRIMITIVES = {
+    "llm-query", "llm-query-async", "await", "await-all", "await-any",
+    "map-async", "parallel", "race", "tree-reduce", "fold-sequential",
+    "sequence", "choose", "iterate-until", "recursive-spawn",
+    "memoized", "with-validation", "try-fallback",
+    "gate", "finish", "python-compute", "py-exec",
+    "load-context", "syntax-e", "datum->syntax",
+    "checkpoint", "checkpoint-restore",
+}
+
+def check_primitive_allowlist(artifact):
+    for call in artifact.primitive_calls:
+        if call.name not in ALLOWED_PRIMITIVES:
+            return Fail(f"Disallowed primitive: {call.name}.")
+    return Pass()
+```
+
+### E.22 Check 22: context_window_fit
+
+**Pass condition:** Estimated input tokens fit model's context window
+**Failure message:** `"Estimated {tokens} tokens exceeds {alias} context window of {limit}."`
+
+```python
+def check_context_window_fit(artifact, dry_run_estimate, model_registry):
+    for call in dry_run_estimate.call_estimates:
+        model = model_registry.get(call.model_alias)
+        tokens = call.estimated_prompt_tokens
+        limit = model.context_window_tokens
+        if tokens > limit:
+            return Fail(
+                f"Estimated {tokens} tokens exceeds {call.model_alias} "
+                f"context window of {limit}."
+            )
+    return Pass()
+```
+
+### E.23 Check 23: temperature_compat
+
+**Pass condition:** Temperature and max-token settings are valid for model
+**Failure message:** `"Invalid temperature {t} for model {alias}."`
+
+```python
+def check_temperature_compat(artifact, model_registry):
+    for call in artifact.llm_calls:
+        model = model_registry.get(call.model_alias)
+        t = call.temperature
+        if t is not None:
+            t_min = model.temperature_range.get("min", 0.0)
+            t_max = model.temperature_range.get("max", 2.0)
+            if not (t_min <= t <= t_max):
+                return Fail(f"Invalid temperature {t} for model {call.model_alias}.")
+        if call.max_tokens is not None:
+            if call.max_tokens > model.max_output_tokens:
+                return Fail(
+                    f"max_tokens {call.max_tokens} exceeds model "
+                    f"{call.model_alias} limit {model.max_output_tokens}."
+                )
+    return Pass()
+```
+
+### E.24 Overall Verification Decision
+
+```python
+def run_all_checks(artifact, dry_run_result, context_store, model_registry, policy):
+    checks = [
+        check_artifact_origin(artifact, context_store),
+        check_artifact_hash(artifact),
+        check_template_version(artifact, template_store),
+        check_slots_filled(artifact),
+        check_model_exists(artifact, model_registry),
+        check_model_capabilities(artifact, model_registry),
+        check_image_model(artifact, model_registry),
+        check_no_unsafe_forms(artifact),
+        check_no_raw_import(artifact),
+        check_call_count_limit(dry_run_result.estimate, policy),
+        check_recursive_depth_limit(dry_run_result.estimate, policy),
+        check_concurrency_limit(dry_run_result.estimate, policy),
+        check_context_exists(artifact, context_store),
+        check_output_schema_valid(artifact),
+        check_output_schema_present(artifact, policy),
+        check_dry_run_warnings(dry_run_result),
+        check_code_interpreter_policy(artifact, policy),
+        check_gate_consistency(artifact),
+        check_budget_policy_model(artifact, model_registry),
+        check_budget_policy_caps(artifact, model_registry),
+        check_primitive_allowlist(artifact),
+        check_context_window_fit(artifact, dry_run_result.estimate, model_registry),
+        check_temperature_compat(artifact, model_registry),
+    ]
+    if any(c.status == "fail" for c in checks):
+        return VerificationResult(decision="fail", checks=checks)
+    elif any(c.status == "warn" for c in checks):
+        return VerificationResult(decision="warn", checks=checks)
+    else:
+        return VerificationResult(decision="pass", checks=checks)
 ```
 
 ---
 
-## 15. Initial Template Catalog
+## Appendix F: Classifier Decision Trees (Python Pseudocode)
 
-The first implementation should include enough templates to cover common
-workflows without asking the planner to invent structure.
+### F.1 `classify_task_shape(hints) -> TaskShape`
 
-| Template | Shapes | Primitive composition |
-|---|---|---|
-| `direct_call` | Direct | `llm-query`. |
-| `direct_json_extract` | Direct, Decompose | `llm-query #:json #t` plus validation. |
-| `batch_map` | Batch, Classify, Validate | `map-async`. |
-| `batch_extract_reduce` | Batch + Synthesize | `map-async` plus `tree-reduce`. |
-| `batch_extract_fold` | Batch + ordered Synthesize | `map-async` plus `fold-sequential`, or direct `fold-sequential` when items are dependent. |
-| `ordered_synthesis_fold` | Synthesize | `fold-sequential` with optional checkpointing. |
-| `tree_synthesis` | Synthesize | `tree-reduce`. |
-| `compare_candidates` | Compare, Search | `parallel` plus selection. |
-| `race_candidates` | Search | `race`. |
-| `refine_until_valid` | Refine | `iterate-until` plus `with-validation`. |
-| `bounded_critique_refine` | Refine | `iterate-until` with critique/refine state. |
-| `tiered_review` | Batch, Classify, Validate | cheap `map-async`, uncertainty filter, expensive `map-async`. |
-| `tabular_extract_aggregate` | Aggregate, Tabular | `map-async` plus `python_compute`. |
-| `decompose_then_batch` | Decompose, Composite | JSON decomposition plus `map-async`. |
-| `recursive_decompose` | Decompose, Hierarchy | artifact-aware `recursive-spawn`. |
-| `code_interpreter` | Direct, Aggregate | `llm-query` + `py-exec` + `with-validation` + `iterate-until`. Requires `uses-llm-generated-code: #t`. |
+Implements the Q0–Q9 decision tree. All logic is deterministic on the structured `hints` dict. Returns a `TaskShape` string.
 
-Every template should include:
+```python
+def classify_task_shape(hints: dict) -> str:
+    """
+    Classify task into a TaskShape using the Q0-Q9 decision tree.
+    All decisions operate on structured hint fields only.
 
-- slot schema,
-- expected call formula,
-- structural profile,
-- model capability requirements,
-- verification rules,
-- at least one example invocation,
-- one instantiation fixture showing the artifact after slot substitution.
+    Required hint fields (may be None if Level 2 gap-fill has not run):
+        item_count     : int | None
+        independent    : bool | None
+        output_type    : "one" | "list" | "per_item" | None
+        operation      : "transform" | "extract" | "label" | "check" | "grade" | "other" | None
+        has_second_phase: bool | None
+        sub_operations : list[str] | None
+        ordered        : bool | None
+    """
+    item_count = hints.get("item_count", 0) or 0
+    independent = hints.get("independent")
+    output_type = hints.get("output_type")
+    operation = hints.get("operation")
+    has_second_phase = hints.get("has_second_phase", False)
+    sub_operations = hints.get("sub_operations") or []
+    ordered = hints.get("ordered", False)
 
-**Chaining and monolithic templates:** Several monolithic templates
-(`batch_extract_reduce`, `batch_extract_fold`) can also be expressed as
-chains of atomic templates (`batch_map` → `tree_synthesis`, `batch_map` →
-`ordered_fold`). Monolithic versions are kept for convenience and
-performance (one artifact, one instantiation), but chains are the preferred
-composition mechanism for new Composite workflows.
+    MANY_ITEMS_THRESHOLD = 2
 
-Templates should also declare in their `define-meta`:
+    # Q0: One small input, one output, one operation, no second phase?
+    is_single_input = (item_count <= 1)
+    is_single_output = (output_type == "one" or output_type is None)
+    no_second_phase = not has_second_phase
+    no_sub_ops = (len(sub_operations) <= 1)
 
-- `streamable: #t` for templates that produce meaningful intermediate results
-  (e.g., `batch_map`, `batch_extract_reduce`, `tabular_extract_aggregate`),
-- `cacheable: #t` for templates whose LLM calls are safe to cache across
-  executions (most templates at temperature 0).
+    if is_single_input and is_single_output and no_second_phase and no_sub_ops:
+        return "Direct"
 
----
+    # Q9: Does the task clearly have multiple phases?
+    # Check early: Composite wins if multiple sub_operations span distinct shapes.
+    if has_second_phase and len(sub_operations) >= 2:
+        return "Composite"
 
-## 16. Implementation File Layout
+    # Q1: Are there many input items?
+    if item_count >= MANY_ITEMS_THRESHOLD:
+        # Q2: Are items independent?
+        if independent is True:
+            # Q3: What is the per-item operation?
+            if operation in ("transform", "extract", "other"):
+                return "Batch"
+            elif operation in ("label",):
+                return "Classify"
+            elif operation in ("check", "grade"):
+                return "Validate"
+            else:
+                # default for unknown operation with independent items
+                return "Batch"
+        else:
+            # Q4: Does information accumulate across ordered items?
+            if ordered:
+                return "Synthesize"  # fold-sequential path
+            else:
+                return "Pipeline"
+    else:
+        # Q5: Is the task creating content with no source item list?
+        if operation == "generate" or (output_type == "list" and item_count == 0):
+            return "Generate"
 
-Suggested greenfield layout:
+        # Q6: Is the task improving one artifact?
+        if operation in ("refine", "improve", "iterate"):
+            return "Refine"
 
-```text
-rlm_scheme/
-  __init__.py
-  mcp_server.py
-  models.py
-  ids.py
-  store.py
-  context_store.py
-  template_store.py
-  planner.py
-  classifier.py
-  instantiator.py      # internal library, used by dry_run.py and executor.py
-  cache.py            # content-addressed LLM result cache
-  chain.py            # template chain execution logic
-  gate.py             # gate primitive and resume_execution handler
-  dry_run.py           # instantiates + simulates + estimates in one call
-  executor.py          # instantiates + verifies + executes in one call
-  trace.py
-  llm_provider.py
-  image_inputs.py
-  python_bridge.py
-  runtime/
-    racket_server.rkt
-    primitives.rkt
-    sandbox.rkt
-    callbacks.rkt
-templates/
-  direct_call.rkt
-  direct_json_extract.rkt
-  batch_map.rkt
-  batch_extract_reduce.rkt
-  batch_extract_fold.rkt
-  ordered_synthesis_fold.rkt
-  tree_synthesis.rkt
-  compare_candidates.rkt
-  race_candidates.rkt
-  refine_until_valid.rkt
-  bounded_critique_refine.rkt
-  tiered_review.rkt
-  tabular_extract_aggregate.rkt
-  decompose_then_batch.rkt
-  recursive_decompose.rkt
-  code_interpreter.rkt
-docs/
-  GREENFIELD-REWRITE-PLAN.md
-  api-reference.md
-  templates.md
-  primitives.md
-tests/
-  test_id_flow.py
-  test_mcp_api_schemas.py
-  test_template_validation.py
-  test_instantiator.py
-  test_runtime_primitives.py
-  test_dry_run.py      # also covers instantiation and estimation
-  test_executor.py     # also covers verification
-  test_cache.py
-  test_chain.py
-  test_gate.py
-  test_streaming.py
+        # Q7: Is the task breaking one input into parts?
+        if operation in ("decompose", "split", "parse", "extract") and output_type in ("list", "per_item"):
+            return "Decompose"
+
+        # Q8: Is the task choosing among alternatives?
+        if operation in ("compare", "select", "choose", "rank"):
+            if hints.get("latency_priority", False):
+                return "Search"
+            return "Compare"
+
+        # Remaining single-input cases
+        if output_type == "one" and operation == "aggregate":
+            return "Aggregate"
+
+        if output_type == "one":
+            return "Synthesize"
+
+        # Fallback
+        return "Direct"
 ```
 
-Module responsibilities:
+### F.2 `classify_data_shape(metadata) -> DataShape`
 
-| Module | Responsibility |
-|---|---|
-| `models.py` | Pydantic/dataclass schemas for all durable records and API payloads. |
-| `ids.py` | ID generation and validation for `ctx_`, `plan_`, `art_`, `dry_`, `ver_`, `exec_`, `call_`. |
-| `store.py` | Durable JSON or SQLite/PGlite storage abstraction. |
-| `context_store.py` | Large context storage, previews, metadata, and path extraction. |
-| `template_store.py` | Load, validate, list, and retrieve `.rkt` templates (parse `define-meta` forms + body). |
-| `classifier.py` | Deterministic TaskShape/DataShape rules. |
-| `planner.py` | Template selection and plan record creation. |
-| `instantiator.py` | Internal library: slot validation and safe substitution into template Scheme code. Called by `dry_run.py` and `executor.py`. |
-| `dry_run.py` | Instantiates template invocation, simulates execution, computes cost estimates. |
-| `executor.py` | Instantiates (or reuses artifact from dry run), verifies against policy, executes in Racket sandbox. |
-| `cache.py` | Content-addressed LLM result cache. Key computation, storage, lookup, and `reset_runtime(scope="cache")`. |
-| `chain.py` | Template chain execution: step sequencing, intermediate context creation, `$previous` resolution, and chain-level checkpointing. |
-| `gate.py` | Gate primitive implementation and `resume_execution` MCP tool handler. Manages gate state in execution records. |
-| `trace.py` | Trace event schema and aggregation. |
-| `llm_provider.py` | Provider calls, retry, rate limits, token accounting. |
-| `image_inputs.py` | Image resolution, MIME sniffing, size limits. |
-| `python_bridge.py` | Controlled Python compute subprocess. |
+Implements the DataShape mapping rules, returning a `DataShape` string and optional processing advice.
 
-**Racket module responsibilities:**
+```python
+from dataclasses import dataclass
+from typing import Optional
 
-| Module | Responsibility |
-|---|---|
-| `racket_server.rkt` | Main entry point: accepts JSON commands from Python host over stdin/stdout, dispatches to sandbox, returns results. |
-| `primitives.rkt` | All public primitive bindings (section 9): `llm-query`, `map-async`, `tree-reduce`, `gate`, `finish`, etc. Defines the sandbox namespace. |
-| `sandbox.rkt` | Racket sandbox configuration: resource limits, allowed modules, scaffold binding protection, syntax hygiene enforcement. |
-| `callbacks.rkt` | Host callback protocol: JSON-RPC-style messages to Python for LLM calls, Python bridge invocations, checkpoint operations, and progress notifications. |
+@dataclass
+class DataShapeResult:
+    shape: str
+    concurrency_hint: Optional[int] = None
+    processing_advice: Optional[str] = None
+
+
+def classify_data_shape(metadata: dict) -> DataShapeResult:
+    """
+    Classify context data into a DataShape using structural mapping rules.
+
+    Metadata fields:
+        data_shape      : str | None  (agent-provided hint, used if present)
+        item_count      : int
+        independent     : bool
+        ordered         : bool
+        size_bytes      : int | None
+        chunkable       : bool
+        chunk_count     : int | None
+        chunks_dependent: bool
+        depth           : int | None   (for hierarchical data)
+        branching       : int | None
+        row_count       : int | None
+        columns         : list | None
+        modality        : list[str]
+        pair_count      : int | None
+        key_count       : int | None
+        context_limit_tokens: int      (model context window, for Singular classification)
+        estimated_tokens: int | None
+    """
+    # Honor agent-provided hint if structurally consistent
+    agent_hint = metadata.get("data_shape")
+    if agent_hint and agent_hint in (
+        "FlatList", "Hierarchy", "Singular", "ChunkedSingular",
+        "Graph", "TimeSeries", "Tabular", "Multimodal", "Paired", "KeyValue"
+    ):
+        return _apply_data_shape_rules(agent_hint, metadata)
+
+    item_count = metadata.get("item_count", 0) or 0
+    independent = metadata.get("independent", True)
+    ordered = metadata.get("ordered", False)
+    depth = metadata.get("depth")
+    row_count = metadata.get("row_count")
+    modality = metadata.get("modality") or []
+    pair_count = metadata.get("pair_count")
+    key_count = metadata.get("key_count")
+    chunkable = metadata.get("chunkable", False)
+    chunks_dependent = metadata.get("chunks_dependent", False)
+    chunk_count = metadata.get("chunk_count")
+    estimated_tokens = metadata.get("estimated_tokens")
+    context_limit_tokens = metadata.get("context_limit_tokens", 128000)
+
+    # Multimodal: any non-text modality present
+    if any(m in modality for m in ("image", "audio")):
+        return DataShapeResult(shape="Multimodal")
+
+    # Paired: aligned source/target pairs
+    if pair_count is not None and pair_count > 0:
+        return DataShapeResult(shape="Paired")
+
+    # KeyValue: dictionary/map data
+    if key_count is not None and item_count == 0:
+        return DataShapeResult(shape="KeyValue")
+
+    # Tabular: rows with shared schema
+    if row_count is not None and row_count > 0 and metadata.get("columns"):
+        return DataShapeResult(shape="Tabular")
+
+    # Hierarchy: tree or nested structure
+    if depth is not None and depth > 2:
+        return DataShapeResult(shape="Hierarchy")
+
+    # TimeSeries: ordered observations (no independence)
+    if ordered and not independent and item_count > 0:
+        return DataShapeResult(shape="TimeSeries")
+
+    # List shapes
+    if item_count > 1:
+        if independent:
+            concurrency = min(item_count, 20) if item_count > 50 else item_count
+            return DataShapeResult(shape="FlatList", concurrency_hint=concurrency)
+        else:
+            return DataShapeResult(shape="FlatList", processing_advice="fold-sequential")
+
+    # Singular shapes
+    if item_count <= 1:
+        if chunkable and chunks_dependent:
+            return DataShapeResult(shape="ChunkedSingular")
+        if chunkable and chunk_count and chunk_count > 1:
+            return DataShapeResult(
+                shape="Singular",
+                processing_advice="chunk_then_flatlist"
+            )
+        if estimated_tokens and estimated_tokens > context_limit_tokens:
+            return DataShapeResult(
+                shape="Singular",
+                processing_advice="exceeds_context"
+            )
+        return DataShapeResult(shape="Singular")
+
+    return DataShapeResult(shape="Singular")
+
+
+def _apply_data_shape_rules(shape: str, metadata: dict) -> DataShapeResult:
+    """Apply concurrency and processing advice for an already-classified shape."""
+    item_count = metadata.get("item_count", 0) or 0
+    independent = metadata.get("independent", True)
+
+    if shape == "FlatList":
+        if independent:
+            concurrency = min(item_count, 20) if item_count > 50 else item_count
+            return DataShapeResult(shape="FlatList", concurrency_hint=concurrency)
+        else:
+            return DataShapeResult(shape="FlatList", processing_advice="fold-sequential")
+
+    if shape == "Singular":
+        chunkable = metadata.get("chunkable", False)
+        chunks_dependent = metadata.get("chunks_dependent", False)
+        estimated_tokens = metadata.get("estimated_tokens")
+        context_limit_tokens = metadata.get("context_limit_tokens", 128000)
+        if chunkable and chunks_dependent:
+            return DataShapeResult(shape="ChunkedSingular")
+        if estimated_tokens and estimated_tokens > context_limit_tokens and chunkable:
+            return DataShapeResult(shape="Singular", processing_advice="chunk_then_flatlist")
+
+    return DataShapeResult(shape=shape)
+```
+
+### F.3 `select_template(task_shape, data_shape, hints) -> str`
+
+Implements the per-shape template selection trees for all 13 shapes, returning a template name string.
+
+```python
+def select_template(task_shape: str, data_shape: str, hints: dict) -> str:
+    """
+    Select a template name given a classified TaskShape, DataShape, and hints.
+
+    hints fields used here:
+        output_type         : "one" | "list" | "per_item"
+        ordered             : bool
+        has_second_phase    : bool
+        operation           : str
+        quality_priority    : bool
+        latency_priority    : bool
+        item_count          : int
+        independent         : bool
+        sub_operations      : list[str]
+        ambiguous_items     : bool   (some items are harder/uncertain)
+        likely_duplicates   : bool
+        has_testable_pred   : bool   (for Refine: is there a machine-checkable predicate?)
+        compare_target      : "models" | "strategies"
+        select_or_synthesize: "select" | "synthesize"
+        fixed_count         : bool   (for Generate: fixed number vs. until-condition)
+        items_consistent    : bool   (for Generate: must items be mutually consistent?)
+        items_unique        : bool   (for Generate: must items be unique?)
+        known_boundary      : bool   (for Decompose: is split boundary deterministic?)
+        one_pass            : bool   (for Decompose: is one decomposition pass enough?)
+        process_parts_after : bool   (for Decompose: process parts afterward?)
+        same_rubric         : bool   (for Validate: same rubric for all items?)
+        false_positive_cost : bool   (for Validate: false positives costlier than negatives?)
+        pure_computation    : bool   (for Aggregate: pure computation after extraction?)
+        grouped_report      : bool   (for Aggregate: produce grouped report?)
+        fits_context        : bool   (for Synthesize: do all items fit in one context?)
+        accumulator_large   : bool   (for Synthesize fold: will accumulator exceed context?)
+        candidate_set_finite: bool   (for Search: is candidate set finite?)
+        stages_distinct     : bool   (for Pipeline: are stages clearly distinct?)
+        stage_can_fail      : bool
+        stage_needs_gating  : bool
+        criterion_validate_each: bool (for Refine: validate each iteration?)
+    """
+    if task_shape == "Direct":
+        return _select_direct(hints)
+    elif task_shape == "Batch":
+        return _select_batch(hints)
+    elif task_shape == "Synthesize":
+        return _select_synthesize(hints)
+    elif task_shape == "Search":
+        return _select_search(hints)
+    elif task_shape == "Refine":
+        return _select_refine(hints)
+    elif task_shape == "Compare":
+        return _select_compare(hints)
+    elif task_shape == "Classify":
+        return _select_classify(hints)
+    elif task_shape == "Pipeline":
+        return _select_pipeline(hints)
+    elif task_shape == "Generate":
+        return _select_generate(hints)
+    elif task_shape == "Decompose":
+        return _select_decompose(hints)
+    elif task_shape == "Validate":
+        return _select_validate(hints)
+    elif task_shape == "Aggregate":
+        return _select_aggregate(hints)
+    elif task_shape == "Composite":
+        return _select_composite(hints)
+    else:
+        raise ValueError(f"Unknown task shape: {task_shape!r}")
+
+
+def _select_direct(hints: dict) -> str:
+    # Q1: Does the input fit in one model context?
+    fits_context = hints.get("fits_context", True)
+    if not fits_context:
+        # Reclassify — caller should re-run classify_task_shape
+        raise ReclassificationNeeded(
+            "Input does not fit in one context. Reclassify as Decompose, Batch, or Synthesize."
+        )
+
+    # Q2: Is deterministic computation needed before/after the call?
+    operation = hints.get("operation", "")
+    needs_compute = operation in ("aggregate", "compute", "stats")
+    if needs_compute:
+        # Caller assembles direct_call + python_compute in sequence
+        return "direct_call"  # caller adds python_compute phase
+
+    output_type = hints.get("output_type", "one")
+    if output_type in ("list", "per_item"):
+        return "direct_json_extract"
+
+    return "direct_call"
+
+
+def _select_batch(hints: dict) -> str:
+    output_type = hints.get("output_type", "per_item")
+    ordered = hints.get("ordered", False)
+    ambiguous_items = hints.get("ambiguous_items", False)
+    likely_duplicates = hints.get("likely_duplicates", False)
+
+    # Q1: Return a list or one combined output?
+    if output_type in ("list", "per_item"):
+        if ambiguous_items:
+            # Q3: Some items harder or more ambiguous?
+            return "tiered_review"
+        if likely_duplicates:
+            # Q4: Duplicates likely? Use memoized map.
+            return "batch_map"  # with memoized flag set in slot_values
+        return "batch_map"
+    else:
+        # Combined output
+        # Q2: Is combination order-sensitive?
+        if ordered:
+            return "batch_extract_fold"
+        else:
+            if ambiguous_items:
+                return "tiered_review"
+            return "batch_extract_reduce"
+
+
+def _select_synthesize(hints: dict) -> str:
+    fits_context = hints.get("fits_context", False)
+    ordered = hints.get("ordered", False)
+    accumulator_large = hints.get("accumulator_large", False)
+
+    # Q1: Do all items fit in one context?
+    if fits_context:
+        return "direct_call"  # direct synthesis in one context
+
+    # Q2: Is order important?
+    if ordered:
+        # Q3: Is accumulator likely to exceed context?
+        if accumulator_large:
+            return "ordered_synthesis_fold"  # with summarization flag
+        else:
+            return "ordered_synthesis_fold"
+    else:
+        return "tree_synthesis"
+
+
+def _select_search(hints: dict) -> str:
+    candidate_set_finite = hints.get("candidate_set_finite", True)
+    latency_priority = hints.get("latency_priority", False)
+
+    # Q1: Is the candidate set finite?
+    if candidate_set_finite:
+        # Q2: Is latency more important than quality?
+        if latency_priority:
+            return "race_candidates"
+        else:
+            return "compare_candidates"  # evaluate all then select
+    else:
+        # Iterative search (no dedicated template — use refine_until_valid)
+        return "refine_until_valid"
+
+
+def _select_refine(hints: dict) -> str:
+    has_testable_pred = hints.get("has_testable_pred", False)
+
+    # Q1: Is there a testable predicate?
+    if has_testable_pred:
+        return "refine_until_valid"
+    else:
+        return "bounded_critique_refine"
+    # Q2: Should each iteration be validated?
+    # Both templates support validation wrapping — set via slot_values.
+
+
+def _select_compare(hints: dict) -> str:
+    compare_target = hints.get("compare_target", "strategies")
+    select_or_synthesize = hints.get("select_or_synthesize", "select")
+
+    # Q1: Compare models or strategies?
+    # Both use compare_candidates; distinction is in slot_values.
+    # Q2: Select one or synthesize all?
+    if select_or_synthesize == "select":
+        return "compare_candidates"  # python_compute or Scheme selection
+    else:
+        return "compare_candidates"  # with llm-query aggregator in reduce slot
+
+
+def _select_classify(hints: dict) -> str:
+    item_count = hints.get("item_count", 1)
+    output_type = hints.get("output_type", "per_item")
+    ambiguous_items = hints.get("ambiguous_items", False)
+
+    # Q1: One item or many?
+    if item_count <= 1:
+        return "direct_call"  # direct_classify path
+    else:
+        # Q3: Ambiguous categories?
+        if ambiguous_items:
+            return "tiered_review"
+        # Q2: Need distribution/report?
+        needs_report = hints.get("has_second_phase", False)
+        if needs_report:
+            return "batch_map"  # with python_compute aggregation as second phase
+        return "batch_map"
+
+
+def _select_pipeline(hints: dict) -> str:
+    stages_distinct = hints.get("stages_distinct", True)
+
+    # Q1: Are stages distinct?
+    if not stages_distinct:
+        # Reclassify as Batch
+        raise ReclassificationNeeded("Stages not distinct. Reclassify as Batch.")
+
+    # Q2-Q3: Can a stage fail / does a stage need quality gating?
+    # These affect slot_values (fallback, gate), not template selection.
+    # Pipeline maps to a template_chain of atomic templates.
+    # Return the first-stage template; caller builds the chain.
+    return "batch_map"  # placeholder — caller assembles chain per sub_operations
+
+
+def _select_generate(hints: dict) -> str:
+    fixed_count = hints.get("fixed_count", True)
+    items_consistent = hints.get("items_consistent", False)
+    items_unique = hints.get("items_unique", False)
+
+    # Q1: Fixed number or until condition?
+    if fixed_count:
+        if items_consistent:
+            # Q2: Must items be mutually consistent?
+            return "ordered_synthesis_fold"  # fold-sequential maintains consistency
+        else:
+            return "batch_map"  # map-async over generated index list
+    else:
+        return "refine_until_valid"  # iterate-until condition
+
+    # Q3: Must items be unique? — handled via python_compute dedup in slot_values.
+
+
+def _select_decompose(hints: dict) -> str:
+    known_boundary = hints.get("known_boundary", False)
+    one_pass = hints.get("one_pass", True)
+    process_parts_after = hints.get("process_parts_after", False)
+
+    # Q1: Known structural boundary?
+    if known_boundary:
+        # python_compute splitter — use direct_json_extract with python_compute
+        template = "direct_json_extract"
+    else:
+        # llm-query with JSON output
+        template = "direct_json_extract"
+
+    # Q2: Is one pass enough?
+    if not one_pass:
+        return "recursive_decompose"
+
+    # Q3: Process parts afterward?
+    if process_parts_after:
+        return "decompose_then_batch"
+
+    return template
+
+
+def _select_validate(hints: dict) -> str:
+    same_rubric = hints.get("same_rubric", True)
+    needs_structured = hints.get("output_type") in ("list", "per_item")
+    ambiguous_items = hints.get("ambiguous_items", False)
+
+    # Q1: Same rubric for all items?
+    if same_rubric:
+        if ambiguous_items:
+            return "tiered_review"
+        return "batch_map"  # map-async validation
+    else:
+        return "ordered_synthesis_fold"  # fold-sequential if criteria evolve
+
+    # Q2: Need structured assessment? — handled via json_mode in slot_values.
+    # Q3: Which error is costlier? — handled via tiered_review or extra slot.
+
+
+def _select_aggregate(hints: dict) -> str:
+    pure_computation = hints.get("pure_computation", True)
+    grouped_report = hints.get("grouped_report", False)
+
+    # Q1: Pure computation after extraction?
+    if pure_computation:
+        return "tabular_extract_aggregate"
+    else:
+        # map-async extraction + python_compute stats + llm interpretation
+        return "tabular_extract_aggregate"  # with interpret_instruction slot set
+
+    # Q2: Grouped report? — handled via groupby flag in slot_values.
+
+
+def _select_composite(hints: dict) -> str:
+    """
+    Composite: return the name of the first atomic template in the chain.
+    The planner builds the full template_chain; this function identifies
+    the first phase template.
+    """
+    sub_operations = hints.get("sub_operations") or []
+    if not sub_operations:
+        return "batch_map"  # conservative default
+
+    first_op = sub_operations[0]
+    op_to_shape = {
+        "extract": "Batch",
+        "transform": "Batch",
+        "label": "Classify",
+        "check": "Validate",
+        "synthesize": "Synthesize",
+        "refine": "Refine",
+        "compare": "Compare",
+        "aggregate": "Aggregate",
+        "decompose": "Decompose",
+        "generate": "Generate",
+    }
+    first_shape = op_to_shape.get(first_op, "Batch")
+    first_hints = dict(hints)
+    first_hints["has_second_phase"] = False
+    first_hints["sub_operations"] = []
+    return select_template(first_shape, hints.get("data_shape", "FlatList"), first_hints)
+
+
+class ReclassificationNeeded(Exception):
+    pass
+```
 
 ---
 
-## 17. Implementation Phases
+## Appendix G: Template Catalog Summary Table
 
-### Phase 0: Decisions And Schemas
+All 16 templates with supported shapes, data shapes, primitive composition, key slots, and streaming/caching flags.
 
-*Depends on: nothing.*
+| Template | Supported TaskShapes | Supported DataShapes | Primitive Composition | Key Slots | Streamable | Cacheable |
+|---|---|---|---|---|---|---|
+| `direct_call` | Direct | Singular, KeyValue | `llm-query` | `instruction`, `model`, `temperature`, `max_tokens` | No | Yes |
+| `direct_json_extract` | Direct, Decompose | Singular, KeyValue | `llm-query #:json #t` + `with-validation` | `instruction`, `model`, `output_schema`, `validation_instruction` | No | Yes |
+| `batch_map` | Batch, Classify, Validate | FlatList, Paired, Multimodal | `map-async` | `context_id`, `items_path`, `map_instruction`, `map_model`, `max_concurrent` | Yes | Yes |
+| `batch_extract_reduce` | Batch + Synthesize | FlatList, Tabular | `map-async` + `tree-reduce` | `context_id`, `items_path`, `map_instruction`, `reduce_instruction`, `map_model`, `reduce_model`, `max_concurrent`, `branch_factor` | Yes | Yes |
+| `batch_extract_fold` | Batch + ordered Synthesize | FlatList, TimeSeries, ChunkedSingular | `map-async` + `fold-sequential` or `fold-sequential` alone | `context_id`, `items_path`, `map_instruction`, `fold_instruction`, `map_model`, `fold_model`, `max_concurrent` | Yes | Yes |
+| `ordered_synthesis_fold` | Synthesize, Generate | FlatList (ordered), ChunkedSingular, TimeSeries | `fold-sequential` + optional `checkpoint` | `context_id`, `items_path`, `fold_instruction`, `fold_model`, `checkpoint_every` | Yes | Yes |
+| `tree_synthesis` | Synthesize | FlatList, Hierarchy | `tree-reduce` | `context_id`, `items_path`, `reduce_instruction`, `reduce_model`, `branch_factor` | Yes | Yes |
+| `compare_candidates` | Compare, Search | FlatList, Paired | `parallel` + `python-compute` or `llm-query` selector | `candidates_path`, `evaluation_instruction`, `selection_instruction`, `eval_model`, `select_model` | No | Yes |
+| `race_candidates` | Search | FlatList | `race` | `candidates_path`, `generation_instruction`, `model`, `timeout_seconds` | No | No |
+| `refine_until_valid` | Refine, Search | Singular | `iterate-until` + `with-validation` | `initial_instruction`, `refine_instruction`, `validate_instruction`, `model`, `max_iterations` | No | No |
+| `bounded_critique_refine` | Refine | Singular | `iterate-until` with critique/refine state | `initial_instruction`, `critique_instruction`, `refine_instruction`, `model`, `max_iterations`, `critique_model` | No | No |
+| `tiered_review` | Batch, Classify, Validate | FlatList, Tabular | cheap `map-async` + uncertainty filter + expensive `map-async` | `context_id`, `items_path`, `cheap_instruction`, `expensive_instruction`, `cheap_model`, `expensive_model`, `uncertainty_threshold` | Yes | Yes |
+| `tabular_extract_aggregate` | Aggregate | Tabular, FlatList | `map-async` + `python-compute` | `context_id`, `items_path`, `extract_instruction`, `extract_model`, `aggregate_expression`, `output_schema` | Yes | Yes |
+| `decompose_then_batch` | Decompose, Composite | Singular, Hierarchy | `llm-query #:json #t` + `map-async` | `context_id`, `decompose_instruction`, `process_instruction`, `decompose_model`, `process_model`, `max_concurrent` | Yes | Yes |
+| `recursive_decompose` | Decompose, Hierarchy | Hierarchy, Singular | `recursive-spawn` (artifact-aware) | `context_id`, `decompose_instruction`, `model`, `max_depth`, `branch_factor` | No | No |
+| `code_interpreter` | Direct, Aggregate | Singular, Tabular | `llm-query` + `py-exec` + `with-validation` + `iterate-until` | `instruction`, `model`, `max_iterations`, `allowed_imports`, `output_schema` | No | No |
 
-- Freeze public MCP API names.
-- Define ID record schemas.
-- Define template `define-meta` schema and slot substitution rules (section 6).
-- Define template file format (`.rkt` with `define-meta` forms).
-- Decide initial store backend.
-- Decide which Python bridge operations are allowed in templates.
-- Decide cache key format and eviction strategy.
-- Decide streaming notification schema and batching policy.
-- Decide gate approval protocol and timeout behavior.
-
-Exit criteria:
-
-- All Pydantic/dataclass schemas in `models.py` compile without errors.
-- Example JSON records for all 7 ID types (`ctx_`, `plan_`, `art_`, `dry_`, `ver_`, `exec_`, `call_`) pass schema validation.
-- No public MCP tool accepts a `code` or `scheme` string parameter.
-
-### Phase 1: Durable Store And MCP Skeleton
-
-*Depends on: Phase 0.*
-
-- Implement context, plan, artifact, dry-run, verification, execution stores.
-- Implement ID generation and parent-child linking.
-- Add MCP tools with stubbed behavior.
-- Add `get_status`, `cancel_call`, and `reset_runtime` skeletons.
-
-Exit criteria:
-
-- `test_id_flow.py` passes: create ctx → plan → art → dry → ver → exec, verify parent chain via `parent_id` lookups.
-- Each MCP tool returns a valid JSON response (even if stubbed).
-- `reset_runtime(scope="all")` clears all records; subsequent `get_status()` returns empty.
-
-### Phase 2: Minimal Racket Runtime
-
-*Depends on: Phase 1.*
-
-- Build sandbox lifecycle.
-- Implement internal `llm-query`, syntax wrapping, `syntax-e`, `datum->syntax`,
-  scope logging, `finish`, and scaffold protection.
-- Implement `load-context` runtime command.
-- Implement stdout/stderr capture and structured errors.
-
-Exit criteria:
-
-- A test artifact containing `(finish (syntax-e (llm-query ...)))` executes and returns a result string.
-- Scope log contains at least one `syntax-e` entry with `preview` and `scope` fields.
-- `(set! llm-query 42)` raises an error (scaffold protection).
-
-### Phase 3: Host Callback Loop
-
-*Depends on: Phase 2.*
-
-- Implement real model calls.
-- Implement async futures.
-- Implement `await`, `await-all`, `await-any`, and cancellation.
-- Implement retry and rate-limit tracking.
-- Implement progress reporting and heartbeat.
-
-Exit criteria:
-
-- `test_runtime_primitives.py`: 3 concurrent `llm-query-async` calls complete via `await-all`, results list has length 3.
-- `cancel_call(call_id=...)` on an in-flight call transitions it to cancelled in the trace.
-- `get_status()` shows `tokens_used > 0` and `rate_limits` hash is non-empty after a successful call.
-
-### Phase 4: Primitive Runtime Basis
-
-*Depends on: Phase 3.*
-
-- Add `map-async`, `parallel`, `race`, `tree-reduce`, `fold-sequential`,
-  `sequence`, `choose`, `iterate-until`, `recursive-spawn`, `memoized`,
-  `with-validation`, and `try-fallback`.
-- Add checkpoint/restore and token-budget behavior.
-
-Exit criteria:
-
-- `test_runtime_primitives.py`: `map-async` with 10 items and `max-concurrent: 3` never has more than 3 in-flight calls simultaneously (verified via trace timestamps).
-- `tree-reduce` with `N=8, B=2` produces exactly `8 + 4 + 2 + 1 = 15` trace call events.
-- `iterate-until` with `max-iter: 5` terminates after at most 5 iterations.
-- Racket sandbox exports exactly the primitives listed in section 9 — no `eval`, `system`, `require`.
-
-### Phase 5: Template Catalog And Instantiation Library
-
-*Depends on: Phase 4.*
-
-- Create initial `.rkt` templates for common shapes (see section 15).
-- Implement template `define-meta` parsing and validation.
-- Implement slot validation and safe substitution as an internal library
-  (`instantiator.py`) — no dedicated MCP tool.
-- Store instantiated artifacts with hashes.
-- Add `output-schema`, `streamable`, `cacheable`, `gates`, `budget-policy`,
-  and `uses-llm-generated-code` to the template `define-meta` schema.
-
-Exit criteria:
-
-- `test_instantiator.py`: instantiating `batch_map` with valid slot values produces an artifact; instantiating again with same values produces the same `code_hash`.
-- Artifact code contains zero `{{` markers (grep test).
-- `template_store.list()` returns >= 16 templates (section 15 catalog).
-- `define-meta output-schema`, `streamable`, `cacheable`, `gates`, `budget-policy`, and `uses-llm-generated-code` are parsed and available as metadata fields.
-
-### Phase 6: Planner
-
-*Depends on: Phase 5.*
-
-- Implement deterministic TaskShape/DataShape classification.
-- Add structured hints to `plan_strategy`.
-- Use template metadata for selection.
-- Return alternatives when tradeoffs are meaningful.
-
-Exit criteria:
-
-- `plan_strategy` with full hints (`item_count=100, independent=true, output_type=one, has_second_phase=true`) returns `task_shape: Composite` and a `template_invocation` or `template_chain` — no LLM call made (Level 1 only).
-- `plan_strategy` with missing hints triggers exactly 1 LLM call (Level 2 gap-fill).
-- `plan_strategy` for an unsupported task returns `status: "no_template"` with `recommendation.needed_template`.
-
-### Phase 7: Dry-Run (with estimation) and Verification
-
-*Depends on: Phase 6.*
-
-- Implement `dry_run_strategy` tool: instantiates internally, computes static
-  estimates from artifact profiles, and simulates execution — all in one call.
-- Special-case `await-any` and batch await semantics in simulation.
-- Implement verification logic as an internal step within `execute_strategy`
-  (no separate `verify_strategy` tool).
-- Add output schema validation in verification.
-- Add chain compatibility validation (output-input schema matching).
-- Add cache hit prediction in dry-run response.
-- Add `uses-llm-generated-code` policy check in verification.
-
-Exit criteria:
-
-- `dry_run_strategy` for `batch_extract_reduce` with `N=100, B=5` returns `expected_llm_calls: 125` and `critical_path_calls: 4`.
-- Dry-run uses no global mutable state (two concurrent dry-runs produce independent results).
-- `execute_strategy` with `uses-llm-generated-code: #t` and `allow_llm_generated_code: false` returns verification `decision: "fail"` with check `code_interpreter_policy`.
-- Verification of an artifact with `{{unfilled}}` marker returns `decision: "fail"` with check `slots_filled`.
-
-### Phase 8: Execute And Trace
-
-*Depends on: Phase 7.*
-
-- Implement `execute_strategy`.
-- Link executions to verification and artifact records.
-- Assemble full traces with scope logs, call metrics, stdout, errors, and
-  checkpoints.
-- Support repeated executions of the same artifact.
-- Implement streaming partial results via MCP notifications.
-- Implement `gate` primitive and `resume_execution` tool.
-- Implement budget threshold monitoring and policy activation.
-
-Exit criteria:
-
-- `execute_strategy` → `get_execution_trace` returns trace with >= 1 `llm_call_completed` event.
-- Executing the same `artifact_id` twice creates two distinct `execution_id` values.
-- `cancel_call(execution_id=...)` during execution transitions state to `cancelled`.
-- `gate` fires → state is `awaiting_gate` → `resume_execution(approve)` → state is `finished`.
-- `gate` fires → `resume_execution(reject)` → state is `gate_rejected`, partial work preserved in trace.
-
-### Phase 9: Advanced Features
-
-*Depends on: Phase 8.*
-
-- Add multimodal template support.
-- Add controlled Python compute phases.
-- Add recursive artifact-aware delegation.
-- Add checkpoint recovery workflows.
-- Add history-based planner feedback.
-- Add cross-execution memoization cache (section 11.7).
-- Add plan-level template chaining (section 11.8).
-- Add code interpreter template with `uses-llm-generated-code` gating (section 11.9).
-- Add budget-aware model switching and checkpoint-and-stop degradation.
-
-Exit criteria:
-
-- `test_cache.py`: execute with `temp=0` → re-execute same inputs → second run has `cache_hits > 0` and makes zero provider calls.
-- `test_chain.py`: 2-step chain (`batch_map` → `tree_synthesis`) completes; `chain_step_results` has 2 entries; `ctx_auto_0` is retrievable from trace.
-- `test_chain.py`: chain failure at step 1 → retry resumes from step 1 (step 0 not re-executed, verified by call count).
-- `test_gate.py`: code interpreter template with `allow_llm_generated_code: false` → verification fails.
-- Budget test: set budget to 50% of expected → execution activates budget policy, switches model, completes with partial quality.
-
-### Phase 10: Documentation And Migration
-
-*Depends on: Phase 9.*
-
-- Rewrite README around artifact workflow.
-- Replace old raw-code API docs.
-- Replace combinator docs with primitive runtime docs and template docs.
-- Add examples for each ID stage.
-- Keep the old implementation referenced only as historical context.
-
-Exit criteria:
-
-- README contains zero mentions of `execute_scheme` or `dry_run_scheme`.
-- README shows the 3-tool happy path: `plan_strategy` → `dry_run_strategy` → `execute_strategy`.
-- `docs/primitives.md` lists all primitives from section 9 with signatures.
-- `docs/templates.md` documents at least 5 templates with example invocations.
+**Notes:**
+- `race_candidates` is not cacheable because it is inherently non-deterministic — the winning candidate depends on which LLM call returns first.
+- `refine_until_valid` and `bounded_critique_refine` are not cacheable because each iteration depends on the previous result; caching intermediate states requires checkpoint semantics, not result caching.
+- `recursive_decompose` is not streamable because the call graph is not known ahead of time; items emerge from recursive decomposition dynamically.
+- `code_interpreter` requires `uses-llm-generated-code: true` in `define-meta` and will fail the `code_interpreter_policy` verification check unless the execution policy has `allow_llm_generated_code: true`.
+- `batch_extract_fold` supports both the two-phase pattern (`map-async` then `fold-sequential`) and the one-phase pattern (direct `fold-sequential` when items are dependent).
 
 ---
 
-## 18. Test Plan
+## Appendix H: End-to-End Walkthroughs
 
-Minimum test coverage:
+### H.1 Basic Happy Path
 
-- schema validation for every ID record,
-- parent-child ID flow,
-- context metadata classification,
-- template validation,
-- instantiation determinism,
-- generated Scheme hash verification,
-- no public `execute_scheme` or `dry_run_scheme` MCP tools,
-- only primitive bindings are exported by the runtime,
-- syntax hygiene and scope logging,
-- async handle validation,
-- `await-any` dry-run behavior,
-- `map-async` bounded concurrency,
-- `parallel` real concurrency,
-- cancellation of active and queued calls,
-- retry and rate-limit accounting,
-- token-budget exhaustion,
-- checkpoint/restore,
-- JSON-mode validation,
-- image validation,
-- Python bridge value transfer,
-- recursive depth enforcement,
-- verification pass/warn/fail behavior (tested through `execute_strategy`),
-- instantiation tested through `dry_run_strategy` and `execute_strategy` paths,
-- estimation tested through `dry_run_strategy` response,
-- execution trace persistence,
-- streaming partial results delivery and ordering,
-- cross-execution cache hit/miss behavior,
-- cache key correctness (same inputs → same key, different inputs → different key),
-- temperature > 0 cache bypass (not cached unless `cacheable: #t`),
-- template chain execution: 2-step and 3-step chains,
-- chain failure at step N: completed steps preserved, retry resumes,
-- chain dry-run: per-step estimates and aggregate totals,
-- chain output-input schema compatibility validation,
-- output schema validation on `finish`,
-- output schema mismatch produces structured error,
-- gate suspension and `resume_execution` approve/reject,
-- gate with `required: #f` and policy override,
-- budget threshold detection and model switching,
-- budget exhaustion checkpoint-and-stop with partial results,
-- LLM-generated Python execution with import allowlist,
-- LLM-generated Python policy gating (blocked when policy disallows).
+Complete MCP call sequence for: "Extract ACE2 protein mentions from 100 research papers and synthesize a report."
 
----
+The happy path requires only 3 tool calls after loading context: `plan_strategy` → `dry_run_strategy` → `execute_strategy`.
 
-## 19. End-to-End Walkthrough
-
-This section shows every MCP call in sequence for a realistic task: "Extract
-ACE2 protein mentions from 100 research papers and synthesize a report."
-
-The happy path requires only 3 tool calls after loading context:
-`plan_strategy` → `dry_run_strategy` → `execute_strategy`.
-
-### Step 1: Load context
+#### Step 1: Load context
 
 Agent sends 100 papers as a JSON array.
 
@@ -3658,10 +5162,9 @@ Agent sends 100 papers as a JSON array.
   }
 ```
 
-### Step 2: Plan strategy
+#### Step 2: Plan strategy
 
-Agent describes the task. Hints provide structured fields so classification
-is fully deterministic (Level 1 only, no LLM call needed).
+Agent describes the task. Hints provide structured fields so classification is fully deterministic (Level 1 only, no LLM call needed for classification). One additional LLM call fills content slots (`map_instruction`, `reduce_instruction`).
 
 ```
 → plan_strategy(
@@ -3703,11 +5206,9 @@ is fully deterministic (Level 1 only, no LLM call needed).
   }
 ```
 
-### Step 3: Dry run
+#### Step 3: Dry run
 
-Agent runs a dry run. Internally, this instantiates the template (validates slots,
-substitutes markers, hashes, stores artifact), computes cost estimates, and
-simulates execution — all in one call. No real LLM calls are made.
+Agent runs a dry run. Internally, this instantiates the template (validates slots, substitutes markers, hashes, stores artifact), computes cost estimates, and simulates execution — all in one call. No real LLM calls are made. Tree-reduce call count for N=100, B=5: `100 + 20 + 4 + 1 = 125`.
 
 ```
 → dry_run_strategy(plan_id: "plan_b2c1")
@@ -3748,12 +5249,9 @@ simulates execution — all in one call. No real LLM calls are made.
   }
 ```
 
-### Step 4: Execute
+#### Step 4: Execute
 
-Agent runs the strategy. Internally, this instantiates the template invocation
-(cache-hits the artifact from the dry run via hash match), runs verification
-checks automatically, and executes the instantiated Scheme. Real LLM calls happen
-here.
+Agent runs the strategy. Internally, this cache-hits the artifact from the dry run via hash match, runs all 23 verification checks automatically, then executes the instantiated Scheme. Real LLM calls happen here.
 
 ```
 → execute_strategy(
@@ -3774,7 +5272,7 @@ here.
       "decision": "pass",
       "checks": [
         {"name":"artifact_hash","status":"pass","message":"Code hash matches."},
-        {"name":"primitive_allowlist","status":"pass","message":"Only primitives used."},
+        {"name":"primitive_allowlist","status":"pass","message":"Only allowed primitives used."},
         {"name":"call_count_limit","status":"pass","message":"125 <= 500."},
         {"name":"concurrency_limit","status":"pass","message":"20 <= 50."},
         {"name":"context_exists","status":"pass","message":"ctx_7f3a exists."}
@@ -3796,7 +5294,7 @@ here.
   }
 ```
 
-### Step 5: Inspect trace (optional)
+#### Step 5: Inspect trace (optional)
 
 Agent reviews what happened during execution.
 
@@ -3812,9 +5310,8 @@ Agent reviews what happened during execution.
       "events": [
         {"type":"llm_call_started","call_id":"call_001","node_id":"extract","model":"fast_text_model","depth":0},
         {"type":"llm_call_completed","call_id":"call_001","tokens":1250,"elapsed_seconds":1.2},
-        ...
         {"type":"llm_call_started","call_id":"call_101","node_id":"synthesize","model":"quality_text_model","depth":0},
-        ...
+        {"type":"llm_call_completed","call_id":"call_101","tokens":5000,"elapsed_seconds":4.1}
       ],
       "scope_log": [
         {"op":"syntax-e","preview":"extracted ACE2 mentions...","scope":"sandbox","call_id":"call_001"}
@@ -3824,165 +5321,292 @@ Agent reviews what happened during execution.
   }
 ```
 
-### Summary of ID chain
+#### ID chain summary
 
-```text
-ctx_7f3a (data) → plan_b2c1 (classification + template) → dry_1a2b (instantiate + simulate + estimate) → exec_5e6f (verify + execute)
+```
+ctx_7f3a (data)
+  → plan_b2c1 (classification + template invocation)
+    → dry_1a2b (instantiate + simulate + estimate)  [creates art_e4d9]
+      → exec_5e6f (cache-hit artifact + verify + execute)  [creates ver_3c4d]
 ```
 
-Internal IDs created along the way: `art_e4d9` (artifact, created by dry-run),
-`ver_3c4d` (verification, created by execute). These appear in responses and
-durable records for audit/replay but are not passed between tools by the agent.
+Internal IDs `art_e4d9` (artifact) and `ver_3c4d` (verification) are created automatically and appear in responses for audit and replay. They are not passed between tools by the agent.
 
-Each ID is durable and inspectable. The same plan can be re-executed with
-different data by creating a new context and updating `context_id` in the
-template invocation's slot values.
+---
 
-### Walkthrough 2: Chained Workflow With Streaming And Cache
+### H.2 Chained Workflow With Streaming And Cache Reuse
 
-This walkthrough shows a Composite task using template chaining, streaming,
-and cache reuse.
+This walkthrough shows a Composite task using template chaining, streaming partial results, and cross-execution cache reuse across two runs. The second run changes only the synthesis instruction; all 100 map-phase calls hit the cache because the extraction instruction, model, and data are identical.
 
-**First run:** Extract then synthesize, with streaming.
+#### First run: Extract then synthesize, with streaming
 
-```text
-→ load_context(data: "[100 papers]", name: "ace2_papers", ...)
-← { "context_id": "ctx_7f3a" }
+```
+→ load_context(
+    data: "[100 papers]",
+    name: "ace2_papers",
+    metadata_json: "{\"data_shape\":\"FlatList\",\"item_count\":100,\"independent\":true}"
+  )
+← { "status": "ok", "context_id": "ctx_7f3a" }
+```
 
-→ plan_strategy(task: "Extract ACE2 mentions and synthesize a report.", context_id: "ctx_7f3a", ...)
+```
+→ plan_strategy(
+    task: "Extract ACE2 mentions and synthesize a report.",
+    context_id: "ctx_7f3a",
+    hints_json: "{\"item_count\":100,\"independent\":true,\"output_type\":\"one\",\"has_second_phase\":true,\"sub_operations\":[\"extract\",\"synthesize\"]}"
+  )
 ← {
+    "status": "ok",
     "plan_id": "plan_c1d2",
     "recommended": {
       "kind": "template_chain",
       "steps": [
-        {"template_name": "batch_map", "slot_values": {"context_id": "ctx_7f3a", "map_instruction": "Extract ACE2 mentions as JSON.", ...}},
-        {"template_name": "tree_synthesis", "slot_values": {"input": "$previous", "reduce_instruction": "Synthesize findings.", ...}}
+        {
+          "step": 0,
+          "template_name": "batch_map",
+          "slot_values": {
+            "context_id": "ctx_7f3a",
+            "items_path": "$",
+            "map_instruction": "Extract ACE2 mentions as JSON.",
+            "map_model": "fast_text_model",
+            "max_concurrent": 20
+          }
+        },
+        {
+          "step": 1,
+          "template_name": "tree_synthesis",
+          "slot_values": {
+            "input": "$previous",
+            "reduce_instruction": "Synthesize findings into a report.",
+            "reduce_model": "quality_text_model",
+            "branch_factor": 5
+          }
+        }
       ]
     }
   }
+```
 
+The `$previous` reference in step 1's `input` slot is resolved at execution time to the intermediate context created by step 0. The planner writes `$previous` into the slot value; the chain executor substitutes the actual `context_id` of step 0's output before instantiating step 1's artifact.
+
+```
 → dry_run_strategy(plan_id: "plan_c1d2")
 ← {
+    "status": "ok",
     "dry_run_id": "dry_e3f4",
     "steps": [
-      {"template_name": "batch_map", "estimated_llm_calls": 100, "estimated_cost_usd": {"low": 0.80, "high": 2.00}},
-      {"template_name": "tree_synthesis", "estimated_llm_calls": 25, "estimated_cost_usd": {"low": 0.40, "high": 1.50}}
+      {
+        "step": 0,
+        "template_name": "batch_map",
+        "artifact_id": "art_f1a0",
+        "estimated_llm_calls": 100,
+        "estimated_cost_usd": {"low": 0.80, "high": 2.00}
+      },
+      {
+        "step": 1,
+        "template_name": "tree_synthesis",
+        "artifact_id": "art_f1a1",
+        "estimated_llm_calls": 25,
+        "estimated_cost_usd": {"low": 0.40, "high": 1.50}
+      }
     ],
     "total_estimated_llm_calls": 125,
     "total_estimated_cost_usd": {"low": 1.20, "high": 3.50},
-    "cache_hits_expected": 0
+    "cache_hits_expected": 0,
+    "warnings": []
   }
+```
 
-→ execute_strategy(plan_id: "plan_c1d2", stream: true, timeout_seconds: 900)
+```
+→ execute_strategy(
+    plan_id: "plan_c1d2",
+    stream: true,
+    timeout_seconds: 900
+  )
+```
 
-  ... notifications arrive as items complete:
-  { "type": "notifications/partial_result", "node_id": "extract", "item_index": 0, "value": "{...}" }
-  { "type": "notifications/partial_result", "node_id": "extract", "item_index": 1, "value": "{...}" }
-  ...
+With `stream: true`, the server sends MCP notifications as map-phase items complete. Each notification is a JSON object delivered on the MCP notification channel before the final response:
 
+```
+{ "jsonrpc": "2.0", "method": "notifications/partial_result",
+  "params": { "execution_id": "exec_a1b2", "node_id": "extract",
+               "item_index": 0, "value": "{\"ace2_mentions\":[...]}" } }
+
+{ "jsonrpc": "2.0", "method": "notifications/partial_result",
+  "params": { "execution_id": "exec_a1b2", "node_id": "extract",
+               "item_index": 1, "value": "{\"ace2_mentions\":[...]}" } }
+
+...  (98 more notifications, one per paper as each completes)
+```
+
+Final response after all items complete and synthesis finishes:
+
+```
 ← {
+    "status": "ok",
     "execution_id": "exec_a1b2",
-    "result": {"value": "ACE2 findings report..."},
+    "result": {
+      "value": "ACE2 findings report...",
+      "stdout": ""
+    },
     "execution": {
       "state": "finished",
+      "elapsed_seconds": 195.2,
       "llm_calls": 125,
+      "tokens": 131250,
       "cache_hits": 0,
       "budget_policy_activations": 0,
       "chain_step_results": [
-        {"step": 0, "template": "batch_map", "intermediate_context_id": "ctx_auto_0"},
-        {"step": 1, "template": "tree_synthesis", "result": "ACE2 findings report..."}
+        {
+          "step": 0,
+          "template": "batch_map",
+          "intermediate_context_id": "ctx_auto_0",
+          "llm_calls": 100,
+          "state": "finished"
+        },
+        {
+          "step": 1,
+          "template": "tree_synthesis",
+          "llm_calls": 25,
+          "state": "finished",
+          "result": "ACE2 findings report..."
+        }
       ]
     }
   }
 ```
 
-**Second run:** Same extraction, different synthesis instruction. Cache
-eliminates all 100 map-phase calls.
+The chain executor created `ctx_auto_0` automatically to hold step 0's output (the 100 extracted JSON objects). Step 1 resolved `$previous` to `ctx_auto_0` before instantiating its artifact.
 
-```text
-→ plan_strategy(task: "Extract ACE2 mentions and write a methods section.", context_id: "ctx_7f3a", ...)
-← { "plan_id": "plan_d4e5", "recommended": {"kind": "template_chain", "steps": [
-      {"template_name": "batch_map", "slot_values": {"context_id": "ctx_7f3a", "map_instruction": "Extract ACE2 mentions as JSON.", ...}},
-      {"template_name": "tree_synthesis", "slot_values": {"input": "$previous", "reduce_instruction": "Write a methods section.", ...}}
-    ]} }
+#### Second run: Same extraction, different synthesis instruction
 
-→ dry_run_strategy(plan_id: "plan_d4e5")
+The agent wants a methods section instead of a report. The map instruction, map model, and source data are identical to the first run, so all 100 map-phase LLM calls will hit the content-addressed cache.
+
+```
+→ plan_strategy(
+    task: "Extract ACE2 mentions and write a methods section.",
+    context_id: "ctx_7f3a",
+    hints_json: "{\"item_count\":100,\"independent\":true,\"output_type\":\"one\",\"has_second_phase\":true,\"sub_operations\":[\"extract\",\"synthesize\"]}"
+  )
 ← {
-    "total_estimated_llm_calls": 125,
-    "cache_hits_expected": 100,
-    "total_estimated_cost_usd": {"low": 0.40, "high": 1.50}
-  }
-
-→ execute_strategy(plan_id: "plan_d4e5", timeout_seconds: 900)
-← {
-    "execution_id": "exec_c3d4",
-    "execution": { "llm_calls": 125, "cache_hits": 100 },
-    "result": {"value": "Methods section focusing on ACE2..."}
+    "status": "ok",
+    "plan_id": "plan_d4e5",
+    "recommended": {
+      "kind": "template_chain",
+      "steps": [
+        {
+          "step": 0,
+          "template_name": "batch_map",
+          "slot_values": {
+            "context_id": "ctx_7f3a",
+            "items_path": "$",
+            "map_instruction": "Extract ACE2 mentions as JSON.",
+            "map_model": "fast_text_model",
+            "max_concurrent": 20
+          }
+        },
+        {
+          "step": 1,
+          "template_name": "tree_synthesis",
+          "slot_values": {
+            "input": "$previous",
+            "reduce_instruction": "Write a methods section describing how ACE2 was studied across these papers.",
+            "reduce_model": "quality_text_model",
+            "branch_factor": 5
+          }
+        }
+      ]
+    }
   }
 ```
 
-The second run costs ~60% less and completes faster because the entire
-map phase hits the cache.
+Step 0's slot values are identical to the first run. The dry run detects this and predicts 100 cache hits:
 
----
+```
+→ dry_run_strategy(plan_id: "plan_d4e5")
+← {
+    "status": "ok",
+    "dry_run_id": "dry_f5g6",
+    "steps": [
+      {
+        "step": 0,
+        "template_name": "batch_map",
+        "artifact_id": "art_f1a0",
+        "estimated_llm_calls": 100,
+        "cache_hits_expected": 100,
+        "estimated_cost_usd": {"low": 0.00, "high": 0.00}
+      },
+      {
+        "step": 1,
+        "template_name": "tree_synthesis",
+        "artifact_id": "art_f2b3",
+        "estimated_llm_calls": 25,
+        "cache_hits_expected": 0,
+        "estimated_cost_usd": {"low": 0.40, "high": 1.50}
+      }
+    ],
+    "total_estimated_llm_calls": 125,
+    "cache_hits_expected": 100,
+    "total_estimated_cost_usd": {"low": 0.40, "high": 1.50},
+    "warnings": []
+  }
+```
 
-## 20. Open Design Decisions
+Step 0's `artifact_id` is `art_f1a0` — the same hash as the first run, because the slot values are identical. Step 1 has a new artifact ID because its `reduce_instruction` differs.
 
-These should be decided before implementation begins:
+```
+→ execute_strategy(
+    plan_id: "plan_d4e5",
+    timeout_seconds: 900
+  )
+← {
+    "status": "ok",
+    "execution_id": "exec_c3d4",
+    "result": {
+      "value": "Methods section focusing on ACE2 receptor characterization...",
+      "stdout": ""
+    },
+    "execution": {
+      "state": "finished",
+      "elapsed_seconds": 48.7,
+      "llm_calls": 125,
+      "cache_hits": 100,
+      "chain_step_results": [
+        {
+          "step": 0,
+          "template": "batch_map",
+          "intermediate_context_id": "ctx_auto_1",
+          "llm_calls": 100,
+          "cache_hits": 100,
+          "state": "finished"
+        },
+        {
+          "step": 1,
+          "template": "tree_synthesis",
+          "llm_calls": 25,
+          "cache_hits": 0,
+          "state": "finished",
+          "result": "Methods section focusing on ACE2 receptor characterization..."
+        }
+      ]
+    }
+  }
+```
 
-1. **Store backend.** Start with filesystem JSON (decided in section 11.1).
-   Migrate to SQLite/PGlite if queryable history or concurrent access becomes
-   a bottleneck. *(Partially decided — revisit if needed.)*
-2. **Recursive planning.** *(Decided: runtime instantiation under
-   verification.)* Recursive sub-plans are instantiated at runtime when
-   `recursive-spawn` is invoked, because sub-strategy data may not exist
-   until execution (e.g., items produced by a decomposition step). The
-   sub-template invocation is verified against the parent execution's
-   policy before the sub-artifact executes. Recursive depth is enforced
-   globally by the host. See the `recursive-spawn` primitive in section 9.
-3. **History feedback.** Decide which execution metrics influence future
-   planning and how to avoid leaking sensitive data into planner prompts.
-4. **Gate timeout.** *(Decided: indefinite wait, optional timeout kwarg.)*
-   Gates wait indefinitely by default. Templates can pass `#:timeout seconds`
-   to the `gate` primitive; if the timeout elapses without a
-   `resume_execution` call, the gate auto-rejects with reason
-   `"gate_timeout"`. This keeps the default simple while allowing
-   time-sensitive workflows to self-terminate.
-5. **Cache eviction.** *(Decided: manual-only in V1.)* Cache entries persist
-   until `reset_runtime(scope="cache")`. No automatic LRU, TTL, or
-   size-based eviction. See section 11.7.
-6. **Chain fan-in.** Decide whether future versions should support fan-in
-   chains (multiple previous steps feeding one next step) or whether that
-   remains the agent's responsibility.
+The second run completed in 48.7 seconds versus 195.2 seconds for the first run. All 100 map-phase calls returned instantly from cache. Only the 25 tree-reduce synthesis calls made real LLM requests, reducing cost by approximately 60%.
 
----
+#### Cache key mechanics
 
-## 21. Success Criteria
+The content-addressed cache key for each LLM call is derived from:
 
-The rewrite is successful when:
+```python
+cache_key = sha256(json.dumps({
+    "instruction": call.instruction,
+    "input_text": call.input_text,
+    "model": call.resolved_model_id,
+    "temperature": call.temperature,
+    "json_mode": call.json_mode,
+}, sort_keys=True).encode()).hexdigest()
+```
 
-- agents never need to write Scheme,
-- agents can still inspect generated Scheme for debugging (via dry-run and
-  execute responses),
-- all execution goes through instantiated artifacts (created internally),
-- the happy-path agent flow is 3 tool calls: plan → dry-run → execute,
-- the public MCP API surface is 10 tools,
-- instantiation, estimation, and verification are internal — no separate
-  agent-facing tools for these steps,
-- dry-run and verification happen before expensive calls,
-- templates cover common orchestration shapes,
-- the runtime exposes only the 10 primitive combinators plus modifiers and
-  the `gate` control primitive,
-- no unsafe public escape hatches exist,
-- large contexts are represented by IDs and metadata,
-- recursive workflows remain possible,
-- current operational features are preserved: progress, cancel, trace, rate
-  limits, token accounting, checkpointing, multimodal input, and controlled
-  Python compute,
-- streaming delivers partial results during `map-async` and `tree-reduce`,
-- cross-execution cache eliminates redundant LLM calls for identical inputs,
-- the planner produces template chains for Composite tasks,
-- output schemas are declared in templates and validated on `finish`,
-- gates suspend execution and `resume_execution` resumes or rejects,
-- budget exhaustion produces partial results via checkpoint, not hard failure,
-- LLM-generated Python is policy-gated and declared in template metadata.
+Because the map instruction (`"Extract ACE2 mentions as JSON."`), model alias (`fast_text_model`), temperature (0), and each paper's text are identical between runs, every map-phase cache key from the second run matches a key written during the first run. The synthesis cache keys differ because the reduce instruction changed.
