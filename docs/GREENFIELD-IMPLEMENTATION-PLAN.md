@@ -11,6 +11,9 @@ The central design is intentionally narrow:
 - **Racket owns orchestration control flow.** Template bodies are Racket S-expressions evaluated in a sandboxed subprocess.
 - **Code and data never mix.** Slot values are passed as JSON data and read with `(slot 'name)`. Template files never contain textual slot markers.
 - **Dry runs execute the same body as live runs.** Simulation mode returns synthetic LLM results and measures calls, concurrency, recursion depth, gates, checkpoints, and Python phases.
+- **Stage boundaries are typed.** Templates may declare a schema for each named node. The host validates a node's output before it flows downstream and repairs malformed output within bounds, so a bad extraction never poisons synthesis.
+- **Cost is declared and checked.** Templates may declare closed-form resource bounds; verification compares them against measured dry-run behavior.
+- **Executions are replayable.** Any execution can be re-run deterministically from cache or from a checkpoint, and a failing context can be automatically minimized.
 - **Simple suspension model.** Gates are live-process pauses only. Checkpoints are persisted audit/restart data, not transparent continuations.
 - **Template parsing uses S-expressions, not regular expressions.** Metadata and template bodies are parsed structurally.
 
@@ -99,7 +102,7 @@ No live LLM call may happen before verification passes.
 
 ### 2.3 MCP Tools
 
-The server exposes exactly 10 tools:
+The server exposes exactly 12 tools:
 
 | Tool | Purpose |
 |---|---|
@@ -109,6 +112,8 @@ The server exposes exactly 10 tools:
 | `execute_strategy` | Verify and execute live. |
 | `resume_execution` | Resume a currently suspended gate. |
 | `get_execution_trace` | Return trace events for an execution. |
+| `replay_execution` | Re-run an execution deterministically or from a checkpoint. |
+| `minimize_failure` | Shrink a failing context to a minimal failing subset. |
 | `list_templates` | Return template catalog summary. |
 | `describe_template` | Return metadata and body for one template. |
 | `get_record` | Fetch a stored record by ID. |
@@ -208,6 +213,13 @@ The first top-level form **[MUST]** be:
     (branch_factor (type integer) (required #f) (default 5) (min 2) (max 20))
     (json_mode (type boolean) (required #f) (default #t)))
   (output-schema "{\"type\":\"string\"}")
+  (node-schemas
+    (extract "{\"type\":\"object\",\"additionalProperties\":true}")
+    (synthesize "{\"type\":\"string\"}"))
+  (resource
+    (llm-calls "n + ceil(n / branch_factor) + ceil(n / (branch_factor * branch_factor))")
+    (critical-path "1 + ceil(log(n) / log(branch_factor))")
+    (max-concurrency "min(n, max_concurrent)"))
   (fallback-model "fast_text_model")
   (cacheable #t)
   (uses-py-exec #f)
@@ -219,6 +231,8 @@ Every remaining top-level form is the executable template body. The final effect
 There are no `{{slot}}` markers. Parameters are read only through `(slot 'name)`.
 
 `fallback-model` is optional. It names a model alias that is recorded as metadata only (Appendix C.5) and validated by verification check 22 when present. Whether a template emits partial results is not declared; it is derived from the body walk at registration (Appendix G.7). Budget behavior is not template-configurable (Appendix C.5).
+
+`node-schemas` is optional. It maps node IDs (the `#:node-id` strings used in the body) to B.5-subset schemas that the host enforces on each node's LLM output during execution (Appendix B.7). `resource` is optional. It declares closed-form upper bounds on work that verification compares against measured dry-run behavior (Appendix B.8). A template that declares neither is unconstrained at node boundaries and has no declared resource bounds.
 
 ### B.2 Slot Types: exactly 6
 
@@ -341,6 +355,49 @@ No other JSON Schema keywords are supported. A schema using an unsupported keywo
 (finish report)
 ```
 
+### B.7 Node Output Schemas
+
+`node-schemas` is an optional `define-meta` form mapping node IDs to B.5-subset schemas:
+
+```racket
+(node-schemas
+  (extract "{\"type\":\"object\",\"additionalProperties\":true}")
+  (synthesize "{\"type\":\"string\"}"))
+```
+
+Each entry's car is a node ID and its cdr is a JSON string that **[MUST]** conform to the B.5 subset. The node ID **[MUST]** match a `#:node-id` argument that appears somewhere in the body.
+
+In live mode the host validates the result of every `llm-query` (and every `map-async` element call) whose `#:node-id` matches a declared schema, before returning the value to Racket:
+
+- a conforming result is returned unchanged;
+- a non-conforming result triggers node-schema repair (Appendix C.7);
+- if repair is exhausted, the host returns an effect error to the calling primitive, handled by the enclosing combinator's `ErrorPolicy` exactly like a failed LLM call (Appendix C.5).
+
+LLM results at nodes with no declared schema, and results at calls with no `#:node-id`, are not validated. Final-output validation against `output-schema` (Appendix B.5) is independent and still applies.
+
+In simulate mode synthetic `llm-query` results are generated to conform to the matching node schema, so repair never runs during a dry run (Appendix D.2).
+
+### B.8 Resource Declarations
+
+`resource` is an optional `define-meta` form declaring closed-form upper bounds:
+
+```racket
+(resource
+  (llm-calls "n + ceil(n / branch_factor) + ceil(n / (branch_factor * branch_factor))")
+  (critical-path "1 + ceil(log(n) / log(branch_factor))")
+  (max-concurrency "min(n, max_concurrent)"))
+```
+
+Allowed keys are `llm-calls`, `critical-path`, and `max-concurrency`. Each value is an arithmetic expression string over:
+
+- the free variable `n`, bound at verification time to the planner's item count for the context (`0` when unknown);
+- integer slot names resolved to their instantiated values (for example `branch_factor`, `max_concurrent`);
+- numeric literals;
+- the operators `+`, `-`, `*`, `/`;
+- the functions `ceil`, `floor`, `log`, `min`, `max`.
+
+Expressions are parsed structurally (no `eval`) and evaluated over real numbers; the declared bound is `ceil` of the result. Verification check 24 (`resource_bounds_consistent`, warn) compares each declared bound against the corresponding measured dry-run statistic and warns when a measured value exceeds its declared bound. Resource declarations never block execution; they surface drift between intended and simulated cost.
+
 ---
 
 ## Appendix C: Models, Providers, Cache, and Budget
@@ -423,6 +480,17 @@ high_completion_tokens(call) = min(ceil(completion_tokens(call) * 2.5), model.ma
 
 `input_rate` and `output_rate` come from `ModelRegistryEntry`. `py-exec`, gates, checkpoints, and partial results do not add tokens.
 
+### C.7 Node Schema Repair
+
+When a live LLM result fails its declared node schema (Appendix B.7), the host attempts bounded repair before surfacing an error:
+
+- the host re-issues the same call to the same model with an augmented instruction: the original instruction, the declared node schema, and the truncated previous output (capped at 8192 bytes of canonical JSON);
+- repair is retried up to `policy.max_node_repairs` times (default 1);
+- a repaired result that conforms is returned to Racket unchanged, as if it were the original result;
+- if all repair attempts are exhausted, the host returns an effect error (`error_code: "node_schema_failed"`) to the calling primitive; the enclosing combinator's `ErrorPolicy` handles it exactly like a failed LLM call (Appendix C.5), and outside any error-policy combinator it fails the execution.
+
+Repair calls count as live LLM calls in execution stats and are recorded in the trace like any other call. Simulate mode never repairs: synthetic results conform by construction (Appendix D.2), so repair has no dry-run cost and is not part of `SimulationStats`.
+
 ---
 
 ## Appendix D: Instantiation, Hashing, and Dry Runs
@@ -446,7 +514,7 @@ Identical inputs must produce identical artifact records.
 
 In simulate mode:
 
-- `llm-query` returns a synthetic content-bearing string or JSON value;
+- `llm-query` returns a synthetic content-bearing string or JSON value; when the call's `#:node-id` has a declared node schema (Appendix B.7), the synthetic value is generated to conform to that schema, so node-schema repair never runs in simulate mode;
 - `py-exec` is counted but not run;
 - `gate` is counted and returns `{"sim": true, "decision": "approved"}`;
 - `checkpoint` is counted and returns `ckpt_0000000000000000`;
@@ -482,7 +550,7 @@ Cache-hit prediction is deliberately simple for now: dry runs report `cache_hits
 
 `VerificationEngine.verify(plan, artifact, dry_run, policy) -> VerificationRecord` runs all checks and never short-circuits. The decision is `pass` iff no check has status `fail`.
 
-Exactly 22 checks:
+Exactly 24 checks:
 
 | # | Name | Severity | Rule |
 |---|---|---|---|
@@ -508,6 +576,8 @@ Exactly 22 checks:
 | 20 | `timeout_sane` | fail | timeout is within policy |
 | 21 | `checkpoint_writable` | warn | checkpoints namespace is writable |
 | 22 | `fallback_model_valid` | fail | declared fallback model exists if present |
+| 23 | `node_schemas_valid` | fail | each declared node schema conforms to B.5 and names a node-id present in the body |
+| 24 | `resource_bounds_consistent` | warn | each measured dry-run statistic fits its declared resource bound |
 
 Policy defaults:
 
@@ -522,6 +592,7 @@ allow_py_exec = False
 allow_llm_generated_code = False
 allow_gates = True
 max_timeout_seconds = 3600
+max_node_repairs = 1
 ```
 
 ---
@@ -731,6 +802,26 @@ Partial results provide incremental trace visibility, not a push channel:
 - a `value` larger than 8192 bytes of canonical JSON is truncated in the persisted trace event and the payload is marked `"truncated": true`; the full value still flows through normal template data flow;
 - whether a template emits partial results is derived at registration from the body walk (`"partial-result" in primitives_used`); there is no metadata declaration and no execution-time flag.
 
+### G.8 Deterministic Replay and Failure Minimization
+
+Two tools operate on a finished or failed `ExecutionRecord`.
+
+**`replay_execution`** re-runs an execution and stores a new `ExecutionRecord` whose `replay_of` names the source execution. A replay reuses the `exec_` prefix and the `executions` namespace (Appendix A.6, A.7); it is not a new record kind. Modes:
+
+- `cached` (default): every `llm-query` is served from the original execution's recorded results, keyed by `call_id` in body order. A call with no recorded result fails the replay with `error_code: "replay_cache_miss"`. No live calls occur, so no verification is required.
+- `from_checkpoint`: execution starts from the data persisted in `from_checkpoint_id` (Appendix G.5) and serves recorded results for calls before the checkpoint, replaying later calls from cache as in `cached` mode.
+- `single_node`: calls at `node_id` are re-issued live (optionally with `model_overrides_json` selecting a different model alias) while all other calls are served from cache. Because `single_node` performs live calls, it requires a passing verification record for the source artifact, like `execute_strategy`.
+
+A replay produces the same `ExecutionResult` shape as the original and is itself traceable via `get_execution_trace`.
+
+**`minimize_failure`** shrinks a failing context to a minimal failing subset using delta debugging (ddmin) over the context's top-level items:
+
+- the source execution's context data **[MUST]** be a list; otherwise the tool returns `error_code: "not_minimizable"`;
+- the failure `signal` selects what counts as "still failing": `schema_invalid` (final output fails `output-schema`), `node_schema_fail` (some node-schema repair is exhausted), or `predicate` (a caller-supplied `predicate` over the result returns false);
+- each ddmin trial instantiates and executes the same artifact over a candidate subset, reusing cached results where call keys match and issuing live calls otherwise; each trial is a full `ExecutionRecord`;
+- minimization is bounded by `max_trials` (default 50); on exhaustion the smallest still-failing subset found so far is returned;
+- the result is a `MinimizationResult` (Appendix H) recording the signal, original and minimal sizes, the surviving item indices, the trial count, and the executions produced.
+
 ---
 
 ## Appendix H: Python Interfaces
@@ -803,6 +894,8 @@ class ArtifactRecord(BaseModel):
     primitives_used: list[str]
     uses_py_exec: bool
     uses_llm_generated_code: bool
+    node_schemas: dict[str, str] = {}
+    resource_bounds: dict[str, str] = {}
 
 class CallGraphNode(BaseModel):
     node_id: str
@@ -902,6 +995,7 @@ class ExecutionRecord(BaseModel):
     stats: ExecutionStats = ExecutionStats()
     gate: GateInfo | None = None
     error: dict[str, Any] | None = None
+    replay_of: str | None = None
     created_at: float
     completed_at: float | None = None
 
@@ -938,6 +1032,16 @@ class ExecutionPolicy(BaseModel):
     allow_llm_generated_code: bool = False
     allow_gates: bool = True
     max_timeout_seconds: int = 3600
+    max_node_repairs: int = 1
+
+class MinimizationResult(BaseModel):
+    source_execution_id: str
+    signal: Literal["schema_invalid", "node_schema_fail", "predicate"]
+    original_size: int
+    minimal_size: int
+    minimal_item_indices: list[int]
+    trials: int
+    executions: list[str] = []
 
 class ModelRegistryEntry(BaseModel):
     alias: str
@@ -980,6 +1084,8 @@ Tool contracts:
 | `execute_strategy` | `plan_id` | `dry_run_id`, `policy_json`, `timeout_seconds` | `execution_id`, `artifact_id`, `verification`, `result`, `execution`, `next_actions` |
 | `resume_execution` | `execution_id`, `gate_id`, `decision_json` | none | same shape as `execute_strategy` |
 | `get_execution_trace` | `execution_id` | none | `execution_id`, `trace` |
+| `replay_execution` | `execution_id` | `mode`, `node_id`, `model_overrides_json`, `from_checkpoint_id` | `execution_id`, `replay_of`, `result`, `execution`, `next_actions` |
+| `minimize_failure` | `execution_id`, `signal` | `predicate`, `max_trials` | `minimization`, `next_actions` |
 | `list_templates` | none | none | `templates` |
 | `describe_template` | `template_name` | `template_version` | `template` |
 | `get_record` | `record_id` | none | `record_id`, `namespace`, `record` |
@@ -988,6 +1094,10 @@ Tool contracts:
 `execute_strategy` selects the latest dry run for `plan_id` when `dry_run_id` is omitted. If no fresh dry run exists, it returns `error_code: "dry_run_required"`. `resume_execution` is valid only while the stored execution state is `suspended_gate`.
 
 `get_execution_trace` may be called while the execution is still `running` or `suspended_gate`; the trace includes the `partial_result` events recorded so far (Appendix G.7).
+
+`replay_execution` defaults `mode` to `cached`. `node_id` is required when `mode` is `single_node`; `from_checkpoint_id` is required when `mode` is `from_checkpoint`. A `cached` or `from_checkpoint` replay needs no verification because it issues no live calls; a `single_node` replay requires a passing verification record for the source artifact (Appendix G.8). The replay is stored as a new `ExecutionRecord` with `replay_of` set to `execution_id`.
+
+`minimize_failure` requires the source execution's context to be a list and returns `error_code: "not_minimizable"` otherwise. `predicate` is required only when `signal` is `predicate`. `max_trials` defaults to 50 (Appendix G.8).
 
 `get_record` derives the namespace from the ID prefix per Appendix A.6. `call_` and `gate_` IDs do not name stored records; `get_record` returns `error_code: "no_stored_record"` for them.
 
@@ -1108,7 +1218,7 @@ Files:
 Requirements:
 
 - S-expression parser;
-- metadata parsing;
+- metadata parsing, including optional `node-schemas` and `resource` forms;
 - body preservation for hashing;
 - slot validation;
 - all 16 templates.
@@ -1119,6 +1229,7 @@ Tests:
 - no regex use in S-expression parser/body analysis;
 - all templates load;
 - all templates use `(slot 'name)`;
+- `node-schemas` and `resource` parse into `ArtifactRecord.node_schemas` and `resource_bounds`;
 - artifact hash determinism.
 
 ### Batch 4: Racket Runtime and Simulation
@@ -1180,7 +1291,8 @@ Requirements:
 
 - dry run by simulated runtime execution;
 - cost estimate from measured calls;
-- all 22 verification checks.
+- closed-form resource-bound evaluation from `resource_bounds`;
+- all 24 verification checks.
 
 Tests:
 
@@ -1196,23 +1308,32 @@ Files:
 - `rlm_scheme/gate.py`
 - `rlm_scheme/checkpoint.py`
 - `rlm_scheme/trace.py`
+- `rlm_scheme/replay.py`
+- `rlm_scheme/minimize.py`
 
 Requirements:
 
 - execute only after verification pass;
 - live effect handling;
+- node-schema validation and bounded repair of live LLM results (Appendix B.7, C.7);
 - live-process gate suspension and resume;
 - checkpoint persistence;
-- trace events.
+- trace events;
+- deterministic replay in `cached`, `from_checkpoint`, and `single_node` modes (Appendix G.8);
+- failure minimization by ddmin over context items (Appendix G.8).
 
 Tests:
 
 - end-to-end execution with `MockLLMProvider`;
+- node-schema repair: a malformed node result is repaired within `max_node_repairs`, and exhaustion routes through the enclosing `ErrorPolicy`;
 - gate suspend/resume;
 - gate timeout failure;
 - checkpoint record written;
 - partial-result events appear in the trace of a still-running execution;
-- host-counted calls reconcile with runtime stats.
+- host-counted calls reconcile with runtime stats;
+- `cached` replay reproduces the original result with no live calls; a missing cached call yields `replay_cache_miss`;
+- `single_node` replay re-issues only the named node live;
+- `minimize_failure` shrinks a seeded failing context to a minimal failing subset and returns a `MinimizationResult`.
 
 ### Batch 8: Chain Executor
 
@@ -1241,7 +1362,7 @@ Files:
 
 Requirements:
 
-- expose exactly 10 MCP tools;
+- expose exactly 12 MCP tools;
 - construct components through `build_app(root)`;
 - no module-level singletons;
 - consistent response envelope.
@@ -1279,11 +1400,15 @@ Tests:
 The implementation is done when:
 
 1. All batch tests pass.
-2. Cardinality tests pass: 13 task shapes, 11 data shapes, 7 execution states, 3 error policies, 7 reset scopes, 9 ID prefixes, 9 store namespaces, 10 MCP tools, 16 templates, 22 verification checks, 6 slot types.
+2. Cardinality tests pass: 13 task shapes, 11 data shapes, 7 execution states, 3 error policies, 7 reset scopes, 9 ID prefixes, 9 store namespaces, 12 MCP tools, 16 templates, 24 verification checks, 6 slot types.
 3. The happy path runs end to end with `MockLLMProvider`.
 4. A two-step chain runs end to end.
 5. A gate suspends and resumes while its runtime process remains alive.
 6. Checkpoints are persisted and visible in traces.
 7. No live LLM call occurs before a passing verification record exists.
 8. Template parsing/body analysis does not use regex.
-9. `SPEC-DEVIATIONS.md` is empty or every entry is reviewed.
+9. A declared node schema is enforced on live LLM output, and a malformed result is repaired within `max_node_repairs` or routed through the enclosing `ErrorPolicy`.
+10. Declared resource bounds are evaluated and reconciled against dry-run statistics by `resource_bounds_consistent`.
+11. A `cached` replay reproduces an execution's result deterministically with no live LLM calls.
+12. `minimize_failure` returns a minimal failing subset for a seeded failing context.
+13. `SPEC-DEVIATIONS.md` is empty or every entry is reviewed.
