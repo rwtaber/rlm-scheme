@@ -1,4 +1,4 @@
-# RLM-Scheme Greenfield Rewrite Plan
+# RLM-Scheme Greenfield Implementation Plan
 
 **Status:** Normative implementation plan.
 **Audience:** an implementing agent.
@@ -135,8 +135,8 @@ All other transitions **[MUST]** raise `InvalidStateTransition`.
 | `executions` | `executions`, `dry_runs`, `verifications`, `checkpoints`, `traces` |
 | `artifacts` | `artifacts` |
 | `cache` | `cache` |
-| `gates` | pending gate records |
-| `all` | all namespaces and pending gates |
+| `gates` | pending in-memory gate records |
+| `all` | all namespaces and pending in-memory gate records |
 
 ### A.6 IDs: exactly 9 prefixes
 
@@ -157,6 +157,8 @@ Grammar: `^(ctx|plan|dry|exec|art|ver|call|ckpt|gate)_[0-9a-f]{16}$`
 ### A.7 Store namespaces: exactly 9
 
 `contexts`, `plans`, `artifacts`, `dry_runs`, `verifications`, `executions`, `cache`, `checkpoints`, `traces`.
+
+Gates are intentionally not a store namespace. A pending gate belongs to the live `GateManager` process table and is lost if the server process dies. This matches Appendix G.4: gates are not resumable after process death.
 
 ---
 
@@ -270,7 +272,24 @@ Templates run with only these primitives plus a small pure-form allowlist from `
 (join-values values)
 ```
 
-### B.5 Reference Template Body
+`py-eval` is syntax sugar for `py-exec` and is governed by the same policy. Any template that uses `py-eval` **[MUST]** declare `(uses-py-exec #t)`.
+
+### B.5 Output Schema Subset
+
+`output-schema` is a JSON string containing a restricted JSON Schema object.
+
+Allowed keywords:
+
+- `type`: one of `string`, `number`, `integer`, `boolean`, `object`, `array`, `null`;
+- `properties`: object mapping property names to schemas;
+- `required`: array of property-name strings;
+- `items`: schema for array items;
+- `enum`: array of scalar values;
+- `additionalProperties`: boolean.
+
+No other JSON Schema keywords are supported. A schema using an unsupported keyword fails `output_schema_valid`. Final execution results are validated against this subset after `(finish value)`.
+
+### B.6 Reference Template Body
 
 ```racket
 (define items (context-items (slot 'context_id) (slot 'items_path)))
@@ -314,7 +333,7 @@ Required aliases:
 - `quality_text_model`
 - `vision_model`
 
-Templates reference aliases only. Providers resolve aliases to concrete model IDs at call time.
+Templates reference aliases only. Providers resolve aliases to concrete model IDs at call time. `vision_model` is reserved for multimodal contexts: when `DataShape.Multimodal` is selected and a template has a generic model slot, the planner defaults that slot to `vision_model` unless the caller supplies another alias.
 
 ### C.2 Provider Retry
 
@@ -351,6 +370,37 @@ The simplest runtime behavior is normative:
 
 Templates may declare a fallback model for future use, but this implementation records it only as metadata and verifies that the alias exists. Runtime model changes would make the verified artifact less clear, so they are intentionally out of scope.
 
+### C.6 Token and Cost Estimation
+
+Each simulated `llm-query` emits a `SimulatedCall`. Python applies this estimate:
+
+```python
+prompt_tokens = ceil((call.instruction_chars + call.input_chars) / 4)
+completion_tokens = max_tokens if max_tokens is not None else model.default_completion_estimate
+```
+
+The runtime computes `instruction_chars` from the instruction string length and `input_chars` from the canonical input string length. Canonical input means JSON with sorted keys and compact separators for structured values; strings are used directly.
+
+Dry-run totals:
+
+```python
+prompt_tokens(call) = ceil((call.instruction_chars + call.input_chars) / 4)
+completion_tokens(call) = call.max_tokens if call.max_tokens is not None else model.default_completion_estimate
+prompt_total = sum(prompt_tokens(call) for call in calls)
+completion_total = sum(completion_tokens(call) for call in calls)
+token_total = prompt_total + completion_total
+low_cost = sum((prompt_tokens(call) * input_rate + completion_tokens(call) * output_rate) / 1_000_000 for call in calls)
+high_cost = sum((prompt_tokens(call) * input_rate + high_completion_tokens(call) * output_rate) / 1_000_000 for call in calls)
+```
+
+The high-cost completion term is capped at `model.max_output_tokens`:
+
+```python
+high_completion_tokens(call) = min(ceil(completion_tokens(call) * 2.5), model.max_output_tokens)
+```
+
+`input_rate` and `output_rate` come from `ModelRegistryEntry`. `py-exec`, gates, checkpoints, and partial results do not add tokens.
+
 ---
 
 ## Appendix D: Instantiation, Hashing, and Dry Runs
@@ -380,19 +430,27 @@ In simulate mode:
 - `checkpoint` is counted and returns `ckpt_0000000000000000`;
 - `partial-result` is counted as a trace event if tracing is enabled.
 
-The terminal stats include:
+The terminal `done` message includes `stats: SimulationStats` and `calls: list[SimulatedCall]` as defined in Appendix H. Python builds `DryRunRecord.call_graph` and `CostEstimate` from `calls`; it does not infer those values from aggregate stats alone.
 
-```python
-class SimulationStats(BaseModel):
-    llm_calls: int
-    critical_path_calls: int
-    max_concurrency: int
-    recursive_depth: int
-    checkpoints: int
-    python_phases: int
-    gates: int
-    calls_by_model: dict[str, int]
-```
+Simulation is deterministic and estimates upper-bound work for dynamic control forms:
+
+- `llm-query`: counts one call at the current dependency depth, records model alias and token estimate.
+- `llm-query-async`: starts the same simulated work in a logical concurrent branch.
+- `await`: waits for one branch; the branch's depth contributes to the current continuation.
+- `await-all`: waits for all branches; all started branches count, and continuation depth uses the maximum branch depth.
+- `await-any`: all already-started branches count; the winner is the first branch in creation order, and continuation depth uses that branch depth.
+- `map-async`: starts every item, bounded by `#:max-concurrent`; all items count; observed max concurrency is `min(item_count, max_concurrent)`.
+- `parallel`: all thunks count; continuation depth uses the maximum branch depth.
+- `race`: starts all thunks; all started thunks count; the winner is the first thunk in source order.
+- `tree-reduce`: runs reduce levels until one value remains; each group reducer call counts if it calls effects. Critical path is producer path plus one reducer path per tree level.
+- `fold-sequential`: runs items in order; effect depths add sequentially.
+- `iterate-until`: simulate mode runs exactly `#:max-iterations` iterations, regardless of synthetic predicate result.
+- `with-validation`: simulate mode runs `produce-f` and `validate-f` exactly `max_retries + 1` times.
+- `try-fallback`: simulate mode runs both branches and returns the primary branch result; this is an upper-bound estimate.
+- `recursive-spawn`: simulate mode expands a full tree through `max-depth` with `branch-factor`; `recursive_depth` is the maximum depth reached. If the supplied function does not recurse, only the called body effects count.
+- `memoized`: repeated calls with the same canonicalized function identity and argument count once in simulate mode; later hits return the first synthetic result and do not add LLM calls or token estimates.
+
+`critical_path_calls` is the longest dependent chain of simulated LLM calls. Parallel branches contribute their maximum branch path, not their sum. Sequential forms contribute the sum of their dependent paths.
 
 Cache-hit prediction is deliberately simple for now: dry runs report `cache_hits_expected = 0`. Accurate replay of simulated call keys can be added later without changing the public lifecycle.
 
@@ -421,7 +479,7 @@ Exactly 22 checks:
 | 13 | `cost_budget` | fail | estimated high cost <= policy |
 | 14 | `recursion_depth_limit` | fail | simulated depth <= policy |
 | 15 | `dry_run_fresh` | fail | dry run artifact matches current plan |
-| 16 | `output_schema_valid` | fail | output schema is valid subset |
+| 16 | `output_schema_valid` | fail | output schema conforms to the B.5 subset |
 | 17 | `py_exec_policy` | fail | py-exec requires policy allow |
 | 18 | `llm_generated_code_policy` | fail | generated code requires policy allow |
 | 19 | `gate_policy` | fail | gates require policy allow |
@@ -462,6 +520,13 @@ Hint fields:
 - `sub_operations`
 - `ordered`
 - `latency_priority`
+- `ambiguous_items`
+- `has_testable_predicate`
+- `candidate_count`
+- `until_condition`
+- `recursive`
+- `process_parts`
+- `estimated_context_tokens`
 
 Rules:
 
@@ -500,10 +565,10 @@ Rules, in order:
 3. If `data` is a list:
    - empty list -> `FlatList`;
    - list of two-element lists/objects with `left/right` or `a/b` keys -> `Paired`;
-   - list of objects with identical scalar keys and at least 2 rows -> `Tabular`;
-   - list of objects with `children` or `parent` keys -> `Hierarchy`;
    - `metadata.ordered == True` and temporal keys are present -> `TimeSeries`;
+   - list of objects with `children` or `parent` keys -> `Hierarchy`;
    - any item has non-text modality metadata -> `Multimodal`;
+   - list of objects with identical scalar keys and at least 2 rows -> `Tabular`;
    - otherwise `FlatList`.
 4. If `data` is a dict:
    - contains `nodes` and `edges` -> `Graph`;
@@ -542,18 +607,25 @@ The planner chooses from exactly 16 templates:
 Selection rules:
 
 - Direct: list output -> `direct_json_extract`, otherwise `direct_call`.
-- Batch: per-item output -> `batch_map`; ordered combined output -> `batch_extract_fold`; ambiguous items -> `tiered_review`; otherwise `batch_extract_reduce`.
+- Batch: per-item output -> `batch_map`; ordered combined output -> `batch_extract_fold`; `ambiguous_items == true` -> `tiered_review`; otherwise `batch_extract_reduce`.
 - Synthesize: ordered -> `ordered_synthesis_fold`; hierarchical -> `tree_synthesis`; otherwise `direct_call` when context fits, else `tree_synthesis`.
 - Search: finite candidates + latency priority -> `race_candidates`; finite candidates -> `compare_candidates`; otherwise `refine_until_valid`.
-- Refine: testable predicate -> `refine_until_valid`; otherwise `bounded_critique_refine`.
+- Refine: `has_testable_predicate == true` -> `refine_until_valid`; otherwise `bounded_critique_refine`.
 - Compare: `compare_candidates`.
-- Classify: one item -> `direct_call`; ambiguous items -> `tiered_review`; otherwise `batch_map`.
+- Classify: one item -> `direct_call`; `ambiguous_items == true` -> `tiered_review`; otherwise `batch_map`.
 - Pipeline: build a chain from sub-operations.
-- Generate: until condition -> `refine_until_valid`; fixed count -> `batch_map`.
-- Decompose: recursive -> `recursive_decompose`; process parts -> `decompose_then_batch`; otherwise `direct_json_extract`.
-- Validate: ambiguous -> `tiered_review`; otherwise `batch_map`.
+- Generate: `until_condition == true` -> `refine_until_valid`; otherwise `batch_map`.
+- Decompose: `recursive == true` -> `recursive_decompose`; `process_parts == true` -> `decompose_then_batch`; otherwise `direct_json_extract`.
+- Validate: `ambiguous_items == true` -> `tiered_review`; otherwise `batch_map`.
 - Aggregate: `tabular_extract_aggregate`.
 - Composite: use `batch_extract_reduce` for extract/synthesize two-phase tasks; otherwise build a chain.
+
+Derived predicates:
+
+- `finite candidates` means `candidate_count is not None and candidate_count > 0`.
+- `hierarchical` means `data_shape == Hierarchy`.
+- `one item` means `item_count == 1`.
+- `context fits` means `estimated_context_tokens <= floor(quality_text_model.context_window_tokens * 0.8)`. If `estimated_context_tokens` is absent, derive it as `ceil(len(canonical_json(context.data)) / 4)`.
 
 ---
 
@@ -590,14 +662,14 @@ Host sends:
 Runtime may send:
 
 ```json
-{"type":"llm_call","id":"call_001a2b3c4d5e6f7","node_id":"extract","instruction":"...","input":"...","model":"fast_text_model","temperature":0,"json":true,"max_tokens":null}
-{"type":"py_exec","id":"call_111a2b3c4d5e6f7","code":"...","input":{},"allowed_imports":["json"],"timeout_seconds":30}
-{"type":"checkpoint","id":"ckpt_77a8b9c0d1e2f3a","node_id":"fold","data":{}}
-{"type":"gate","id":"gate_77a8b9c0d1e2f3a","label":"review","payload":{}}
+{"type":"llm_call","id":"call_001a2b3c4d5e6f70","node_id":"extract","instruction":"...","input":"...","model":"fast_text_model","temperature":0,"json":true,"max_tokens":null}
+{"type":"py_exec","id":"call_111a2b3c4d5e6f70","code":"...","input":{},"allowed_imports":["json"],"timeout_seconds":30}
+{"type":"checkpoint","id":"ckpt_77a8b9c0d1e2f300","node_id":"fold","data":{}}
+{"type":"gate","id":"gate_77a8b9c0d1e2f300","label":"review","payload":{}}
 {"type":"partial_result","node_id":"extract","index":7,"value":{}}
 ```
 
-Python replies with matching IDs.
+Python replies with matching IDs for `llm_call`, `py_exec`, `checkpoint`, and `gate`. `partial_result` is fire-and-forget and has no reply.
 
 ### G.4 Gates
 
@@ -616,11 +688,11 @@ Checkpoints persist data and trace location. They do not capture Racket continua
 ### G.6 Terminal Messages
 
 ```json
-{"type":"done","value":{},"stats":{}}
+{"type":"done","value":{},"stats":{"llm_calls":1,"critical_path_calls":1,"max_concurrency":1,"recursive_depth":0,"checkpoints":0,"python_phases":0,"gates":0,"calls_by_model":{"fast_text_model":1}},"calls":[{"call_id":"call_001a2b3c4d5e6f70","node_id":"extract","model":"fast_text_model","instruction_chars":12,"input_chars":42,"max_tokens":null,"json_mode":true,"depth":1}]}
 {"type":"error","error_code":"runtime_error","message":"...","trace":"..."}
 ```
 
-Python independently counts live LLM calls and reconciles its count with runtime stats.
+The `done.stats` object has the same shape in live and simulate mode: `SimulationStats`. In simulate mode, `calls` is the complete list of simulated LLM calls. In live mode, `calls` may be omitted because Python already records served calls. Python independently counts live LLM calls and reconciles its count with runtime stats.
 
 ---
 
@@ -715,6 +787,26 @@ class CostEstimate(BaseModel):
     estimated_cost_usd: CostRange
     cache_hits_expected: int = 0
 
+class SimulationStats(BaseModel):
+    llm_calls: int
+    critical_path_calls: int
+    max_concurrency: int
+    recursive_depth: int
+    checkpoints: int
+    python_phases: int
+    gates: int
+    calls_by_model: dict[str, int]
+
+class SimulatedCall(BaseModel):
+    call_id: str
+    node_id: str | None = None
+    model: str
+    instruction_chars: int
+    input_chars: int
+    max_tokens: int | None = None
+    json_mode: bool = False
+    depth: int
+
 class DryRunRecord(BaseModel):
     dry_run_id: str
     plan_id: str
@@ -722,6 +814,7 @@ class DryRunRecord(BaseModel):
     simulation: SimulationStats
     estimate: CostEstimate
     call_graph: list[CallGraphNode]
+    calls: list[SimulatedCall] = []
     warnings: list[str] = []
     created_at: float
 
@@ -823,6 +916,40 @@ class ModelRegistryEntry(BaseModel):
     default_completion_estimate: int = 1024
 ```
 
+### H.1 MCP Response Envelope and Tool Schemas
+
+Every MCP tool returns a JSON object with a `status` field.
+
+Allowed status values:
+
+- `ok`: successful non-suspended result;
+- `error`: tool failed before producing a valid result;
+- `needs_reclassification`: planner could not select a template from the supplied hints;
+- `suspended`: execution paused at a live gate.
+
+Error envelope:
+
+```json
+{"status":"error","error_code":"string","message":"string"}
+```
+
+Tool contracts:
+
+| Tool | Required input | Optional input | `ok` output |
+|---|---|---|---|
+| `load_context` | `data_json` | `name`, `metadata_json` | `context_id`, `name`, `metadata`, `preview`, `next_actions` |
+| `plan_strategy` | `task`, `context_id` | `hints_json` | `plan_id`, `classification`, `recommended`, `alternatives`, `next_actions` |
+| `dry_run_strategy` | `plan_id` | none | `dry_run_id`, `plan_id`, `artifact`, `simulation`, `estimate`, `call_graph`, `warnings`, `next_actions` |
+| `execute_strategy` | `plan_id` | `dry_run_id`, `policy_json`, `timeout_seconds`, `stream` | `execution_id`, `artifact_id`, `verification`, `result`, `execution`, `next_actions` |
+| `resume_execution` | `execution_id`, `gate_id`, `decision_json` | none | same shape as `execute_strategy` |
+| `get_execution_trace` | `execution_id` | none | `execution_id`, `trace` |
+| `list_templates` | none | none | `templates` |
+| `describe_template` | `template_name` | `template_version` | `template` |
+| `get_record` | `record_id` | none | `record_id`, `namespace`, `record` |
+| `reset` | `scope` | none | `scope`, `cleared` |
+
+`execute_strategy` selects the latest dry run for `plan_id` when `dry_run_id` is omitted. If no fresh dry run exists, it returns `error_code: "dry_run_required"`. `resume_execution` is valid only while the stored execution state is `suspended_gate`.
+
 Constructors:
 
 ```python
@@ -838,7 +965,7 @@ RacketRuntime(runtime_dir: Path)
 DryRunner(store: Store, instantiator: Instantiator, runtime: RacketRuntime, registry: TemplateRegistry)
 VerificationEngine(store: Store, registry: TemplateRegistry)
 PyExecSandbox(python_bin: str = "python3")
-GateManager(store: Store)
+GateManager()
 CheckpointManager(store: Store)
 TraceStore(store: Store)
 Executor(...)
@@ -1095,7 +1222,7 @@ Tests:
 
 ## Appendix J: Definition of Done
 
-The rewrite is done when:
+The implementation is done when:
 
 1. All batch tests pass.
 2. Cardinality tests pass: 13 task shapes, 11 data shapes, 7 execution states, 3 error policies, 7 reset scopes, 9 ID prefixes, 9 store namespaces, 10 MCP tools, 16 templates, 22 verification checks, 6 slot types.
