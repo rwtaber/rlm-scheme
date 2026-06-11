@@ -16,6 +16,27 @@ The central design is intentionally narrow:
 
 ---
 
+## 0. Motivation and Context
+
+RLM-Scheme is motivated by a practical limitation of ordinary LLM use: a single prompt is an opaque, weakly-auditable computation. It may solve small tasks well, but larger tasks often need decomposition, repeated calls, intermediate checks, retrieval of source context, validation, cost control, and a trace of what happened. This project treats LLM calls as effects inside a small orchestration language so those concerns become explicit parts of the runtime rather than informal prompting conventions.
+
+The target is not a general-purpose autonomous agent. The target is a structured execution system for tasks where the shape of the work matters: extracting facts from many documents, reducing batches into reports, comparing candidates, refining an answer until a validator passes, recursively decomposing a hard input, or inserting human gates before expensive or risky steps. The server chooses from audited templates instead of generating arbitrary code, then simulates and verifies before live execution. This makes the system more predictable than free-form agent loops while still allowing nontrivial multi-step reasoning workflows.
+
+The term "recursive LLM" in this design means recursive orchestration, not a different neural architecture. A template such as `recursive_decompose` can ask an LLM to split a problem into parts, call templates on those parts, and repeat to a bounded depth. The recursive structure belongs to the program being interpreted by the runtime. The model remains an ordinary provider-backed LLM call.
+
+The design is closely connected to programming language theory:
+
+- **Interpreters:** Racket evaluates a small orchestration language, while Python hosts effects and state.
+- **Effect systems:** LLM calls, gates, checkpoints, py-exec, and partial results are explicit effects handled by Python.
+- **Abstract interpretation:** simulate mode executes the same template over synthetic values to estimate calls, cost, concurrency, and depth.
+- **Contracts:** slot validation, output schemas, policies, and verification checks define boundaries between phases.
+- **Resource semantics:** dry-run statistics and policy checks give each artifact concrete resource bounds before live execution.
+- **Provenance:** artifacts, traces, call IDs, checkpoints, and content hashes make executions inspectable after the fact.
+
+The intended capability gain comes from structure, not from assuming the model has become smarter. Decomposition, parallelism, validation, replayable traces, and bounded recursion can make some hard tasks more reliable than one-shot prompting. They do not remove the need for good templates, good context, and careful verification.
+
+---
+
 ## 1. Precedence and Conventions
 
 1. `[MUST]`, `[SHOULD]`, and `[MAY]` carry their RFC-2119 meanings.
@@ -150,7 +171,7 @@ Grammar: `^(ctx|plan|dry|exec|art|ver|call|ckpt|gate)_[0-9a-f]{16}$`
 | `exec_` | `ExecutionRecord` | random 16 hex |
 | `art_` | `ArtifactRecord` | first 16 hex of artifact hash |
 | `ver_` | `VerificationRecord` | random 16 hex |
-| `call_` | LLM call trace ID | random 16 hex |
+| `call_` | Effect call trace ID (LLM and py-exec) | random 16 hex |
 | `ckpt_` | `CheckpointRecord` | random 16 hex |
 | `gate_` | `GateInfo` | random 16 hex |
 
@@ -662,6 +683,8 @@ Host sends:
 
 `contexts` maps each referenced context ID to that context record's `data` value, for example `{"ctx_9f8e7d6c5b4a3210": [...]}`. The host includes every context named by a `context-ref` slot value.
 
+At template runtime, `(context-items context-id path)` is evaluated locally in Racket over this shipped data; there is no wire message for it. The host-side path implementation in `context_store.py` (Batch 1) serves previews and planner item counts and **[MUST]** match the runtime's semantics for `$` and `$.field`.
+
 ### G.3 Live Effect Requests
 
 Runtime may send:
@@ -973,6 +996,7 @@ Constructors:
 ```python
 Store(root: Path)
 ContextStore(store: Store)
+ModelRegistry(config_path: Path)
 TemplateRegistry(template_dir: Path, model_registry: ModelRegistry)
 Instantiator(store: Store, registry: TemplateRegistry)
 Classifier()
@@ -988,6 +1012,7 @@ CheckpointManager(store: Store)
 TraceStore(store: Store)
 Executor(
     store: Store,
+    registry: TemplateRegistry,
     runtime: RacketRuntime,
     provider: LLMProvider,
     cache: LLMCache,
