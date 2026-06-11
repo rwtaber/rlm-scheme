@@ -187,9 +187,8 @@ The first top-level form **[MUST]** be:
     (branch_factor (type integer) (required #f) (default 5) (min 2) (max 20))
     (json_mode (type boolean) (required #f) (default #t)))
   (output-schema "{\"type\":\"string\"}")
-  (budget-policy (on-exceed fail))
+  (fallback-model "fast_text_model")
   (cacheable #t)
-  (streamable #t)
   (uses-py-exec #f)
   (uses-llm-generated-code #f))
 ```
@@ -197,6 +196,8 @@ The first top-level form **[MUST]** be:
 Every remaining top-level form is the executable template body. The final effect **[MUST]** be `(finish value)`.
 
 There are no `{{slot}}` markers. Parameters are read only through `(slot 'name)`.
+
+`fallback-model` is optional. It names a model alias that is recorded as metadata only (Appendix C.5) and validated by verification check 22 when present. Whether a template emits partial results is not declared; it is derived from the body walk at registration (Appendix G.7). Budget behavior is not template-configurable (Appendix C.5).
 
 ### B.2 Slot Types: exactly 6
 
@@ -365,10 +366,10 @@ The response is not part of the key.
 The simplest runtime behavior is normative:
 
 - if a live LLM request would exceed policy, Python replies with `budget_exceeded`;
-- the runtime applies the active `ErrorPolicy`;
+- the runtime raises that reply as an effect error in the calling primitive, handled by the enclosing combinator's `ErrorPolicy` exactly like a failed LLM call; outside any combinator with an error policy, it fails the execution;
 - model switching is not performed implicitly.
 
-Templates may declare a fallback model for future use, but this implementation records it only as metadata and verifies that the alias exists. Runtime model changes would make the verified artifact less clear, so they are intentionally out of scope.
+Budget behavior is not template-configurable; there is no budget metadata field. Templates may declare `(fallback-model alias)` in `define-meta`; this implementation records it as metadata only and verifies that the alias exists (check 22). Runtime model changes would make the verified artifact less clear, so they are intentionally out of scope.
 
 ### C.6 Token and Cost Estimation
 
@@ -428,7 +429,7 @@ In simulate mode:
 - `py-exec` is counted but not run;
 - `gate` is counted and returns `{"sim": true, "decision": "approved"}`;
 - `checkpoint` is counted and returns `ckpt_0000000000000000`;
-- `partial-result` is counted as a trace event if tracing is enabled.
+- `partial-result` is a no-op: dry runs write no trace events, and it adds nothing to stats or token estimates.
 
 The terminal `done` message includes `stats: SimulationStats` and `calls: list[SimulatedCall]` as defined in Appendix H. Python builds `DryRunRecord.call_graph` and `CostEstimate` from `calls`; it does not infer those values from aggregate stats alone.
 
@@ -523,7 +524,7 @@ Hint fields:
 - `ambiguous_items`
 - `has_testable_predicate`
 - `candidate_count`
-- `until_condition`
+- `has_until_condition`
 - `recursive`
 - `process_parts`
 - `estimated_context_tokens`
@@ -614,7 +615,7 @@ Selection rules:
 - Compare: `compare_candidates`.
 - Classify: one item -> `direct_call`; `ambiguous_items == true` -> `tiered_review`; otherwise `batch_map`.
 - Pipeline: build a chain from sub-operations.
-- Generate: `until_condition == true` -> `refine_until_valid`; otherwise `batch_map`.
+- Generate: `has_until_condition == true` -> `refine_until_valid`; otherwise `batch_map`.
 - Decompose: `recursive == true` -> `recursive_decompose`; `process_parts == true` -> `decompose_then_batch`; otherwise `direct_json_extract`.
 - Validate: `ambiguous_items == true` -> `tiered_review`; otherwise `batch_map`.
 - Aggregate: `tabular_extract_aggregate`.
@@ -626,6 +627,8 @@ Derived predicates:
 - `hierarchical` means `data_shape == Hierarchy`.
 - `one item` means `item_count == 1`.
 - `context fits` means `estimated_context_tokens <= floor(quality_text_model.context_window_tokens * 0.8)`. If `estimated_context_tokens` is absent, derive it as `ceil(len(canonical_json(context.data)) / 4)`.
+
+Every absent hint read during template selection, including hints read by derived predicates, is added to `assumed_fields`, the same as in F.1.
 
 ---
 
@@ -657,6 +660,8 @@ Host sends:
 }
 ```
 
+`contexts` maps each referenced context ID to that context record's `data` value, for example `{"ctx_9f8e7d6c5b4a3210": [...]}`. The host includes every context named by a `context-ref` slot value.
+
 ### G.3 Live Effect Requests
 
 Runtime may send:
@@ -669,7 +674,7 @@ Runtime may send:
 {"type":"partial_result","node_id":"extract","index":7,"value":{}}
 ```
 
-Python replies with matching IDs for `llm_call`, `py_exec`, `checkpoint`, and `gate`. `partial_result` is fire-and-forget and has no reply.
+Python replies with matching IDs for `llm_call`, `py_exec`, `checkpoint`, and `gate`. `partial_result` is fire-and-forget and has no reply; the host records it per Appendix G.7.
 
 ### G.4 Gates
 
@@ -693,6 +698,15 @@ Checkpoints persist data and trace location. They do not capture Racket continua
 ```
 
 The `done.stats` object has the same shape in live and simulate mode: `SimulationStats`. In simulate mode, `calls` is the complete list of simulated LLM calls. In live mode, `calls` may be omitted because Python already records served calls. Python independently counts live LLM calls and reconciles its count with runtime stats.
+
+### G.7 Partial Results
+
+Partial results provide incremental trace visibility, not a push channel:
+
+- in live mode, the host appends every `partial_result` message to the execution trace as a `TraceEvent` with `type: "partial_result"`, the sender's `node_id`, and a payload containing `index` and `value`;
+- `get_execution_trace` may be called while an execution is `running` or `suspended_gate` and returns the events recorded so far;
+- a `value` larger than 8192 bytes of canonical JSON is truncated in the persisted trace event and the payload is marked `"truncated": true`; the full value still flows through normal template data flow;
+- whether a template emits partial results is derived at registration from the body walk (`"partial-result" in primitives_used`); there is no metadata declaration and no execution-time flag.
 
 ---
 
@@ -940,7 +954,7 @@ Tool contracts:
 | `load_context` | `data_json` | `name`, `metadata_json` | `context_id`, `name`, `metadata`, `preview`, `next_actions` |
 | `plan_strategy` | `task`, `context_id` | `hints_json` | `plan_id`, `classification`, `recommended`, `alternatives`, `next_actions` |
 | `dry_run_strategy` | `plan_id` | none | `dry_run_id`, `plan_id`, `artifact`, `simulation`, `estimate`, `call_graph`, `warnings`, `next_actions` |
-| `execute_strategy` | `plan_id` | `dry_run_id`, `policy_json`, `timeout_seconds`, `stream` | `execution_id`, `artifact_id`, `verification`, `result`, `execution`, `next_actions` |
+| `execute_strategy` | `plan_id` | `dry_run_id`, `policy_json`, `timeout_seconds` | `execution_id`, `artifact_id`, `verification`, `result`, `execution`, `next_actions` |
 | `resume_execution` | `execution_id`, `gate_id`, `decision_json` | none | same shape as `execute_strategy` |
 | `get_execution_trace` | `execution_id` | none | `execution_id`, `trace` |
 | `list_templates` | none | none | `templates` |
@@ -949,6 +963,10 @@ Tool contracts:
 | `reset` | `scope` | none | `scope`, `cleared` |
 
 `execute_strategy` selects the latest dry run for `plan_id` when `dry_run_id` is omitted. If no fresh dry run exists, it returns `error_code: "dry_run_required"`. `resume_execution` is valid only while the stored execution state is `suspended_gate`.
+
+`get_execution_trace` may be called while the execution is still `running` or `suspended_gate`; the trace includes the `partial_result` events recorded so far (Appendix G.7).
+
+`get_record` derives the namespace from the ID prefix per Appendix A.6. `call_` and `gate_` IDs do not name stored records; `get_record` returns `error_code: "no_stored_record"` for them.
 
 Constructors:
 
@@ -968,7 +986,17 @@ PyExecSandbox(python_bin: str = "python3")
 GateManager()
 CheckpointManager(store: Store)
 TraceStore(store: Store)
-Executor(...)
+Executor(
+    store: Store,
+    runtime: RacketRuntime,
+    provider: LLMProvider,
+    cache: LLMCache,
+    budget: BudgetMonitor,
+    gates: GateManager,
+    checkpoints: CheckpointManager,
+    traces: TraceStore,
+    py_exec: PyExecSandbox,
+)
 ChainExecutor(executor: Executor, store: Store)
 ```
 
@@ -1158,6 +1186,7 @@ Tests:
 - gate suspend/resume;
 - gate timeout failure;
 - checkpoint record written;
+- partial-result events appear in the trace of a still-running execution;
 - host-counted calls reconcile with runtime stats.
 
 ### Batch 8: Chain Executor
