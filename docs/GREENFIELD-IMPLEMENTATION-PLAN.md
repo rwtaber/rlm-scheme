@@ -67,7 +67,7 @@ The expected capability gain comes from better computation structure, not from a
 Python host
   MCP server
   Store / ContextStore
-  TypeRegistry / ModelRegistry
+  ModelRegistry
   CombinatorRegistry / TemplateRegistry
   Planner / CostAnalyzer / VerificationEngine
   LLM providers / cache / budget monitor
@@ -92,7 +92,7 @@ Racket owns typed functional control flow. It evaluates a prebuilt combinator pr
 `load_context` stores the input outside the model window:
 
 ```text
-ctx_... -> ContextRecord(data, metadata, semantic_type)
+ctx_... -> ContextRecord(data, metadata, schema)
 ```
 
 The runtime can access context slices symbolically through primitives such as `peek`, `slice`, `split`, and `context-items`. Only bounded subprompts are sent to the LLM.
@@ -139,15 +139,16 @@ The planner classifies:
 
 - task kind;
 - structural data shape;
-- semantic input type;
-- requested output type;
-- whether the input fits in the selected model window.
+- requested output schema;
+- whether the input fits the selected model's **reliable-input budget** `K` (not its raw context window `W`).
 
-Task detection **[SHOULD]** be deterministic from hints and metadata. If hints are insufficient, the planner **[MAY]** use a single bounded model call to choose from a fixed menu.
+The planner reads structure cheaply through `peek` (§5.6) rather than ingesting the whole context, so task detection stays cheap even on inputs far larger than the window.
+
+Task detection **[SHOULD]** be deterministic from hints and metadata. If hints are insufficient, the planner **[MAY]** use at most one bounded model call to choose from a fixed menu, and the call is recorded.
 
 ### Phase 3: Direct Dispatch
 
-If the input fits the model window and the task does not require symbolic decomposition, the planner may choose a direct typed leaf call:
+If the input fits the reliable-input budget `K` and the task does not require symbolic decomposition, the planner may choose a direct typed leaf call:
 
 ```text
 direct_call : InputType -> OutputType
@@ -162,20 +163,20 @@ If the input does not fit, the planner constructs a recursive combinator program
 ```text
 solve(x):
   if size(x) <= leaf_threshold:
-    return leaf_call(x)
+    return leaf_call(x)            # neural work only at bounded leaves
   else:
     parts = split(x, split_factor)
-    kept = filter(parts)
+    kept = filter(parts)           # symbolic narrowing before any neural call
     partials = map(solve, kept)
-    return compose(partials)
+    return compose(partials)       # symbolic composition by default
 ```
 
 The planner chooses:
 
-- `split_factor`: number of chunks per recursive split;
-- `leaf_threshold_tokens`: maximum prompt size for a leaf call;
+- `split_factor` (`k`): chunks per split. The planner picks `k` to keep the composition tree shallow enough to satisfy the critical-path policy while keeping leaf parallelism wide; it does not default to a single magic number (§5.5).
+- `leaf_threshold_tokens` (`tau`): maximum prompt size for a leaf call, sized to the model's reliable-input budget `K`, not its raw window `W` (§5.5).
 - `max_depth`: maximum recursion depth;
-- `composition_operator`: how partials are reduced;
+- `composition_operator` (`compose`): how partials are reduced. The planner **[MUST]** prefer a symbolic operator (concat, merge, sum) and use a neural reduce only when composition genuinely requires understanding (§4.4);
 - `task_plan`: typed combinator expression.
 
 ### Phase 5: Dry Run
@@ -195,7 +196,7 @@ No live LLM call occurs during dry run.
 
 ### Phase 6: Verification
 
-Verification checks the artifact, types, effects, resource bounds, model aliases, policy, and dry-run freshness. A live execution may start only if verification decision is `pass`.
+Verification checks the artifact, boundary schemas, effects, resource bounds, model aliases, policy, and dry-run freshness. A live execution may start only if verification decision is `pass`.
 
 ### Phase 7: Single Live Execution
 
@@ -203,131 +204,50 @@ The runtime executes the prebuilt program once. There is no open-ended loop in w
 
 ---
 
-## 3. Typed Value System
+## 3. Typed Boundaries
 
-The type system is semantic and JSON-backed. It is not domain-specific to academic papers, legal documents, code, or finance.
+Typing in RLM-Scheme is structural, not a domain ontology. Following λ-RLM, "typed" means two things only:
 
-### 3.1 Type Registry
+1. **Parametric combinator typing.** Combinators carry type shapes (`Map : (A -> B) x List[A] -> List[B]`) so the planner can compose them without nonsense like reducing a non-list.
+2. **Per-boundary schema validation.** Every leaf call output and every chain-step output is validated against a declared JSON-schema before it may flow downstream.
 
-`config/types.json` defines semantic types:
+There is no required registry of named semantic types, no subtype lattice, and no declared-guarantee layer. Those were domain conveniences the paper does not need; they live in an optional domain pack (§3.4).
 
-```json
-{
-  "Text": {"schema": {"type": "string"}},
-  "TextDocument": {
-    "schema": {
-      "type": "object",
-      "required": ["id", "text"],
-      "properties": {
-        "id": {"type": "string"},
-        "text": {"type": "string"},
-        "metadata": {"type": "object"}
-      }
-    }
-  },
-  "DocumentList": {
-    "schema": {
-      "type": "array",
-      "items": {"$ref": "TextDocument"}
-    }
-  },
-  "Finding": {
-    "schema": {
-      "type": "object",
-      "required": ["finding", "source_id"],
-      "properties": {
-        "finding": {"type": "string"},
-        "source_id": {"type": "string"},
-        "evidence": {"type": "array", "items": {"$ref": "EvidenceSpan"}}
-      }
-    }
-  },
-  "FindingSet": {
-    "schema": {"type": "array", "items": {"$ref": "Finding"}}
-  },
-  "Report": {
-    "schema": {
-      "type": "object",
-      "required": ["summary"],
-      "properties": {"summary": {"type": "string"}}
-    }
-  }
-}
-```
+### 3.1 Output Schema Subset
 
-Required generic core types:
+A boundary schema is a JSON string containing a restricted JSON Schema object. Allowed keywords:
 
-- `Any`
-- `Text`
-- `TextDocument`
-- `DocumentList`
-- `Record`
-- `RecordList`
-- `Table`
-- `TableSet`
-- `Finding`
-- `FindingSet`
-- `Claim`
-- `ClaimSet`
-- `EvidenceSpan`
-- `Conflict`
-- `ConflictSet`
-- `Candidate`
-- `CandidateSet`
-- `RankedCandidateSet`
-- `ValidationResult`
-- `Report`
+- `type`: one of `string`, `number`, `integer`, `boolean`, `object`, `array`, `null`;
+- `properties`: object mapping property names to schemas;
+- `required`: array of property-name strings;
+- `items`: schema for array items;
+- `enum`: array of scalar values;
+- `additionalProperties`: boolean.
 
-Domain packs **[MAY]** add subtypes such as `AcademicPaper`, `Contract`, `SourceFile`, or `TransactionRecord`, but core planning **[MUST]** work without them.
+No other keywords are supported. A schema using an unsupported keyword fails `output_schema_valid`. The absence of a schema means the boundary is unconstrained (`Any`).
 
-### 3.2 Type Compatibility
+### 3.2 Boundary Compatibility
 
-Template and combinator composition uses:
+For a chain, adjacent steps compose when the producer's output schema is structurally compatible with the consumer's input schema:
 
-```text
-producer.output_type <= consumer.input_type
-```
+- the consumer input schema is absent (`Any`); or
+- the two schemas are structurally equal (same `type`, and for objects the producer's `required` properties cover the consumer's, and for arrays the `items` are compatible).
 
-Compatibility is valid when:
+There is no name-based subtyping. Compatibility is decided on schema shape alone (`chain_type_compatible`).
 
-- names are equal; or
-- the type registry declares a subtype relation; or
-- the consumer accepts `Any`.
+### 3.3 Output Validation
 
-There is no implicit compatibility between arbitrary JSON schemas.
-
-### 3.3 Guarantees
-
-Templates and combinator plans may declare runtime-checkable guarantees:
-
-- `schema-valid`
-- `preserves-source-id`
-- `evidence-required`
-- `one-output-per-input`
-- `order-preserving`
-- `deduplicated`
-- `conflicts-preserved`
-
-Guarantees become verification obligations when declared.
-
-Example:
-
-```racket
-(guarantees
-  (schema-valid)
-  (preserves-source-id)
-  (evidence-required))
-```
-
-### 3.4 Output Validation
-
-Every leaf call and every chain step **[MUST]** validate its output against the declared semantic output type before the value can flow to the next step.
+Every leaf call and every chain step **[MUST]** validate its output against its declared output schema before the value can flow to the next step. A boundary with no schema is not validated.
 
 Invalid output follows the active error policy:
 
 - `fail_fast`: fail the execution;
 - `skip_and_log`: record error and use `null`;
 - `retry_then_skip`: retry provider policy, then skip.
+
+### 3.4 Optional Domain Packs
+
+A deployment **[MAY]** ship a domain pack mapping named types (for example `TextDocument`, `Finding`, `Report`) to boundary schemas, purely as authoring shorthand: a slot or boundary may name a type and the loader expands it to the §3.1 schema. Core planning, dry run, verification, and execution **[MUST]** work with no domain pack present. Domain packs add no new verification checks and no new store namespace.
 
 ---
 
@@ -347,7 +267,7 @@ The runtime exposes a compact typed library:
 | `concat` | `List[Text] -> Text` | Join text values. |
 | `cross` | `List[A] x List[B] -> List[Pair[A,B]]` | Cartesian product. |
 | `leaf-call` | `BoundedPrompt -> TypedValue` | Invoke the LLM oracle. |
-| `validate` | `Type x Value -> ValidationResult` | Validate against semantic type. |
+| `validate` | `Schema x Value -> ValidationResult` | Validate against a boundary schema. |
 | `fix` | `(F -> F) -> F` | Tie bounded recursive programs. |
 
 The library may also provide pragmatic extensions:
@@ -387,6 +307,16 @@ All symbolic combinators **[MUST]** be total and deterministic over valid typed 
 
 The LLM is the only nondeterministic semantic oracle unless `py-exec` is explicitly allowed.
 
+### 4.4 Symbolic-First Composition
+
+This is the core efficiency principle of λ-RLM and the source of its largest measured wins: structural work that can be done symbolically **[MUST NOT]** be delegated to the model.
+
+- The planner **[MUST]** use deterministic combinators (`split`, `filter`, `concat`, `cross`, symbolic `reduce`) wherever the task permits, and emit `leaf-call` only at bounded leaves or where composition genuinely requires understanding.
+- `compose` **[MUST]** default to a symbolic operator. A neural reduce (an `llm-query` inside `tree-reduce`/`fold-sequential`) is used only when the task's composition step itself needs the model.
+- For search and retrieval, the planner **[MUST]** apply a symbolic `filter` to narrow candidates before any `leaf-call`. Filtering **[MAY]** use embeddings or lexical signals when available; both are optional and degrade to "keep all" as an upper bound.
+
+The practical effect: when composition is symbolic, total LLM calls collapse to the leaf count (§5.3), and quadratic structural tasks (for example all-pairs comparison via `cross`) cost no extra neural calls.
+
 ---
 
 ## 5. Recursive Executor
@@ -425,20 +355,24 @@ If the size-decrease check cannot be proven from the splitter, verification fail
 
 ### 5.3 Call Count Bound
 
-For a balanced recursive plan with branching factor `b`, input size `n`, and leaf threshold `tau`:
+For a balanced recursive plan with split factor `k`, input size `n`, and leaf threshold `tau`:
 
 ```text
-depth = ceil(log_b(ceil(n / tau)))
-leaf_calls <= b^depth
-internal_nodes <= (b^depth - 1) / (b - 1)
+depth      = ceil(log_k(ceil(n / tau)))
+leaf_calls = k^depth
+reduce_nodes = (k^depth - 1) / (k - 1)
 ```
 
-The dry run measures exact counts for the instantiated plan. The analyzer records both:
+The number of LLM calls depends on whether composition is symbolic (§4.4):
 
-- closed-form upper bound;
-- simulated exact count.
+```text
+llm_calls <= leaf_calls                         when compose is symbolic
+llm_calls <= leaf_calls + reduce_nodes          when compose is a neural reduce
+```
 
-Verification fails if simulated counts exceed closed-form bounds.
+λ-RLM's clean `N(n) = k^depth + 1` bound is the symbolic-composition case (the `+1` is the final reduce). A neural reduce adds one LLM call per internal node, which also makes `k` a latency lever: larger `k` gives a shallower, faster reduce tree (§5.5).
+
+The dry run measures exact counts for the instantiated plan. The analyzer records both the closed-form upper bound and the simulated exact count, split into leaf and reduce calls. Verification fails if simulated counts exceed the closed-form bound for the chosen composition kind.
 
 ### 5.4 Cost Bound
 
@@ -454,22 +388,39 @@ Total dry-run cost is the sum over simulated leaf calls. High estimate caps comp
 
 ### 5.5 Partition Planning
 
-The planner chooses `split_factor` and `leaf_threshold_tokens` to satisfy:
+The planner chooses `leaf_threshold_tokens` (`tau`) and `split_factor` (`k`) to satisfy:
 
-- every leaf fits the selected model window with margin;
+- every leaf fits the model's **reliable-input budget** `K` with margin;
 - estimated call count <= policy;
 - estimated cost <= policy;
 - estimated critical path <= policy;
 - recursion depth <= policy.
 
-The initial implementation **MAY** use bounded search over candidate split factors rather than a closed-form optimum. Candidate values:
+**Sizing `tau` to the reliability knee, not the window.** Context rot means accuracy decays well before the raw window `W` is full (λ-RLM, Definition 4). Each `ModelRegistryEntry` declares `reliable_input_tokens` (`K`), the input size beyond which the model's reliability degrades materially; `K <= context_window_tokens`. The planner sizes `tau` against `K`, not `W`:
 
 ```text
-split_factor in {2, 3, 4, 5, 8, 10}
-leaf_threshold_tokens in {0.4W, 0.6W, 0.8W}
+leaf_threshold_tokens (tau) in {0.5K, 0.7K, 0.9K}
 ```
 
-where `W` is the selected model context window.
+Sizing leaves to `K` keeps each leaf in the model's reliable regime; sizing them to `0.8W` would minimize call count at the cost of pushing every leaf into the rot zone.
+
+**Choosing `k`.** With symbolic composition, `k` barely affects total LLM calls (they equal the leaf count regardless), so the planner prefers a larger `k` to keep the tree shallow. With a neural reduce, `k` is a genuine tradeoff: larger `k` means a shallower, faster, but wider reduce tree, while smaller `k` means more, smaller reduce calls. The planner picks the largest `k` whose simulated critical path stays within `policy.max_critical_path`. The implementation **[MAY]** use bounded search over candidate split factors:
+
+```text
+split_factor (k) in {2, 3, 4, 5, 8, 10}
+```
+
+`k = 2` is cost-optimal only when composition is symbolic and latency is unconstrained (λ-RLM, Theorem 4); it is not a default for neural-reduce plans, where it maximizes reduce-call count and depth.
+
+### 5.6 Prompt-as-Environment Access
+
+The context lives outside the model window and is inspected, not ingested, during planning. The runtime exposes bounded read primitives so the planner and combinator program can work on inputs far larger than `W`:
+
+- `peek context-ref range`: read a bounded slice (size, head, structural sample) without sending the whole context to any model;
+- `slice` / `split`: produce bounded partitions for recursion;
+- `context-items`: enumerate items for `map`/`filter`.
+
+The planner **[MUST]** estimate input size `n` and structure via `peek`/metadata rather than by loading the full context into a prompt. Only the bounded leaves produced by `split` are ever sent to the model.
 
 ---
 
@@ -481,11 +432,10 @@ Templates are audited combinator programs. They are not arbitrary scripts and no
 
 One template may define:
 
-- semantic input type;
-- semantic output type;
+- input boundary schema (or optional named shorthand);
+- output boundary schema (or optional named shorthand);
 - task kinds;
 - required slots;
-- guarantees;
 - effect set;
 - resource law;
 - Racket combinator body.
@@ -510,7 +460,6 @@ Example:
     (model (type model-alias) (required #f) (default "quality_text_model"))
     (split_factor (type integer) (required #f) (default 4) (min 2) (max 10))
     (leaf_threshold_tokens (type integer) (required #f) (default 64000)))
-  (guarantees (schema-valid))
   (effects (LLM))
   (resource-law
     (leaf-calls "b^ceil(log_b(ceil(n/tau)))")
@@ -538,8 +487,7 @@ Artifact hash includes:
 - body hash;
 - metadata hash;
 - canonical slot values;
-- semantic input/output types;
-- declared guarantees;
+- input/output boundary schemas;
 - inferred effects.
 
 `artifact_id = "art_" + artifact_hash[:16]`.
@@ -556,9 +504,8 @@ Planner input:
 - task description;
 - hints;
 - context metadata;
-- requested output type;
+- requested output schema;
 - model registry;
-- type registry;
 - execution policy.
 
 ### 7.2 Task Kinds
@@ -582,7 +529,7 @@ Task kind selection is deterministic when hints are complete. If hints are incom
 
 ### 7.3 Plan Selection
 
-The planner chooses:
+The planner chooses, preferring symbolic combinators over neural calls wherever the task permits (§4.4):
 
 - direct leaf call when input fits;
 - recursive split-map-reduce for long-context summarise/aggregate;
@@ -593,10 +540,10 @@ The planner chooses:
 
 ### 7.4 Chain Typing
 
-For every adjacent pair:
+For every adjacent pair, the producer's output schema must be structurally compatible with the consumer's input schema (§3.2):
 
 ```text
-step_i.output_type <= step_{i+1}.input_type
+compatible(step_i.output_schema, step_{i+1}.input_schema)
 ```
 
 Verification fails if no compatibility relation exists.
@@ -607,7 +554,7 @@ Verification fails if no compatibility relation exists.
 
 - recommended plan;
 - alternatives with cost/latency/quality tradeoffs;
-- type flow;
+- schema flow;
 - estimated resource shape before full dry run when available.
 
 ---
@@ -633,8 +580,8 @@ class SimulatedCall(BaseModel):
     call_id: str
     node_id: str | None
     model: str
-    input_type: str
-    output_type: str
+    input_schema: dict[str, Any]
+    output_schema: dict[str, Any]
     instruction_chars: int
     input_chars: int
     max_tokens: int | None
@@ -654,7 +601,7 @@ Python computes call graph and cost from `calls`.
 
 Simulation is deterministic:
 
-- `leaf-call` records a `SimulatedCall` and returns a synthetic value of the declared output type;
+- `leaf-call` records a `SimulatedCall` and returns a synthetic value of the declared output schema;
 - `split` creates deterministic partitions;
 - `map` executes every item;
 - `filter` uses symbolic predicates when possible, otherwise keeps all items as an upper bound;
@@ -673,7 +620,7 @@ Before dry run, the registry checks:
 - body references only declared slots;
 - body uses only allowed combinators and pure forms;
 - inferred effects match declared effects;
-- semantic types exist;
+- declared boundary schemas are valid (§3.1);
 - resource-law syntax is valid.
 
 S-expression parsing and body analysis **MUST NOT** use regular expressions.
@@ -684,7 +631,7 @@ S-expression parsing and body analysis **MUST NOT** use regular expressions.
 
 Verification runs all checks and never short-circuits.
 
-Exactly 25 checks:
+Exactly 23 checks:
 
 | # | Name | Severity | Rule |
 |---|---|---|---|
@@ -692,27 +639,25 @@ Exactly 25 checks:
 | 2 | `artifact_hash` | fail | recomputed hash matches |
 | 3 | `template_known` | fail | template name/version exists |
 | 4 | `slot_schema` | fail | slots validate |
-| 5 | `types_exist` | fail | input/output semantic types exist |
-| 6 | `input_type_compatible` | fail | context value matches template input type |
-| 7 | `chain_type_compatible` | fail | adjacent chain types compose |
-| 8 | `guarantees_known` | fail | declared guarantees are known |
-| 9 | `effects_allowed` | fail | required effects allowed by policy |
-| 10 | `context_exists` | fail | context-ref slots resolve |
-| 11 | `model_aliases_resolve` | fail | model aliases exist |
-| 12 | `primitive_allowlist` | fail | body uses only allowed bindings |
-| 13 | `termination_bound` | fail | recursive plan has finite decreasing bound |
-| 14 | `call_count_limit` | fail | simulated calls <= policy |
-| 15 | `critical_path_limit` | warn | critical path <= policy |
-| 16 | `concurrency_limit` | fail | max concurrency <= policy |
-| 17 | `token_budget` | fail | estimated tokens <= policy |
-| 18 | `cost_budget` | fail | estimated high cost <= policy |
-| 19 | `recursion_depth_limit` | fail | simulated depth <= policy |
-| 20 | `dry_run_fresh` | fail | dry run artifact matches plan |
-| 21 | `output_schema_valid` | fail | output schema/type schema is valid |
-| 22 | `py_exec_policy` | fail | py-exec requires policy allow |
-| 23 | `llm_generated_code_absent` | fail | no generated control code path exists |
-| 24 | `checkpoint_writable` | warn | checkpoints namespace writable if used |
-| 25 | `resource_law_respected` | fail | simulated stats do not exceed declared law |
+| 5 | `input_type_compatible` | fail | context value matches template input schema (structural) |
+| 6 | `chain_type_compatible` | fail | adjacent chain output/input schemas compose (structural) |
+| 7 | `effects_allowed` | fail | required effects allowed by policy |
+| 8 | `context_exists` | fail | context-ref slots resolve |
+| 9 | `model_aliases_resolve` | fail | model aliases exist |
+| 10 | `primitive_allowlist` | fail | body uses only allowed bindings |
+| 11 | `termination_bound` | fail | recursive plan has finite decreasing bound |
+| 12 | `call_count_limit` | fail | simulated calls <= policy |
+| 13 | `critical_path_limit` | warn | critical path <= policy |
+| 14 | `concurrency_limit` | fail | max concurrency <= policy |
+| 15 | `token_budget` | fail | estimated tokens <= policy |
+| 16 | `cost_budget` | fail | estimated high cost <= policy |
+| 17 | `recursion_depth_limit` | fail | simulated depth <= policy |
+| 18 | `dry_run_fresh` | fail | dry run artifact matches plan |
+| 19 | `output_schema_valid` | fail | declared boundary schema is valid |
+| 20 | `py_exec_policy` | fail | py-exec requires policy allow |
+| 21 | `llm_generated_code_absent` | fail | no generated control code path exists |
+| 22 | `checkpoint_writable` | warn | checkpoints namespace writable if used |
+| 23 | `resource_law_respected` | fail | simulated stats do not exceed declared law |
 
 Policy defaults:
 
@@ -749,7 +694,6 @@ JSON Lines over stdin/stdout.
   "program": "(combinator-program ...)",
   "slot_values": {},
   "contexts": {"ctx_9f8e7d6c5b4a3210": []},
-  "types": {},
   "limits": {"max_recursion_depth": 5}
 }
 ```
@@ -759,7 +703,7 @@ JSON Lines over stdin/stdout.
 Live effect requests:
 
 ```json
-{"type":"llm_call","id":"call_001a2b3c4d5e6f70","node_id":"leaf","input_type":"Text","output_type":"FindingSet","instruction":"...","input":"...","model":"fast_text_model","temperature":0,"json":true,"max_tokens":null}
+{"type":"llm_call","id":"call_001a2b3c4d5e6f70","node_id":"leaf","output_schema":{"type":"object"},"instruction":"...","input":"...","model":"fast_text_model","temperature":0,"json":true,"max_tokens":null}
 {"type":"py_exec","id":"call_111a2b3c4d5e6f70","code":"...","input":{},"allowed_imports":["json"],"timeout_seconds":30}
 {"type":"checkpoint","id":"ckpt_77a8b9c0d1e2f300","node_id":"reduce","data":{}}
 {"type":"gate","id":"gate_77a8b9c0d1e2f300","label":"review","payload":{}}
@@ -823,7 +767,6 @@ Store namespaces:
 - `cache`
 - `checkpoints`
 - `traces`
-- `types`
 
 Gates are in-memory only and are not resumable after process death.
 
@@ -838,23 +781,17 @@ class ContextRecord(BaseModel):
     context_id: str
     data: Any
     data_shape: str
-    semantic_type: str
+    schema: dict[str, Any] = {}
     metadata: dict[str, Any]
     created_at: float
-
-class SemanticType(BaseModel):
-    name: str
-    schema: dict[str, Any]
-    extends: list[str] = []
 
 class TemplateMeta(BaseModel):
     name: str
     version: str
     task_kinds: list[str]
-    input_type: str
-    output_type: str
+    input_schema: dict[str, Any] = {}
+    output_schema: dict[str, Any] = {}
     slots: dict[str, Any]
-    guarantees: list[str] = []
     effects: list[str] = []
     resource_law: dict[str, str] = {}
 
@@ -862,10 +799,10 @@ class PlanRecord(BaseModel):
     plan_id: str
     context_id: str
     task: str
-    input_type: str
-    output_type: str
+    input_schema: dict[str, Any] = {}
+    output_schema: dict[str, Any] = {}
     program_ref: str
-    type_flow: list[tuple[str, str]]
+    schema_flow: list[tuple[dict[str, Any], dict[str, Any]]]
     planner_parameters: dict[str, Any]
     alternatives: list[dict[str, Any]] = []
     created_at: float
@@ -876,10 +813,9 @@ class ArtifactRecord(BaseModel):
     program_hash: str
     metadata_hash: str
     slot_values: dict[str, Any]
-    input_type: str
-    output_type: str
+    input_schema: dict[str, Any] = {}
+    output_schema: dict[str, Any] = {}
     effects: list[str]
-    guarantees: list[str]
 
 class DryRunRecord(BaseModel):
     dry_run_id: str
@@ -915,14 +851,13 @@ Components:
 
 ```python
 Store(root: Path)
-TypeRegistry(config_path: Path)
 ModelRegistry(config_path: Path)
-ContextStore(store: Store, types: TypeRegistry)
+ContextStore(store: Store)
 CombinatorRegistry(runtime_dir: Path)
-TemplateRegistry(template_dir: Path, types: TypeRegistry, models: ModelRegistry)
-Planner(types: TypeRegistry, templates: TemplateRegistry, models: ModelRegistry)
+TemplateRegistry(template_dir: Path, models: ModelRegistry)
+Planner(templates: TemplateRegistry, models: ModelRegistry)
 CostAnalyzer(models: ModelRegistry)
-VerificationEngine(store: Store, types: TypeRegistry, templates: TemplateRegistry)
+VerificationEngine(store: Store, templates: TemplateRegistry)
 RacketRuntime(runtime_dir: Path)
 DryRunner(store: Store, runtime: RacketRuntime, cost: CostAnalyzer)
 Executor(...)
@@ -942,13 +877,11 @@ Files:
 - `rlm_scheme/models.py`
 - `rlm_scheme/store.py`
 - `config/models.json`
-- `config/types.json`
 
 Acceptance:
 
 - ID grammar tests;
 - store namespace tests;
-- type registry loads core types;
 - model registry loads required aliases.
 
 ### Batch 1: S-Expressions and Template Registry
@@ -966,19 +899,19 @@ Acceptance:
 - type/effect/resource metadata validation;
 - template body allowlist tests.
 
-### Batch 2: Type System and Contexts
+### Batch 2: Boundary Schemas and Contexts
 
 Files:
 
-- `rlm_scheme/types.py`
+- `rlm_scheme/schema.py`
 - `rlm_scheme/context_store.py`
 
 Acceptance:
 
-- semantic type validation;
-- subtype compatibility;
-- context loading with semantic type;
-- `DocumentList`, `RecordList`, `FindingSet`, and `Report` fixtures.
+- boundary schema validation (§3.1);
+- structural schema compatibility (§3.2);
+- context loading with boundary schema;
+- restricted JSON Schema fixtures (object, array, enum).
 
 ### Batch 3: Planner
 
@@ -992,7 +925,7 @@ Acceptance:
 - direct plan when input fits;
 - recursive plan when input exceeds window;
 - split-factor bounded search;
-- type-flow construction;
+- schema-flow construction;
 - alternatives include tradeoffs.
 
 ### Batch 4: Racket Runtime
@@ -1098,15 +1031,18 @@ Acceptance:
 The implementation is done when:
 
 1. All batch tests pass.
-2. Core semantic types load and validate fixtures.
+2. Boundary schemas validate fixtures (§3.1, §3.2).
 3. A direct plan executes end to end.
 4. A recursive long-context plan executes end to end.
 5. Dry-run measured calls match live host-counted calls.
 6. Closed-form bounds are recorded and enforced for recursive plans.
-7. Chain type compatibility is enforced.
+7. Chain schema compatibility is enforced.
 8. No live LLM call occurs before passing verification.
 9. Racket sandbox escape tests fail.
 10. No S-expression parsing or body analysis uses regex.
 11. MCP exposes exactly 10 tools.
-12. `SPEC-DEVIATIONS.md` is empty or reviewed.
+12. Verification runs exactly 23 checks and never short-circuits.
+13. Symbolic-first composition is the planner default; symbolic-composed plans collapse LLM calls to the leaf count.
+14. Leaf threshold `tau` is sized to the model's reliable-input budget `K`, not its raw window `W`.
+15. `SPEC-DEVIATIONS.md` is empty or reviewed.
 
