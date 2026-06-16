@@ -17,6 +17,83 @@ This design is intentionally narrower than a general agent framework. It is a ru
 
 ---
 
+## Orientation (Plain-Language, Non-Normative)
+
+This section is a conceptual map for a reader with a general computer-science background and no LLM-specific experience. Sections 0–15 are the normative specification; this one only builds intuition and may be skipped by an implementer.
+
+### The one-line idea
+
+RLM-Scheme is **a query planner for LLM calls.** Instead of handing a giant prompt to a language model and hoping, it compiles a task into a typed, deterministic dataflow program, proves resource bounds on it, and only then runs it — invoking the model only at the leaves.
+
+### The problem, in CS terms
+
+A language model has a fixed **context window**: the maximum input it can read at once — a hard `MAX_INPUT` on a function `model : String -> String`. Two failure modes follow. First, data larger than the window is truncated. Second, and subtler, accuracy decays *before* the window is full — "**context rot**." The function is defined up to `W` tokens but only *reliable* up to some smaller `K`. `K`, not `W`, is the real budget.
+
+The popular fix ("recursive language models") lets the model write and run its own control code in a REPL to chop the data up. That is `eval()` on stochastic output: it may not parse, may not terminate, may cost anything — properties no compiler author would accept.
+
+### The core move
+
+Keep the safe half, delete the dangerous half.
+
+- **Safe half — "prompt as environment":** the data lives *outside* the model, in a store the host owns. The program *inspects* it through bounded reads (`peek`, `slice`, `split`) rather than swallowing it whole — an external data source behind a cursor, not an in-memory blob.
+- **Deleted half — model-authored control flow.** Orchestration is a **fixed combinator program**: `map`, `filter`, `reduce`, `concat`, `cross`, `split`, and a recursion operator `fix`. The model appears as exactly one primitive:
+
+  ```text
+  M : BoundedPrompt -> TypedValue        -- the "leaf oracle"
+  ```
+
+So the system is **an interpreter whose only impure, nondeterministic primitive is the model**, and that primitive is only ever called on inputs small enough to be reliable. Everything else is total and deterministic.
+
+### The lifecycle: EXPLAIN before you run
+
+Like a database that shows a query plan and cost estimate before executing:
+
+```text
+load_context -> plan -> dry_run -> verify -> execute
+```
+
+- **plan** — a *deterministic* planner turns the task into a combinator AST. A strong model may make *one* bounded call to pick a strategy from a fixed menu, but it never writes the code.
+- **dry_run** — the program runs in **simulate mode**: every `leaf-call` returns a synthetic typed value instead of hitting the model. This yields exact call counts, a cost range, recursion depth, and a wall-clock estimate with *zero* live calls. It is symbolic execution for resource accounting.
+- **verify** — 24 static checks (termination, budgets, schema compatibility, "no model-generated code exists," …). **No live call is permitted until verification passes** — the type-checker, linter, and budget gate combined.
+- **execute** — run the verified plan exactly once.
+
+### Recursion as divide-and-conquer with a cost algebra
+
+The recursive skeleton is the one you would write for merge sort:
+
+```text
+solve(x) = leaf_call(x)                              if size(x) <= tau
+         = compose(map(solve, filter(split(x, k))))  otherwise
+```
+
+Because the shape is fixed, the plan has **closed-form bounds** — depth `ceil(log_k(n/tau))`, leaf calls `k^depth` — checked against simulation, like applying the master theorem and then verifying it empirically. Two parameters carry the insight: **`tau`** (leaf threshold) is sized to the reliable budget **`K`, not the window `W`**, keeping every leaf in the trustworthy regime; **`k`** (split factor) is chosen against the critical path, not a magic constant.
+
+### The principle that does the heavy lifting
+
+**Symbolic-first composition:** never ask the model to do what ordinary code can do. Joining results is `concat`, not a model call; all-pairs comparison is a `cross` product, not O(n²) model calls. When composition is symbolic, total model calls collapse to just the leaf count — the difference between an O(n) plan and an O(n log n) plan multiplied by a very expensive constant.
+
+### Types as schema validation at boundaries
+
+No grand ontology — two things only. Combinators carry type *shapes* (you cannot `reduce` a non-list), and every value crossing a boundary is validated against a small JSON-Schema subset. A malformed model output is caught *at the edge* and handled by an error policy (fail / skip / retry / escalate) before it corrupts downstream state. Structural typing, decided on shape; no nominal subtyping.
+
+### Architecture and the multi-tier model
+
+Two processes: a **Python host** (owns state, money, providers, persistence, the MCP tool API) and a **Racket subprocess** (the pure, sandboxed combinator evaluator, fed only bounded slices over JSON-Lines). The Racket side never sees the full data and never performs effects directly — it *requests* them and the host decides. Capability-style isolation.
+
+Execution is explicitly **heterogeneous and multi-tier**:
+
+- **Tier 0** — a frontier model (e.g. a Happy/Claude session) authors the plan through the tool API.
+- **Tier 1** — the deterministic combinator engine; no model at all.
+- **Tier 2** — cheap **local models** doing the grunt-work leaves.
+
+The cost model is two-currency: Tier-0 calls cost *dollars* but are fast and parallel; Tier-2 calls on a single GPU cost ~nothing but are *serial*, so fan-out is a queue and **wall-clock**, not money, binds. The model registry encodes each model's `K`, throughput, concurrency, `device_group` (GPU residency, so swaps are penalized), and a `fallback_alias` so a weak local leaf that fails validation can **escalate** to the strong model rather than routing every leaf there.
+
+### In one breath
+
+Take the reliability and cost-predictability of a compiled, type-checked, resource-bounded dataflow program, and use a language model only as a sandboxed leaf primitive on inputs small enough to trust.
+
+---
+
 ## 0. Motivation and Scope
 
 ### 0.1 Problem
@@ -95,7 +172,7 @@ Racket owns typed functional control flow. It evaluates a prebuilt combinator pr
 ctx_... -> ContextRecord(data, metadata, schema)
 ```
 
-The runtime can access context slices symbolically through primitives such as `peek`, `slice`, `split`, and `context-items`. Only bounded subprompts are sent to the LLM.
+Python remains the sole owner of context bytes. The Racket runtime never receives the full context. It reads bounded slices on demand through context-read primitives (`peek`, `slice`, `context-items`), which are issued as effect requests to Python (§10.3) and answered with bounded slices only. `split` then partitions already-materialized bounded values. Only bounded subprompts are sent to the LLM, and only bounded slices ever cross the pipe to Racket.
 
 ### 1.3 Leaf Oracle
 
@@ -112,6 +189,16 @@ Every live LLM call **[MUST]** satisfy:
 - call is counted against budget;
 - call is recorded in the trace;
 - call is served only after verification passes.
+
+### 1.4 Orchestration Tiers
+
+RLM-Scheme is built to run across heterogeneous models without embedding any of them as the orchestrator. Three tiers cooperate:
+
+- **Tier 0 — caller (a coding agent over MCP, e.g. a Happy/Claude session).** A strong model authors intent: it calls `plan_strategy` (filling slot values such as `leaf_instruction` and `compose_instruction`), inspects dry-run estimates and traces, and decides whether to execute. It never writes control code; it parameterizes audited templates. This is the only place a frontier model is required.
+- **Tier 1 — combinator engine (no model).** Deterministic split/filter/map/reduce/cross plus bounds. This is where orchestration actually happens.
+- **Tier 2 — leaf models.** Bounded `leaf-call` oracles, which **[MAY]** be cheap models on constrained local hardware (e.g. a single 24 GB GPU). Multiple leaf models and an orchestrator-tier model can coexist; each is a `ModelRegistryEntry` (§13) with its own window `W`, reliability knee `K`, throughput, concurrency, device group, and fallback.
+
+A model's tier is not hardcoded; it follows from how the planner assigns aliases to nodes. The same alias machinery lets the planner route grunt-work leaves to a local model while reserving an orchestrator-tier model for plan authoring, neural reduce that genuinely needs reasoning, and escalations (§3.3). The single-device economics that make Tier 2 behave very differently from a remote API are specified in §5.7.
 
 ---
 
@@ -131,7 +218,7 @@ Internally, execution follows seven phases.
 
 ### Phase 1: Environment Initialization
 
-The host stores input data and metadata as a context record. The Racket runtime receives context data only when evaluating a dry run or live execution.
+The host stores input data and metadata as a context record. The Racket runtime never receives the full context; during a dry run or live execution it requests bounded slices through context-read effects (§10.3), and Python answers from the `ContextStore`.
 
 ### Phase 2: Task Detection
 
@@ -190,6 +277,7 @@ Dry run evaluates the exact combinator program in simulate mode. It returns:
 - cost range;
 - max concurrency;
 - critical path;
+- wall-clock estimate (single-device-aware, §5.7);
 - recursion depth.
 
 No live LLM call occurs during dry run.
@@ -243,7 +331,10 @@ Invalid output follows the active error policy:
 
 - `fail_fast`: fail the execution;
 - `skip_and_log`: record error and use `null`;
-- `retry_then_skip`: retry provider policy, then skip.
+- `retry_then_skip`: retry provider policy, then skip;
+- `retry_then_escalate`: retry on the same model, then re-issue the call on that model's `fallback_alias` (§13) — typically a stronger orchestrator-tier model — then skip if still invalid. Escalation calls are counted and recorded like any other leaf call; a model with no `fallback_alias` degrades this policy to `retry_then_skip`.
+
+`retry_then_escalate` is the intended policy for cheap local leaf models: weak models fail schema validation far more often than frontier models, and a one-shot escalation recovers the leaf without sending every leaf to the expensive tier.
 
 ### 3.4 Optional Domain Packs
 
@@ -259,8 +350,10 @@ The runtime exposes a compact typed library:
 
 | Combinator | Type Shape | Meaning |
 |---|---|---|
-| `split` | `A -> List[A]` | Partition a value into bounded parts. |
-| `peek` | `ContextRef x Range -> Text` | Read a bounded slice from context. |
+| `split` | `A -> List[A]` | Partition an in-memory value into bounded parts (symbolic). |
+| `peek` | `ContextRef x Range -> Text` | Sample a bounded slice (size, head, structural sample) for inspection (effect: `CONTEXT_READ`). |
+| `slice` | `ContextRef x Range -> Text` | Extract a bounded contiguous range from context for processing (effect: `CONTEXT_READ`). |
+| `context-items` | `ContextRef -> List[ItemRef]` | Enumerate context items for `map`/`filter` (effect: `CONTEXT_READ`). |
 | `map` | `(A -> B) x List[A] -> List[B]` | Apply a function to each item. |
 | `filter` | `(A -> Bool) x List[A] -> List[A]` | Keep selected items. |
 | `reduce` | `(B x B -> B) x List[B] -> B` | Combine values. |
@@ -275,6 +368,8 @@ The library may also provide pragmatic extensions:
 - `map-async`
 - `tree-reduce`
 - `fold-sequential`
+- `iterate` (bounded refine/validate loop; runs at most a declared max iterations)
+- `memoized` (canonical-call deduplication; repeated identical calls count once)
 - `race`
 - `checkpoint`
 - `gate`
@@ -288,10 +383,13 @@ These extensions **[MUST]** be declared as effects where applicable.
 Effects are explicit:
 
 - `LLM`
+- `CONTEXT_READ`
 - `PY_EXEC`
 - `CHECKPOINT`
 - `GATE`
 - `PARTIAL_RESULT`
+
+`CONTEXT_READ` is the bounded context-slice effect (`peek`, `slice`, `context-items`); it reads from Python's `ContextStore` and returns only bounded slices, never the whole context.
 
 Every template or plan has an inferred effect set from its body. Verification checks:
 
@@ -349,9 +447,10 @@ A recursive plan is valid only if:
 - `leaf_threshold_tokens > 0`;
 - every split child has strictly smaller estimated size than its parent when parent size exceeds threshold;
 - `max_depth` is finite;
-- simulated `recursive_depth <= policy.max_recursion_depth`.
+- simulated `recursive_depth <= policy.max_recursion_depth`;
+- every `iterate` node declares a finite `max_iterations`, and its simulated iteration count does not exceed it.
 
-If the size-decrease check cannot be proven from the splitter, verification fails.
+If the size-decrease check cannot be proven from the splitter, verification fails. `iterate` loops terminate by their declared iteration cap rather than a size-decrease argument; `termination_bound` (check 11) enforces both the `fix`/split-decrease conditions above and the presence of a finite `max_iterations` on every `iterate` node.
 
 ### 5.3 Call Count Bound
 
@@ -384,7 +483,7 @@ completion_tokens(call) = max_tokens or model.default_completion_estimate
 cost(call) = prompt_tokens * input_rate + completion_tokens * output_rate
 ```
 
-Total dry-run cost is the sum over simulated leaf calls. High estimate caps completion at `model.max_output_tokens`.
+Total dry-run cost is the sum over simulated leaf calls. The **low** estimate assumes no escalation. The **high** estimate caps completion at `model.max_output_tokens` and adds the `retry_then_escalate` worst case: one fallback call per leaf using that policy, priced at the leaf model's `fallback_alias` rates (§3.3). The high estimate is therefore a true upper bound — `cost_budget` (check 16) and `call_count_limit` (check 12) are enforced against it, so escalation to the orchestrator tier cannot silently blow a passing budget at runtime.
 
 ### 5.5 Partition Planning
 
@@ -402,7 +501,7 @@ The planner chooses `leaf_threshold_tokens` (`tau`) and `split_factor` (`k`) to 
 leaf_threshold_tokens (tau) in {0.5K, 0.7K, 0.9K}
 ```
 
-Sizing leaves to `K` keeps each leaf in the model's reliable regime; sizing them to `0.8W` would minimize call count at the cost of pushing every leaf into the rot zone.
+Sizing leaves to `K` keeps each leaf in the model's reliable regime; sizing them to `0.8W` would minimize call count at the cost of pushing every leaf into the rot zone. A template-declared `leaf_threshold_tokens` default (for example the `64000` in §6.2) is only an upper fallback; the planner **[MUST]** clamp the effective `tau` to the selected model's `K`, so the same template behaves correctly whether the assigned leaf model is a 200k-window frontier model or a quantized local model with a few-thousand-token reliable budget.
 
 **Choosing `k`.** With symbolic composition, `k` barely affects total LLM calls (they equal the leaf count regardless), so the planner prefers a larger `k` to keep the tree shallow. With a neural reduce, `k` is a genuine tradeoff: larger `k` means a shallower, faster, but wider reduce tree, while smaller `k` means more, smaller reduce calls. The planner picks the largest `k` whose simulated critical path stays within `policy.max_critical_path`. The implementation **[MAY]** use bounded search over candidate split factors:
 
@@ -414,13 +513,38 @@ split_factor (k) in {2, 3, 4, 5, 8, 10}
 
 ### 5.6 Prompt-as-Environment Access
 
-The context lives outside the model window and is inspected, not ingested, during planning. The runtime exposes bounded read primitives so the planner and combinator program can work on inputs far larger than `W`:
+The context lives outside the model window in Python's `ContextStore` and is inspected, not ingested. There are two readers, sharing the same bounded-slice semantics but operating in different processes:
 
-- `peek context-ref range`: read a bounded slice (size, head, structural sample) without sending the whole context to any model;
-- `slice` / `split`: produce bounded partitions for recursion;
-- `context-items`: enumerate items for `map`/`filter`.
+- **Planner probe (Python).** During planning (Phase 2), the planner inspects the `ContextStore` directly — record metadata plus bounded `peek` reads — to estimate input size `n` and structure. This needs no Racket run.
+- **Runtime context-read effects (Racket).** During dry run and live execution, the combinator program issues `peek` / `slice` / `context-items` as `CONTEXT_READ` effect requests (§10.3); Python answers each from the `ContextStore` with a bounded slice. The full context is never serialized into the run message or held in Racket memory.
 
-The planner **[MUST]** estimate input size `n` and structure via `peek`/metadata rather than by loading the full context into a prompt. Only the bounded leaves produced by `split` are ever sent to the model.
+`split` then partitions the bounded values returned by these reads. The planner **[MUST]** estimate `n` and structure via the planner probe rather than by loading the full context into a prompt. Only the bounded leaves produced by `split` are ever sent to the model, and only bounded slices ever cross the pipe to Racket.
+
+### 5.7 Heterogeneous Models and Single-Device Execution
+
+The §5.3 call-count bound assumes every LLM call is equivalent. That is true for cost accounting against a remote API with effectively unbounded parallelism, but false when leaves run on a constrained local device (the Tier-2 case, §1.4). A single 24 GB GPU serves leaves *serially* (or in a small fixed batch), so "fan out" produces a queue, not parallelism, and wall-clock — not dollars — becomes the binding constraint.
+
+**Per-model concurrency.** Each `ModelRegistryEntry` declares `max_concurrency` (the effective parallel in-flight calls for that model: a single-GPU local model is typically `1`, a small server batch `2`–`8`, a remote API large). The effective concurrency of a node is `min(node_model.max_concurrency, policy.max_concurrency)`. The simulator and executor schedule per model, not globally.
+
+**Wall-clock estimate.** For each model `m`, with throughput `R_m = throughput_tokens_per_sec`:
+
+```text
+per_call_seconds(call, m)  = (prompt_tokens(call) + completion_tokens(call)) / R_m
+stage_seconds(level, m)    = ceil(calls_on_m(level) / m.max_concurrency)
+                             * mean(per_call_seconds(., m))
+wall_clock_estimate        = sum over critical-path levels of max_m stage_seconds(level, m)
+                             + device-swap penalties
+```
+
+**Device-swap penalty.** Models that share a `device_group` (one physical GPU holds one resident model at a time) cannot both be hot. When consecutive stages on the same `device_group` use different models, add `load_latency_seconds` for the model being swapped in. A plan that alternates between two local leaf models on one card pays this repeatedly; the planner **[SHOULD]** prefer assigning one leaf model per `device_group` per plan, or batch all calls to a model before switching.
+
+**Two-tier objective.** Tier-0 (orchestrator) calls are expensive in dollars but fast and parallel; Tier-2 (local leaf) calls are near-zero dollars but throughput-bound and serial. The planner's objective is therefore to **minimize orchestrator-tier dollar cost and total wall-clock**, not raw call count. Concretely, the planner **[SHOULD]**:
+
+- push grunt-work leaves to a local leaf model (cheap, slow) and reserve the orchestrator-tier model for plan authoring, genuinely-neural reduce, and `retry_then_escalate` fallbacks;
+- prefer symbolic composition (§4.4) so a slow local tier is never multiplied by neural reduce nodes;
+- choose `k` against the wall-clock model above rather than the unconstrained-latency Theorem-4 optimum, because on a serial device a wider split does not add parallelism — it just enlarges each stage's queue.
+
+These quantities are simulated in dry run (§8) and bounded in verification (`concurrency_limit`, `wall_clock_limit`; §9).
 
 ---
 
@@ -462,8 +586,8 @@ Example:
     (leaf_threshold_tokens (type integer) (required #f) (default 64000)))
   (effects (LLM))
   (resource-law
-    (leaf-calls "b^ceil(log_b(ceil(n/tau)))")
-    (critical-path "ceil(log_b(ceil(n/tau))) + 1")))
+    (leaf-calls "k^ceil(log_k(ceil(n/tau)))")
+    (critical-path "ceil(log_k(ceil(n/tau))) + 1")))
 ```
 
 Every remaining top-level form is the body.
@@ -495,6 +619,39 @@ Artifact hash includes:
 ---
 
 ## 7. Planner
+
+### 7.0 How the Planner Works (Orientation, Non-Normative)
+
+The planner is the system's **query optimizer**: it turns a task plus statistics about the data into a costed, typed execution plan. It is itself deterministic and offline — it emits a plan and runs nothing live.
+
+**It reasons over statistics, not data.** Like a database optimizer that plans from table cardinalities and histograms rather than the rows themselves, the planner never holds the context. Its entire working state is:
+
+- a context *handle* plus metadata (`n` = estimated size, data shape, item count), obtained by the planner probe (§5.6) — bounded `peek` reads, never the whole input;
+- the task description and any hints;
+- the requested output schema;
+- the model registry — per alias: window `W`, reliable budget `K`, throughput, concurrency, device group, and price;
+- the policy budgets (calls, cost, recursion depth, wall-clock).
+
+From that state it builds a plan in four moves:
+
+**1. Classify — pick the algorithm.** Map the task to one of a fixed catalog of *task kinds* (§7.2), the way an optimizer picks hash- vs merge-join from a fixed set. Deterministic when hints suffice; at most one bounded model call breaks ties, and that call is recorded.
+
+**2. Select a skeleton — pick the plan shape.** Each task kind maps to a combinator skeleton (§7.3): a direct leaf for small inputs, recursive split-map-reduce for long-context aggregation, filter-before-leaf for search, `cross` + bounded classify for all-pairs, or an explicit typed chain when several transforms compose. This is plan enumeration over a small audited template catalog — not free-form code generation.
+
+**3. Cost and tune — the optimization.** This is the heart of the planner, and it is pure arithmetic over the statistics above:
+
+- size the leaf threshold `tau` to the leaf model's reliable budget `K`, not its window `W` (§5.5);
+- choose the split factor `k` by bounded search, costing each candidate's depth, call count, and — decisively — its single-device wall-clock and dollar cost (§5.3, §5.7);
+- decide symbolic-vs-neural for every composition step, defaulting to symbolic (§4.4);
+- assign each node a model alias — grunt-work leaves to the cheap local tier, plan authoring / neural reduce / escalation to the strong tier (§1.4).
+
+The objective is not "fewest calls" but "least dollar cost and wall-clock within policy." Candidates that bust a budget are discarded here, before any simulation.
+
+**4. Thread the types — check the dataflow.** Walk the chain and require each step's output schema to be structurally compatible with the next step's input schema (§3.2, §7.4) — ordinary type-checking of the pipeline. The resulting `schema_flow` is recorded.
+
+**The output is an EXPLAIN, not a result.** `plan_strategy` returns a recommended `PlanRecord` plus *alternatives* annotated with cost/latency/quality tradeoffs (§7.5), so the Tier-0 caller can choose. The chosen parameters (`k`, `tau`, `compose`, per-node model) live in `planner_parameters`; the record references an immutable program but holds no data and triggers no live call. Because the planner is deterministic and its artifact is content-addressed (§6.4), identical inputs always yield an identical plan — the property that makes dry-run estimates trustworthy and executions reproducible.
+
+What the planner deliberately does **not** hold: any context bytes, any intermediate results, any live model output. Its state is candidate plans and the statistics it costed them with — which is exactly why it can plan over inputs far larger than any window.
 
 ### 7.1 Inputs
 
@@ -574,7 +731,11 @@ class SimulationStats(BaseModel):
     checkpoints: int
     python_phases: int
     gates: int
+    context_reads: int
     calls_by_model: dict[str, int]
+    concurrency_by_model: dict[str, int]      # effective per-model parallelism (§5.7)
+    wall_clock_seconds_estimate: float        # single-device-aware latency (§5.7)
+    escalation_upper_bound_calls: int         # worst-case retry_then_escalate fallbacks (§8.2)
 
 class SimulatedCall(BaseModel):
     call_id: str
@@ -587,7 +748,19 @@ class SimulatedCall(BaseModel):
     max_tokens: int | None
     json_mode: bool
     depth: int
+
+class CostEstimate(BaseModel):
+    prompt_tokens: int
+    completion_tokens_low: int
+    completion_tokens_high: int
+    cost_usd_low: float                        # no escalation
+    cost_usd_high: float                       # includes escalation worst case (§5.4)
+    escalation_calls_high: int                 # == SimulationStats.escalation_upper_bound_calls
+    calls_high: int                            # SimulationStats.llm_calls + escalation_calls_high
+    calls_by_model: dict[str, int]
 ```
+
+`CostEstimate` is computed by `CostAnalyzer` from the simulated `calls` (§5.4) and stored on the `DryRunRecord` (§13). The low figures assume no escalation; the high figures fold in the one-fallback-per-leaf `retry_then_escalate` worst case, priced at each leaf model's `fallback_alias` rates.
 
 The terminal runtime message in simulate mode includes both:
 
@@ -602,6 +775,7 @@ Python computes call graph and cost from `calls`.
 Simulation is deterministic:
 
 - `leaf-call` records a `SimulatedCall` and returns a synthetic value of the declared output schema;
+- `peek` / `slice` / `context-items` are simulated from context metadata: they return bounded slice sizes (and item counts) without a live read, carry no model cost, and are counted as `CONTEXT_READ` effect uses;
 - `split` creates deterministic partitions;
 - `map` executes every item;
 - `filter` uses symbolic predicates when possible, otherwise keeps all items as an upper bound;
@@ -609,7 +783,9 @@ Simulation is deterministic:
 - `race` starts all branches and chooses the first branch in source order;
 - `iterate` runs max iterations;
 - `memoized` counts repeated canonical calls once;
-- `py-exec` is counted but not run.
+- `py-exec` is counted but not run;
+- leaf calls are scheduled per model under each model's `max_concurrency`, and the simulator estimates `wall_clock_seconds_estimate` by serializing each tree level through its model's concurrency and throughput, adding a `load_latency_seconds` device-swap penalty when consecutive levels on one `device_group` change models (§5.7);
+- escalation is not simulated inline (validity failures are unknowable in dry run); instead the analyzer computes `escalation_upper_bound_calls` — one fallback call per leaf using `retry_then_escalate`, attributed to each leaf model's `fallback_alias` — and folds it into the high estimate (`calls_high`, `cost_usd_high`; §5.4, §8.1). The low estimate excludes it. `call_count_limit` (check 12) and `cost_budget` (check 16) are enforced against the high figures, so escalation cannot exceed a passing budget at runtime.
 
 ### 8.3 Static Checks
 
@@ -631,7 +807,9 @@ S-expression parsing and body analysis **MUST NOT** use regular expressions.
 
 Verification runs all checks and never short-circuits.
 
-Exactly 23 checks:
+`decision` is `fail` if and only if at least one `fail`-severity check fails. `warn`-severity checks (13 `critical_path_limit`, 22 `checkpoint_writable`, 24 `wall_clock_limit`) are always recorded in `checks` but never flip `decision`; a plan may pass with outstanding warnings. Live execution may start only when `decision` is `pass`.
+
+Exactly 24 checks:
 
 | # | Name | Severity | Rule |
 |---|---|---|---|
@@ -646,11 +824,11 @@ Exactly 23 checks:
 | 9 | `model_aliases_resolve` | fail | model aliases exist |
 | 10 | `primitive_allowlist` | fail | body uses only allowed bindings |
 | 11 | `termination_bound` | fail | recursive plan has finite decreasing bound |
-| 12 | `call_count_limit` | fail | simulated calls <= policy |
+| 12 | `call_count_limit` | fail | `calls_high` (simulated calls + escalation worst case) <= policy |
 | 13 | `critical_path_limit` | warn | critical path <= policy |
-| 14 | `concurrency_limit` | fail | max concurrency <= policy |
+| 14 | `concurrency_limit` | fail | per-model and global max concurrency <= limits (§5.7) |
 | 15 | `token_budget` | fail | estimated tokens <= policy |
-| 16 | `cost_budget` | fail | estimated high cost <= policy |
+| 16 | `cost_budget` | fail | `cost_usd_high` (incl. escalation worst case) <= policy |
 | 17 | `recursion_depth_limit` | fail | simulated depth <= policy |
 | 18 | `dry_run_fresh` | fail | dry run artifact matches plan |
 | 19 | `output_schema_valid` | fail | declared boundary schema is valid |
@@ -658,6 +836,7 @@ Exactly 23 checks:
 | 21 | `llm_generated_code_absent` | fail | no generated control code path exists |
 | 22 | `checkpoint_writable` | warn | checkpoints namespace writable if used |
 | 23 | `resource_law_respected` | fail | simulated stats do not exceed declared law |
+| 24 | `wall_clock_limit` | warn | estimated wall clock <= policy (§5.7) |
 
 Policy defaults:
 
@@ -668,8 +847,9 @@ max_critical_path = 25
 max_tokens = 2_000_000
 max_cost_usd = 10.00
 max_recursion_depth = 5
-allowed_effects = {"LLM", "CHECKPOINT", "PARTIAL_RESULT", "GATE"}
+allowed_effects = {"LLM", "CONTEXT_READ", "CHECKPOINT", "PARTIAL_RESULT", "GATE"}
 max_timeout_seconds = 3600
+max_wall_clock_seconds = 1800            # single-device-aware latency budget (§5.7)
 ```
 
 ---
@@ -693,16 +873,19 @@ JSON Lines over stdin/stdout.
   "artifact_id": "art_a1b2c3d4e5f60718",
   "program": "(combinator-program ...)",
   "slot_values": {},
-  "contexts": {"ctx_9f8e7d6c5b4a3210": []},
+  "contexts": {"ctx_9f8e7d6c5b4a3210": {"data_shape": "list", "size": 1280000, "item_count": 4200}},
   "limits": {"max_recursion_depth": 5}
 }
 ```
+
+The `contexts` map carries only handles and metadata (shape, size, item count) — never the context bytes. The runtime obtains content lazily through `CONTEXT_READ` effects (§10.3).
 
 ### 10.3 Effects
 
 Live effect requests:
 
 ```json
+{"type":"context_read","id":"call_0009a8b7c6d5e4f3","context_id":"ctx_9f8e7d6c5b4a3210","op":"peek","range":{"start":0,"length":4000}}
 {"type":"llm_call","id":"call_001a2b3c4d5e6f70","node_id":"leaf","output_schema":{"type":"object"},"instruction":"...","input":"...","model":"fast_text_model","temperature":0,"json":true,"max_tokens":null}
 {"type":"py_exec","id":"call_111a2b3c4d5e6f70","code":"...","input":{},"allowed_imports":["json"],"timeout_seconds":30}
 {"type":"checkpoint","id":"ckpt_77a8b9c0d1e2f300","node_id":"reduce","data":{}}
@@ -710,7 +893,7 @@ Live effect requests:
 {"type":"partial_result","node_id":"map","index":7,"value":{}}
 ```
 
-Python replies to `llm_call`, `py_exec`, `checkpoint`, and `gate`. `partial_result` is fire-and-forget.
+Python replies to `context_read`, `llm_call`, `py_exec`, `checkpoint`, and `gate`. A `context_read` reply returns only the requested bounded slice (`op` is one of `peek`, `slice`, `context-items`; `slice`/`peek` take a `range`, `context-items` returns item handles). `partial_result` is fire-and-forget.
 
 ### 10.4 Terminal
 
@@ -777,6 +960,22 @@ Gates are in-memory only and are not resumable after process death.
 Core records:
 
 ```python
+class ModelRegistryEntry(BaseModel):
+    alias: str                          # planner-facing name, e.g. "quality_text_model"
+    provider: str
+    model_id: str
+    context_window_tokens: int          # raw window W
+    reliable_input_tokens: int          # reliability knee K; K <= W (§5.5)
+    input_rate: float                   # USD per prompt token
+    output_rate: float                  # USD per completion token
+    max_output_tokens: int              # caps the high cost estimate (§5.4)
+    default_completion_estimate: int    # used when a leaf sets no max_tokens (§5.4)
+    max_concurrency: int = 1            # effective parallel in-flight calls; 1 for a single-GPU local model (§5.7)
+    throughput_tokens_per_sec: float    # for the wall-clock estimate (§5.7)
+    load_latency_seconds: float = 0.0   # cost to swap this model onto its device (§5.7)
+    device_group: str | None = None     # models sharing a value contend for one device; None = remote/unconstrained
+    fallback_alias: str | None = None   # escalation target for retry_then_escalate (§3.3)
+
 class ContextRecord(BaseModel):
     context_id: str
     data: Any
@@ -975,7 +1174,8 @@ Acceptance:
 
 - dry-run cost from simulated calls;
 - closed-form bound checks;
-- all 25 verification checks;
+- per-model wall-clock estimate with device-swap penalty (§5.7);
+- all 24 verification checks;
 - no live call before pass verification.
 
 ### Batch 7: Executor and Chains
@@ -1041,8 +1241,11 @@ The implementation is done when:
 9. Racket sandbox escape tests fail.
 10. No S-expression parsing or body analysis uses regex.
 11. MCP exposes exactly 10 tools.
-12. Verification runs exactly 23 checks and never short-circuits.
+12. Verification runs exactly 24 checks and never short-circuits.
 13. Symbolic-first composition is the planner default; symbolic-composed plans collapse LLM calls to the leaf count.
-14. Leaf threshold `tau` is sized to the model's reliable-input budget `K`, not its raw window `W`.
-15. `SPEC-DEVIATIONS.md` is empty or reviewed.
+14. Leaf threshold `tau` is sized to the model's reliable-input budget `K`, not its raw window `W`, and is clamped to `K` regardless of any template default.
+15. Context bytes are never serialized into the run message or held by the Racket runtime; the runtime obtains content only as bounded slices via `CONTEXT_READ` effects.
+16. Per-model concurrency and a single-device-aware `wall_clock_seconds_estimate` are simulated and bounded; a single-GPU leaf model is modeled as serial (`max_concurrency = 1`) with a device-swap penalty across `device_group`.
+17. Heterogeneous routing works: a plan can run grunt-work leaves on a local model while reserving an orchestrator-tier model for authoring and `retry_then_escalate` fallbacks.
+18. `SPEC-DEVIATIONS.md` is empty or reviewed.
 
