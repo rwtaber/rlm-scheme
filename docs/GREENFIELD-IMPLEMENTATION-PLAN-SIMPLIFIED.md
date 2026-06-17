@@ -72,17 +72,14 @@ Python owns state, policy, provider calls, cost accounting, persistence, and MCP
 ID format:
 
 ```text
-^(ctx|prog|guide|strat|dry|ver|exec|call)_[0-9a-f]{16}$
+^(ctx|strat|dry|exec|call)_[0-9a-f]{16}$
 ```
 
 Store namespaces:
 
 - `contexts`
-- `programs`
-- `strategy_guides`
 - `sealed_strategies`
 - `dry_runs`
-- `verifications`
 - `executions`
 - `traces`
 - `cache`
@@ -105,32 +102,11 @@ class ContextRecord(BaseModel):
     metadata: dict[str, Any] = {}
     created_at: float
 
-class ProgramRecord(BaseModel):
-    program_id: str
-    source: str
-    ast_hash: str
-    created_at: float
-
-class StrategyGuideRecord(BaseModel):
-    guide_id: str
-    runtime_version: str
-    language_version: str
-    package_schema: dict[str, Any]
-    grammar: str
-    allowed_primitives: list[str]
-    primitive_docs: dict[str, Any]
-    required_package_fields: list[str]
-    slot_rules: list[str]
-    prompt_spec_rules: list[str]
-    runtime_bound_rules: list[str]
-    policy_summary: dict[str, Any]
-    examples: list[dict[str, Any]] = []
-    created_at: float
-
 class SealedStrategyRecord(BaseModel):
     sealed_strategy_id: str
     context_id: str
-    program_id: str
+    program_source: str
+    program_ast: Any
     strategy_hash: str
     program_ast_hash: str
     slot_values_hash: str
@@ -161,23 +137,23 @@ class DryRunRecord(BaseModel):
     bounds: dict[str, Any]
     warnings: list[str] = []
 
-class VerificationRecord(BaseModel):
-    verification_id: str
-    sealed_strategy_id: str
-    dry_run_id: str
+class VerificationDecision(BaseModel):
     decision: Literal["pass", "fail"]
     checks: list[dict[str, Any]]
 
 class ExecutionRecord(BaseModel):
     execution_id: str
     sealed_strategy_id: str
-    verification_id: str
+    dry_run_id: str
+    verification: VerificationDecision
     state: Literal["running", "succeeded", "failed", "cancelled"]
     result: Any | None = None
     stats: dict[str, Any] = {}
     created_at: float
     completed_at: float | None = None
 ```
+
+`get_strategy_guide` returns a generated `StrategyGuide` value, not a stored object. Verification decisions are embedded in `ExecutionRecord` because there is no separate `verify` tool and no user-facing verification lifecycle.
 
 `strategy_hash` is computed from the exact AST, slot values, prompt specs, runtime bounds, input/output schemas, model registry hash, policy hash, and runtime version. Verification is invalid if any of these change.
 
@@ -796,7 +772,7 @@ Exactly seven tools:
 | Tool | Signature |
 |---|---|
 | `load_context` | `(data_or_loader, data_shape, schema?, metadata?) -> LoadContextResult` |
-| `get_strategy_guide` | `() -> StrategyGuideRecord` |
+| `get_strategy_guide` | `() -> StrategyGuide` |
 | `dry_run_strategy` | `(context_id, strategy_package, task, hints?) -> dry_run_id, sealed_strategy_id, bounds, cost` |
 | `execute_strategy` | `(dry_run_id) -> execution_id` |
 | `get_execution_trace` | `(execution_id) -> trace` |
@@ -866,7 +842,6 @@ Response envelope:
 {
   "status": "ok",
   "guide": {
-    "guide_id": "guide_0123456789abcdef",
     "runtime_version": "rlm-scheme-racket-1",
     "language_version": "strategy-package-1",
     "required_package_fields": ["program_source", "slot_values", "prompt_specs"],
@@ -944,8 +919,8 @@ Response envelope:
 {
   "status": "ok",
   "execution_id": "exec_0123456789abcdef",
-  "verification_id": "ver_0123456789abcdef",
   "sealed_strategy_id": "strat_0123456789abcdef",
+  "verification": {"decision": "pass", "checks": []},
   "state": "succeeded",
   "result": "ITEM: rlm_scheme/runtime.py\nRELEVANT: true\n..."
 }
@@ -981,7 +956,7 @@ Response envelope:
 {
   "status": "ok",
   "record_type": "sealed_strategy",
-  "record": {"sealed_strategy_id": "strat_0123456789abcdef", "context_id": "ctx_0123456789abcdef", "program_id": "prog_0123456789abcdef"}
+  "record": {"sealed_strategy_id": "strat_0123456789abcdef", "context_id": "ctx_0123456789abcdef", "program_ast_hash": "abc123"}
 }
 ```
 
