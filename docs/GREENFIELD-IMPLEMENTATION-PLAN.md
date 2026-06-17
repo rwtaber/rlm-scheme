@@ -55,9 +55,9 @@ Like a database that shows a query plan and cost estimate before executing:
 load_context -> plan -> dry_run -> verify -> execute
 ```
 
-- **plan** — the model authors a combinator program for the task (optionally starting from a host-suggested skeleton, §6) and submits it through the tool API. The host type-checks it and fills in the *numeric* safety parameters deterministically — leaf size `tau`, split factor `k`, per-node model — so the model owns the control-flow shape while the host owns the resource bounds. The model writes the program, but only in the checked total language; it never runs arbitrary code.
+- **plan** — the model authors a combinator program for the task (optionally guided by an example program, §6.1) and submits it through the tool API. The host type-checks it and fills in the *numeric* safety parameters deterministically — leaf size `tau`, split factor `k`, per-node model — so the model owns the control-flow shape while the host owns the resource bounds. The model writes the program, but only in the checked total language; it never runs arbitrary code.
 - **dry_run** — the program runs in **simulate mode**: every `leaf-call` returns a synthetic typed value instead of hitting the model. This yields exact call counts, a cost range, recursion depth, and a wall-clock estimate with *zero* live calls. It is symbolic execution for resource accounting.
-- **verify** — 24 static checks (termination, budgets, schema compatibility, "the program uses only the allowed total primitives — no escape to arbitrary code," …). This is the **safety boundary for the model-authored program**. **No live call is permitted until verification passes** — type-checker, linter, and budget gate combined. On failure the model receives structured errors and revises, a bounded repair loop (§9); execution only ever runs an admitted program.
+- **verify** — 22 static checks (termination, budgets, schema compatibility, "the program uses only the allowed total primitives — no escape to arbitrary code," …). This is the **safety boundary for the model-authored program**. **No live call is permitted until verification passes** — type-checker, linter, and budget gate combined. On failure the model receives structured errors and revises, a bounded repair loop (§9); execution only ever runs an admitted program.
 - **execute** — run the verified plan exactly once.
 
 ### Recursion as divide-and-conquer with a cost algebra
@@ -152,7 +152,7 @@ Python host
   MCP server
   Store / ContextStore
   ModelRegistry
-  CombinatorRegistry / TemplateRegistry
+  CombinatorRegistry
   Planner / CostAnalyzer / VerificationEngine
   LLM providers / cache / budget monitor
   GateManager / CheckpointManager / TraceStore
@@ -201,7 +201,7 @@ Every live LLM call **[MUST]** satisfy:
 
 RLM-Scheme is built to run across heterogeneous models without embedding any of them as the orchestrator. Three tiers cooperate:
 
-- **Tier 0 — caller (a coding agent over MCP, e.g. a Happy/Claude session).** A strong model authors the orchestration: it writes a combinator program for the task (optionally starting from a host-suggested skeleton, §6), supplies the leaf/compose instructions, submits it through `plan_strategy`, inspects dry-run estimates and traces, and decides whether to execute. It writes the control-flow *shape* in the restricted total language; the host deterministically fills the numeric safety parameters and verifies the program before it runs. This is the only place a frontier model is required.
+- **Tier 0 — caller (a coding agent over MCP, e.g. a Happy/Claude session).** A strong model authors the orchestration: it writes a combinator program for the task (optionally guided by an example program, §6.1), supplies the leaf/compose instructions, submits it through `plan_strategy`, inspects dry-run estimates and traces, and decides whether to execute. It writes the control-flow *shape* in the restricted total language; the host deterministically fills the numeric safety parameters and verifies the program before it runs. This is the only place a frontier model is required.
 - **Tier 1 — combinator engine (no model).** Deterministic split/filter/map/reduce/cross plus the cost/termination bounds and verification. It does not author the program; it *checks and executes* the one the model wrote.
 - **Tier 2 — leaf models.** Bounded `leaf-call` oracles, which **[MAY]** be cheap models on constrained local hardware (e.g. a single 24 GB GPU), served through a local backend declared per entry — `openai_compatible`, `ollama`, `vllm`, or `llamacpp` (§13, Batch 5). Multiple leaf models and an orchestrator-tier model can coexist; each is a `ModelRegistryEntry` (§13) with its own backend/endpoint, window `W`, reliability knee `K`, prefill/decode rates, concurrency, device group, and fallback.
 
@@ -227,16 +227,15 @@ Internally, execution follows seven phases.
 
 The host stores input data and metadata as a context record. The Racket runtime never receives the full context; during a dry run or live execution it requests bounded slices through context-read effects (§10.3), and Python answers from the `ContextStore`.
 
-### Phase 2: Statistics and Skeleton Suggestion
+### Phase 2: Statistics
 
-The host gathers the statistics the author needs and **[MAY]** suggest a skeleton:
+The host gathers the statistics the author needs:
 
-- task kind (from hints, or proposed by the host);
 - structural data shape;
 - requested output schema;
 - whether the input fits the selected model's **reliable-input budget** `K` (not its raw context window `W`).
 
-The host reads structure cheaply through `peek` (§5.6) rather than ingesting the whole context, so this stays cheap even on inputs far larger than the window. From these statistics the host **[MAY]** offer a matching skeleton from the catalog (§7.3) as a starting point; the authoring model accepts, edits, or ignores it. The host never commits the model to a skeleton — it only scaffolds.
+The host reads structure cheaply through `peek` (§5.6) rather than ingesting the whole context, so this stays cheap even on inputs far larger than the window. From these statistics the host **[MAY]** surface relevant example programs (§6.1) as a starting point; the authoring model uses, edits, or ignores them. The host only scaffolds — it never commits the model to a shape.
 
 ### Phase 3: Direct Dispatch
 
@@ -250,7 +249,7 @@ This still goes through dry run and verification like any other program.
 
 ### Phase 4: Program Authoring
 
-If the input does not fit, the model authors a recursive combinator program. The canonical shape (which a host skeleton may supply, §5.1) is:
+If the input does not fit, the model authors a recursive combinator program. The canonical shape (which an example program may illustrate, §6.1) is:
 
 ```text
 solve(x):
@@ -266,7 +265,7 @@ solve(x):
 Authoring divides cleanly into a *shape* the model chooses and *numeric safety parameters* the host fills deterministically:
 
 - **Model chooses (control-flow shape):** which combinators, how they compose, where `leaf-call` appears, and `composition_operator` (`compose`) — and the model **[MUST]** prefer a symbolic operator (concat, merge, sum), using a neural reduce only when composition genuinely requires understanding (§4.4).
-- **Host fills and clamps (resource parameters):** `leaf_threshold_tokens` (`tau`), sized to the model's reliable-input budget `K`, not its window `W`, and clamped to `K` regardless of any author-supplied value (§5.5); `split_factor` (`k`), chosen by bounded search against the critical-path and wall-clock policy rather than a magic number (§5.5, §5.7); and `max_depth`. Letting the host own these is what preserves the static bounds even though the model authored the shape — the model cannot set a `tau` that pushes leaves past `K` or a `k` that busts the latency budget.
+- **Host fills (resource parameters):** `leaf_threshold_tokens` (`tau`), sized to the model's reliable-input budget `K`, not its window `W` (§5.5); `split_factor` (`k`), chosen by bounded search against the critical-path and wall-clock policy rather than a magic number (§5.5, §5.7); `max_depth`; and the per-node model alias. The model does not set these. Letting the host own them is what preserves the static bounds even though the model authored the shape — there is no path by which the model can choose a `tau` past `K` or a `k` that busts the latency budget.
 
 ### Phase 5: Dry Run
 
@@ -301,7 +300,7 @@ Typing in RLM-Scheme is structural, not a domain ontology. Following λ-RLM, "ty
 1. **Parametric combinator typing.** Combinators carry type shapes (`Map : (A -> B) x List[A] -> List[B]`) so an authored program composes them without nonsense like reducing a non-list, and the verifier rejects it when it does.
 2. **Per-boundary schema validation.** Every leaf call output and every chain-step output is validated against a declared JSON-schema before it may flow downstream.
 
-There is no required registry of named semantic types, no subtype lattice, and no declared-guarantee layer. Those were domain conveniences the paper does not need; they live in an optional domain pack (§3.4).
+There is no required registry of named semantic types, no subtype lattice, no declared-guarantee layer, and no domain-type shorthand: every boundary names its schema inline (§3.1). Those were domain conveniences the paper does not need.
 
 ### 3.1 Output Schema Subset
 
@@ -338,17 +337,13 @@ Invalid output follows the active error policy:
 
 `retry_then_escalate` is the intended policy for cheap local leaf models: weak models fail schema validation far more often than frontier models, and a one-shot escalation recovers the leaf without sending every leaf to the expensive tier.
 
-### 3.4 Optional Domain Packs
-
-A deployment **[MAY]** ship a domain pack mapping named types (for example `TextDocument`, `Finding`, `Report`) to boundary schemas, purely as authoring shorthand: a slot or boundary may name a type and the loader expands it to the §3.1 schema. Core planning, dry run, verification, and execution **[MUST]** work with no domain pack present. Domain packs add no new verification checks and no new store namespace.
-
 ---
 
 ## 4. Combinator Runtime
 
 ### 4.0 Program Grammar and Termination Discipline
 
-Because programs are now model-authored (§7), the language the model writes in and the rule that makes it total must be **exact** — the verifier accepts or rejects against this definition, and the author must target it. This subsection is normative; checks 10 (`primitive_allowlist`), 11 (`termination_bound`), and 21 (`total_language_closed`) and the §8.3 static checks all refer to it.
+Because programs are now model-authored (§7), the language the model writes in and the rule that makes it total must be **exact** — the verifier accepts or rejects against this definition, and the author must target it. This subsection is normative; checks 9 (`primitive_allowlist`), 10 (`termination_bound`), and 20 (`total_language_closed`) and the §8.3 static checks all refer to it.
 
 **Grammar.** A program is a single expression in this restricted S-expression language. No other forms are legal:
 
@@ -364,7 +359,7 @@ expr        ::= literal
 literal     ::= string | number | boolean | "null"
               | "(quote" datum ")"          ; quote of DATA only — never code
 var         ::= identifier                  ; must be bound by let / lambda / fix
-slot-ref    ::= "(slot" symbol ")"          ; a named input binding (§6.3); data, not code
+slot-ref    ::= "(slot" symbol ")"          ; a named input binding (§6.1); data, not code
 if          ::= "(if" expr expr expr ")"
 let         ::= "(let ((" var expr ")" ...) expr ")"
 lambda      ::= "(lambda (" var ... ")" expr ")"
@@ -376,11 +371,11 @@ fix         ::= "(fix (lambda (" var ")" expr "))"   ; see termination disciplin
 
 Constraints enforced by verification:
 
-- **Closed under the allow-list (`total_language_closed`, check 21).** The operator position of an `application` **[MUST]** be either a §4.1 combinator name or a locally-bound `var`. It **[MUST NOT]** be a computed value, a `quote`d symbol resolved dynamically, or any host identifier outside the allow-list. There is no `eval`, no macro, no dynamic operator synthesis. `quote` may wrap only literal data.
-- **No free variables (`primitive_allowlist`, check 10, with §8.3).** Every `var` **[MUST]** be bound by an enclosing `let`, `lambda`, or `fix`, or resolve to a `slot-ref`/declared input. Unbound identifiers fail.
+- **Closed under the allow-list (`total_language_closed`, check 20).** The operator position of an `application` **[MUST]** be either a §4.1 combinator name or a locally-bound `var`. It **[MUST NOT]** be a computed value, a `quote`d symbol resolved dynamically, or any host identifier outside the allow-list. There is no `eval`, no macro, no dynamic operator synthesis. `quote` may wrap only literal data.
+- **No free variables (`primitive_allowlist`, check 9, with §8.3).** Every `var` **[MUST]** be bound by an enclosing `let`, `lambda`, or `fix`, or resolve to a `slot-ref`/declared input. Unbound identifiers fail.
 - **`py-exec` is the only door to arbitrary code**, and it is a policy-gated effect (check 20); absent that effect, the program is pure but for `leaf-call` and the `CONTEXT_READ` reads.
 
-**Termination discipline (`termination_bound`, check 11).** `fix` is the only recursion form, and it is admitted only when the verifier can prove, *syntactically*, that every recursive call descends on a structurally smaller value:
+**Termination discipline (`termination_bound`, check 10).** `fix` is the only recursion form, and it is admitted only when the verifier can prove, *syntactically*, that every recursive call descends on a structurally smaller value:
 
 1. A `fix` body **[MUST]** contain an `if` whose then/else split a **base case** (no recursive call — a `leaf-call` or symbolic value) from a **recursive case**, and whose guard is a size test against the leaf threshold (`size(x) <= tau` or equivalent on a `context-items` count).
 2. In the recursive case, every application of the recursive `self` **[MUST]** take as its argument a value that traces back to the bound parameter `x` **through at least one `split` or `context-items`**, composed only with size-non-increasing combinators (`filter`, `map` of a non-growing function, element selection). Equivalently: the recursive argument is a *proper sub-part* of `x`, never `x` itself nor a value not derived by descent from `x`.
@@ -436,7 +431,7 @@ Effects are explicit:
 
 `CONTEXT_READ` is the bounded context-slice effect (`peek`, `slice`, `context-items`); it reads from Python's `ContextStore` and returns only bounded slices, never the whole context.
 
-Every template or plan has an inferred effect set from its body. Verification checks:
+Every program has an inferred effect set from its body. Verification checks:
 
 ```text
 required_effects <= policy.allowed_effects
@@ -452,7 +447,7 @@ The program is authored by the model (a nondeterministic step), but authoring is
 
 ### 4.4 Symbolic-First Composition
 
-This is the core efficiency principle of λ-RLM and the source of its largest measured wins: structural work that can be done symbolically **[MUST NOT]** be delegated to the model. It is an obligation on the authored program, which the host's suggested skeletons follow by default and which verification and the dry-run cost estimate make visible (a program that routes structural work through the model simply costs more and is the author's choice to repair).
+This is the core efficiency principle of λ-RLM and the source of its largest measured wins: structural work that can be done symbolically **[MUST NOT]** be delegated to the model. It is an obligation on the authored program, which the example programs (§6.1) follow by default and which verification and the dry-run cost estimate make visible (a program that routes structural work through the model simply costs more and is the author's choice to repair).
 
 - The authored program **[MUST]** use deterministic combinators (`split`, `filter`, `concat`, `cross`, symbolic `reduce`) wherever the task permits, and emit `leaf-call` only at bounded leaves or where composition genuinely requires understanding.
 - `compose` **[MUST]** default to a symbolic operator. A neural reduce (an `llm-query` inside `tree-reduce`/`fold-sequential`) is used only when the task's composition step itself needs the model.
@@ -495,7 +490,7 @@ A recursive plan is valid only if:
 - simulated `recursive_depth <= policy.max_recursion_depth`;
 - every `iterate` node declares a finite `max_iterations`, and its simulated iteration count does not exceed it.
 
-Throughout the recursive shape, `size` is measured in **estimated tokens** (`ceil(chars / 4)`, §5.4) — the same unit as `leaf_threshold_tokens` (`tau`) and the model budgets `W`/`K` — so the threshold test `size(input) <= tau` and the strict-decrease test are comparing like with like. If the size-decrease check cannot be proven from the splitter, verification fails. `iterate` loops terminate by their declared iteration cap rather than a size-decrease argument; `termination_bound` (check 11) enforces both the `fix`/split-decrease conditions above and the presence of a finite `max_iterations` on every `iterate` node.
+Throughout the recursive shape, `size` is measured in **estimated tokens** (`ceil(chars / 4)`, §5.4) — the same unit as `leaf_threshold_tokens` (`tau`) and the model budgets `W`/`K` — so the threshold test `size(input) <= tau` and the strict-decrease test are comparing like with like. If the size-decrease check cannot be proven from the splitter, verification fails. `iterate` loops terminate by their declared iteration cap rather than a size-decrease argument; `termination_bound` (check 10) enforces both the `fix`/split-decrease conditions above and the presence of a finite `max_iterations` on every `iterate` node.
 
 ### 5.3 Call Count Bound
 
@@ -528,11 +523,11 @@ completion_tokens(call) = max_tokens or model.default_completion_estimate
 cost(call) = prompt_tokens * input_rate + completion_tokens * output_rate
 ```
 
-Total dry-run cost is the sum over simulated leaf calls. The **low** estimate assumes no escalation. The **high** estimate caps completion at `model.max_output_tokens` and adds the `retry_then_escalate` worst case: one fallback call per leaf using that policy, priced at the leaf model's `fallback_alias` rates (§3.3). The high estimate is therefore a true upper bound — `cost_budget` (check 16) and `call_count_limit` (check 12) are enforced against it, so escalation to the orchestrator tier cannot silently blow a passing budget at runtime.
+Total dry-run cost is the sum over simulated leaf calls. The **low** estimate assumes no escalation. The **high** estimate caps completion at `model.max_output_tokens` and adds the `retry_then_escalate` worst case: one fallback call per leaf using that policy, priced at the leaf model's `fallback_alias` rates (§3.3). The high estimate is therefore a true upper bound — `cost_budget` (check 15) and `call_count_limit` (check 11) are enforced against it, so escalation to the orchestrator tier cannot silently blow a passing budget at runtime.
 
 ### 5.5 Partition Planning
 
-The numeric partition parameters are **host-owned**, not author-owned (§7.0): the model authors the program shape and **[MAY]** propose values, but the host fixes and clamps `leaf_threshold_tokens` (`tau`) and `split_factor` (`k`). "The planner" in this section means that host parameter-sizing role. It chooses `tau` and `k` to satisfy:
+The numeric partition parameters are **host-owned**, not author-owned (§7.0): the model authors the program shape; the host alone sets `leaf_threshold_tokens` (`tau`) and `split_factor` (`k`). The model does not set them. "The planner" in this section means that host parameter-sizing role. It chooses `tau` and `k` to satisfy:
 
 - every leaf fits the model's **reliable-input budget** `K` with margin;
 - estimated call count <= policy;
@@ -546,7 +541,7 @@ The numeric partition parameters are **host-owned**, not author-owned (§7.0): t
 leaf_threshold_tokens (tau) in {0.5K, 0.7K, 0.9K}
 ```
 
-`K` is a per-deployment tunable, not a published constant, and is ideally measured rather than guessed: sweep input length on a needle-in-a-haystack or task-representative probe and take the length at which accuracy drops materially below the small-input baseline. When no measurement exists, hand-set `K` conservatively as a fraction of `W` (a quantized local model's reliable budget is often a small fraction of its advertised window). Sizing leaves to `K` keeps each leaf in the model's reliable regime; sizing them to `0.8W` would minimize call count at the cost of pushing every leaf into the rot zone. The `{0.5K, 0.7K, 0.9K}` candidate set *is* the margin referred to in the "fits `K` with margin" criterion above — there is no separate margin term; choosing a fraction below `1.0K` is exactly how the planner leaves headroom, with smaller fractions trading more calls for more reliability. A template-declared `leaf_threshold_tokens` default (for example the `64000` in §6.2) is only an upper fallback; the planner **[MUST]** clamp the effective `tau` to the selected model's `K`, so the same template behaves correctly whether the assigned leaf model is a 200k-window frontier model or a quantized local model with a few-thousand-token reliable budget.
+`K` is a per-deployment tunable, not a published constant, and is ideally measured rather than guessed: sweep input length on a needle-in-a-haystack or task-representative probe and take the length at which accuracy drops materially below the small-input baseline. When no measurement exists, hand-set `K` conservatively as a fraction of `W` (a quantized local model's reliable budget is often a small fraction of its advertised window). Sizing leaves to `K` keeps each leaf in the model's reliable regime; sizing them to `0.8W` would minimize call count at the cost of pushing every leaf into the rot zone. The `{0.5K, 0.7K, 0.9K}` candidate set *is* the margin referred to in the "fits `K` with margin" criterion above — there is no separate margin term; choosing a fraction below `1.0K` is exactly how the planner leaves headroom, with smaller fractions trading more calls for more reliability. The planner **[MUST]** size the effective `tau` to the selected model's `K`, so the same program behaves correctly whether the assigned leaf model is a 200k-window frontier model or a quantized local model with a few-thousand-token reliable budget.
 
 **Choosing `k`.** With symbolic composition, `k` barely affects total LLM calls (they equal the leaf count regardless), so the planner prefers a larger `k` to keep the tree shallow. With a neural reduce, `k` is a genuine tradeoff: larger `k` means a shallower, faster, but wider reduce tree, while smaller `k` means more, smaller reduce calls. The planner picks the largest `k` whose simulated critical path stays within `policy.max_critical_path`. The implementation **[MAY]** use bounded search over candidate split factors:
 
@@ -594,75 +589,24 @@ These quantities are simulated in dry run (§8) and bounded in verification (`co
 
 ---
 
-## 6. Templates and Plan Artifacts
+## 6. Plan Artifacts and Example Programs
 
-### 6.1 Role of Templates
+### 6.1 Example Programs (No Template System)
 
-Templates are an **optional standard library** of audited combinator programs and skeletons. They are not mandatory and not the only thing that can run: the model **[MAY]** author a program directly from the primitives. Their purpose is leverage and safety-by-reuse —
+There is **no template system**. The model authors programs directly in the §4.0 language; nothing else is a runnable unit. To help it author valid, idiomatic programs, a deployment **[MAY]** ship a directory of **example programs** (`examples/`) — plain combinator programs for common task shapes (recursive summarize, filter-then-classify, all-pairs compare, typed chain).
 
-- a skeleton the host **[MAY]** *suggest* for a recognized task kind (§7.3), which the authoring model accepts, edits, or ignores;
-- a reusable sub-program the model can reference by name instead of re-deriving;
-- a worked example of idiomatic, verifiable primitive use.
+Examples are **authoring guidance only**: documentation / few-shot material the host **[MAY]** surface to the author (Phase 2). They carry no metadata, no registry, no declared slots, and no verification status. An example earns no trust — like any program, it must pass §8/§9 when actually submitted. The convenience of "named, audited, reusable programs" is intentionally not built in for v1.
 
-A template earns no trust the verifier does not re-establish: whether a program is authored fresh or built from a template, it goes through the identical parse / type-check / dry-run / verify path (§8, §9). Templates are a convenience for the author and a head start for the host's suggestions, not a privileged execution path.
+**Program inputs (slots).** A program's free inputs are named by `slot-ref` (§4.0) and bound at submission through `slot_values` (§7.1) — typically just the context handle and the instruction strings (`leaf_instruction`, `compose_instruction`). A slot is a named input, not a template parameter: there is no slot *type* declaration anywhere. Instruction text may equally be written as a string literal in the body. Either way it is data passed to `leaf-call`, never an operator or control form, and there are no `{{slot}}` markers or textual substitution.
 
-One template may define:
+> **Deferred (post-v1):** a reusable named sub-program / "standard library" mechanism — importing an audited sub-program by name rather than inlining. Out of scope for v1; the model inlines. Add it later if profiling shows wasteful re-derivation.
 
-- input boundary schema (or optional named shorthand);
-- output boundary schema (or optional named shorthand);
-- task kinds;
-- required slots;
-- effect set;
-- resource law;
-- Racket combinator body.
-
-### 6.2 Template File Format
-
-One template is one `.rkt` file under `templates/`. The first top-level form is `define-meta`.
-
-Example:
-
-```racket
-(define-meta
-  (name "recursive_document_summarize")
-  (version "1.0.0")
-  (task-kinds (summarise aggregate))
-  (input-type "DocumentList")
-  (output-type "Report")
-  (slots
-    (context_id (type context-ref) (required #t))
-    (leaf_instruction (type string) (required #t))
-    (compose_instruction (type string) (required #t))
-    (model (type model-alias) (required #f) (default "quality_text_model"))
-    (split_factor (type integer) (required #f) (default 4) (min 2) (max 10))
-    (leaf_threshold_tokens (type integer) (required #f) (default 64000)))
-  (effects (LLM))
-  (resource-law
-    (leaf-calls "k^ceil(log_k(ceil(n/tau)))")
-    (critical-path "ceil(log_k(ceil(n/tau))) + 1")))
-```
-
-Every remaining top-level form is the body.
-
-### 6.3 No Textual Substitution
-
-Slots are data:
-
-```racket
-(slot 'leaf_instruction)
-```
-
-There are no `{{slot}}` markers. Slot content is never parsed as code. This holds identically for a freshly authored, template-less program: instruction text (e.g. `leaf_instruction`, `compose_instruction`) is supplied either as a string literal in the program body or as a `slot-ref` bound through `slot_values` (§7.1) — in both cases it is data passed to `leaf-call`, never an operator or control form.
-
-### 6.4 Artifact Hash
+### 6.2 Artifact Hash
 
 Artifact hash includes:
 
-- template name (empty for a freshly authored program);
-- template version (empty for a freshly authored program);
-- body hash (the hash of the authored S-expression source — the primary identity for a template-less program);
-- metadata hash;
-- canonical slot values;
+- body hash (the hash of the authored S-expression source — the artifact's primary identity);
+- canonical slot values (bound context handle and instruction strings);
 - input/output boundary schemas;
 - inferred effects.
 
@@ -691,23 +635,11 @@ The split of responsibility is the heart of the design:
 - the model registry — per alias: window `W`, reliable budget `K`, throughput, concurrency, device group, and price;
 - the policy budgets (calls, cost, recursion depth, wall-clock).
 
-A program goes from idea to admitted in four moves — the model leads moves 1–2, the host leads moves 3–4:
+A program goes from idea to admitted in two stages. The **model** authors the control-flow shape (§4): which combinators, how they nest, where `leaf-call` sits, and whether each composition is symbolic or neural — preferring symbolic (§4.4). The **host** then, by pure arithmetic over the statistics above, turns that shape into a costed, verified plan: it sizes `tau` to the leaf model's `K` and chooses `k` by bounded search against the wall-clock/cost policy (§5.5, §5.7); assigns each node a concrete model alias (cheap local tier for grunt-work leaves, orchestrator tier for neural reduce / escalation, §1.4); threads boundary types along the chain (§7.2, recording `schema_flow`); simulates (§8); and verifies (§9).
 
-**1. Author the shape (model).** The model writes a combinator program for the task, optionally starting from a host-suggested skeleton (§7.3) keyed to a recognized task kind (§7.2) — direct leaf for small inputs, recursive split-map-reduce for long-context aggregation, filter-before-leaf for search, `cross` + bounded classify for all-pairs, an explicit typed chain when several transforms compose. The model **[MAY]** deviate from any skeleton, so long as the result stays inside the total language. This is authoring in a restricted DSL, not free-form code generation: there is no `eval`, no arbitrary Python (except the policy-gated `py-exec` effect), and no recursion the verifier cannot bound.
+The host **tunes numbers and renders a verdict; it never rewrites the model's algorithm.** Its objective is "least dollar cost and wall-clock within policy," not "fewest calls." A shape whose costed form busts a budget, fails type-checking, fails the total-language check, or fails the termination discipline is **not silently altered** — the host returns **structured errors** and the model revises and resubmits (the **repair loop**, §9, with no live call at any point).
 
-**2. Parameterize the leaves (model proposes, host fixes).** The model marks where `leaf-call` appears and whether each composition is symbolic or neural, preferring symbolic (§4.4). It **[MAY]** propose `k`/`tau`/per-node models, but those are advisory.
-
-**3. Cost, tune, and clamp (host).** The host turns the authored shape into a costed plan by pure arithmetic over the statistics above, and it **owns** the resource parameters:
-
-- size the leaf threshold `tau` to the leaf model's reliable budget `K`, not its window `W`, clamping any author-proposed value to `K` (§5.5);
-- choose (or accept-and-validate) the split factor `k` by bounded search, costing each candidate's depth, call count, and — decisively — its single-device wall-clock and dollar cost (§5.3, §5.7);
-- default each node's model alias — grunt-work leaves to the cheap local tier, neural reduce / escalation to the strong tier (§1.4) — honoring author hints only where they stay within policy.
-
-The objective is not "fewest calls" but "least dollar cost and wall-clock within policy." A shape whose costed form busts a budget is **not silently rewritten** — it is reported back so the author can change the shape (e.g. a coarser split, a symbolic compose). The host tunes numbers; it does not redesign the model's algorithm.
-
-**4. Thread the types and admit-or-repair (host).** Walk the chain and require each step's output schema to be structurally compatible with the next step's input schema (§3.2, §7.4) — ordinary type-checking of the pipeline; the resulting `schema_flow` is recorded. If type-checking, the total-language check, or the costed budgets fail, the host returns **structured errors** and the model revises and resubmits — the **repair loop** (§9), bounded by a policy attempt cap. No live call happens at any point in this loop.
-
-**The output is an EXPLAIN, not a result.** `plan_strategy` accepts the model-authored program and returns a typed `PlanRecord` (plus any host-suggested *alternatives* with cost/latency/quality tradeoffs, §7.5) so the Tier-0 caller can inspect and choose. The host-fixed parameters (`k`, `tau`, `compose`, per-node model) live in `planner_parameters`; the record references the content-addressed program (§6.4) but holds no data and triggers no live call.
+**The output is an EXPLAIN, not a result.** `plan_strategy` accepts the model-authored program and returns a typed `PlanRecord` for the Tier-0 caller to inspect. The host-fixed parameters (`k`, `tau`, per-node model) live in `planner_parameters`; the record references the content-addressed program (§6.2) but holds no data and triggers no live call.
 
 **On reproducibility:** the program is authored by a nondeterministic model, so "same task → same program" does **not** hold. What does hold is that a *given admitted program* is content-addressed and its execution is deterministic except for leaf-calls (§4.3): re-running an artifact reproduces its call structure and cost, and the authored program plus the model exchange that produced it are logged, so every run is auditable and replayable even though it is not re-derivable. A deployment that needs bit-identical plans across sessions should pin and reuse the artifact rather than re-author.
 
@@ -717,51 +649,20 @@ What the host deliberately does **not** hold while validating: any context bytes
 
 `plan_strategy` input (the model-authored program plus the context the host needs to validate and cost it):
 
-- the **authored combinator program** — a single S-expression string in the §4.0 grammar (the `program` argument), or `{ "template": name@version, "edits": ... }` to start from a library skeleton (§6.1);
-- `slot_values` — bindings for the program's `slot-ref`s, including instruction strings such as `leaf_instruction` / `compose_instruction` (data, never code; §6.3);
+- the **authored combinator program** — a single S-expression string in the §4.0 grammar (the `program` argument);
+- `slot_values` — bindings for the program's `slot-ref`s, typically the context handle and instruction strings such as `leaf_instruction` / `compose_instruction` (data, never code; §6.1);
 - `context_id`;
 - task description;
 - hints;
-- context metadata;
 - requested output schema;
 - model registry;
 - execution policy.
 
-The host parses the `program` against the §4.0 grammar, type-checks its boundaries (§7.4), fills the numeric safety parameters (§5.5), and either stores it (a `programs` entry referenced by `PlanRecord.program_ref`, §12–13) and returns a `PlanRecord`, or returns structured errors for the repair loop (§9). The program is never `eval`'d or string-substituted — it is parsed into an AST and interpreted only by the verified runtime.
+The host parses the `program` against the §4.0 grammar, type-checks its boundaries (§7.2), fills the numeric safety parameters (§5.5), and either stores it (a `programs` entry referenced by `PlanRecord.program_ref`, §12–13) and returns a `PlanRecord`, or returns structured errors for the repair loop (§9). The program is never `eval`'d or string-substituted — it is parsed into an AST and interpreted only by the verified runtime.
 
-### 7.2 Task Kinds
+The host **[MAY]** organize its example programs (§6.1) by common task shape (summarize/aggregate, search, pairwise-compare, refine/validate, chain) to decide which to surface, but this is a non-normative authoring aid: the model may write any program in the total language, and there is no task-kind taxonomy the plan must conform to.
 
-Core task kinds:
-
-- `direct`
-- `search`
-- `classify`
-- `aggregate`
-- `summarise`
-- `pairwise`
-- `multi_hop`
-- `compare`
-- `validate`
-- `refine`
-- `decompose`
-- `generate`
-
-Task kinds are the index into the skeleton catalog (§7.3): the host uses the task kind (from hints, or inferred) to pick which skeleton to *suggest*. The authoring model is not bound by it — it may author any program in the total language regardless of the suggested kind.
-
-### 7.3 Skeleton Catalog
-
-For each task kind the host can suggest a starting skeleton, preferring symbolic combinators over neural calls wherever the task permits (§4.4). These are starting points the model edits or replaces, not mandatory shapes:
-
-- direct leaf call when input fits;
-- recursive split-map-reduce for long-context summarise/aggregate;
-- symbolic filter before leaf calls for search;
-- symbolic cross product plus bounded classification for pairwise tasks;
-- iterative validation plan for refine/validate;
-- explicit chain when multiple semantic transformations are needed.
-
-Whatever the model authors — skeleton-derived or fresh — is admitted only through the same §8/§9 checks.
-
-### 7.4 Chain Typing
+### 7.2 Chain Typing
 
 For every adjacent pair, the producer's output schema must be structurally compatible with the consumer's input schema (§3.2):
 
@@ -770,15 +671,6 @@ compatible(step_i.output_schema, step_{i+1}.input_schema)
 ```
 
 Verification fails if no compatibility relation exists.
-
-### 7.5 Strategy Alternatives
-
-`plan_strategy` should return:
-
-- recommended plan;
-- alternatives with cost/latency/quality tradeoffs;
-- schema flow;
-- estimated resource shape before full dry run when available.
 
 ---
 
@@ -851,22 +743,20 @@ Simulation is deterministic:
 - `memoized` counts repeated canonical calls once;
 - `py-exec` is counted but not run;
 - leaf calls are scheduled per model under each model's `max_concurrency`, and the simulator estimates `wall_clock_seconds_estimate` by serializing each tree level through its model's concurrency and its separate prefill/decode rates (§5.7), adding a `load_latency_seconds` device-swap penalty when consecutive levels on one `device_group` change models (§5.7);
-- escalation is not simulated inline (validity failures are unknowable in dry run); instead the analyzer computes `escalation_upper_bound_calls` — one fallback call per leaf using `retry_then_escalate`, attributed to each leaf model's `fallback_alias` — and folds it into the high estimate (`calls_high`, `cost_usd_high`; §5.4, §8.1). The low estimate excludes it. `call_count_limit` (check 12) and `cost_budget` (check 16) are enforced against the high figures, so escalation cannot exceed a passing budget at runtime.
+- escalation is not simulated inline (validity failures are unknowable in dry run); instead the analyzer computes `escalation_upper_bound_calls` — one fallback call per leaf using `retry_then_escalate`, attributed to each leaf model's `fallback_alias` — and folds it into the high estimate (`calls_high`, `cost_usd_high`; §5.4, §8.1). The low estimate excludes it. `call_count_limit` (check 11) and `cost_budget` (check 15) are enforced against the high figures, so escalation cannot exceed a passing budget at runtime.
 
 **Filter conservatism.** Because a `filter` whose selectivity cannot be evaluated statically is costed as keep-all, the simulated call count is an upper bound that can be far above the live count. A plan whose real filter would discard most candidates may therefore fail `call_count_limit` or `cost_budget` on a count it would never actually reach at runtime. This is deliberate — verification must bound the worst case — but it means an author whose plan is rejected on a filter-dominated estimate should narrow it so the cost is provable: use a statically-evaluable predicate (lexical/embedding threshold the simulator can apply), pre-filter the candidate set before the plan, or raise the policy budget knowingly. The conservatism is on the safe side: it never under-counts.
 
 ### 8.3 Static Checks
 
-Before dry run, the host statically checks the authored program (whether template-derived or fresh):
+Before dry run, the host statically checks the authored program:
 
-- if the program is built from a template, its template metadata is valid;
 - body parses as S-expressions and conforms to the §4.0 grammar;
-- every `var` is bound by an enclosing `let`/`lambda`/`fix` or resolves to a declared `slot-ref`/input — no free variables;
+- every `var` is bound by an enclosing `let`/`lambda`/`fix` or resolves to a `slot-ref` bound in `slot_values` — no free variables;
 - body uses only the §4.0 forms and the §4.1 allow-listed operators (no operator outside the allow-list, no `eval`/dynamic operator);
 - recursion satisfies the §4.0 termination discipline;
-- inferred effects match declared/allowed effects;
-- declared boundary schemas are valid (§3.1);
-- resource-law syntax is valid (when a template declares one).
+- inferred effects match allowed effects;
+- declared boundary schemas are valid (§3.1).
 
 S-expression parsing and body analysis **MUST NOT** use regular expressions.
 
@@ -878,38 +768,36 @@ Verification is the **safety boundary for the model-authored program**: because 
 
 Verification runs all checks and never short-circuits.
 
-`decision` is `fail` if and only if at least one `fail`-severity check fails. `warn`-severity checks (13 `critical_path_limit`, 22 `checkpoint_writable`, 24 `wall_clock_limit`) are always recorded in `checks` but never flip `decision`; a plan may pass with outstanding warnings. Live execution may start only when `decision` is `pass`.
+`decision` is `fail` if and only if at least one `fail`-severity check fails. `warn`-severity checks (12 `critical_path_limit`, 21 `checkpoint_writable`, 22 `wall_clock_limit`) are always recorded in `checks` but never flip `decision`; a plan may pass with outstanding warnings. Live execution may start only when `decision` is `pass`.
 
 **Repair loop.** When `decision` is `fail`, the host returns the failing checks as structured errors (check name, offending node, expected-vs-actual) to the Tier-0 author, which revises the program and resubmits through `plan_strategy` → `dry_run_strategy` → `execute_strategy`. This loop is bounded by `max_repair_attempts` (policy default below); exceeding it returns a terminal error rather than looping forever. The attempt counter is tracked per repair session, keyed by `(context_id, task)` and recorded on the `PlanRecord` (`repair_attempt`, §13); each rejected resubmission increments it, and a fresh task resets it. **No live LLM call occurs anywhere in the repair loop** — only authoring, type-checking, simulation, and verification, all of which are free of live calls. Repair is how model-authored flexibility is reconciled with strict admission: the model may try any shape, but only an admitted one ever runs.
 
-Exactly 24 checks:
+Exactly 22 checks:
 
 | # | Name | Severity | Rule |
 |---|---|---|---|
 | 1 | `artifact_exists` | fail | artifact is stored |
 | 2 | `artifact_hash` | fail | recomputed hash matches |
-| 3 | `template_known` | fail | if the program references a template, that name/version exists (vacuously passes for a freshly authored program) |
-| 4 | `slot_schema` | fail | declared slots validate |
-| 5 | `input_type_compatible` | fail | context value matches template input schema (structural) |
-| 6 | `chain_type_compatible` | fail | adjacent chain output/input schemas compose (structural) |
-| 7 | `effects_allowed` | fail | required effects allowed by policy |
-| 8 | `context_exists` | fail | context-ref slots resolve |
-| 9 | `model_aliases_resolve` | fail | model aliases exist |
-| 10 | `primitive_allowlist` | fail | body uses only §4.0 grammar forms and §4.1 allow-listed operators; no free variables |
-| 11 | `termination_bound` | fail | recursion satisfies the §4.0 termination discipline (structural descent via `split`/`context-items`); `iterate` nodes have a finite `max_iterations` (§5.2) |
-| 12 | `call_count_limit` | fail | `calls_high` (simulated calls + escalation worst case) <= policy |
-| 13 | `critical_path_limit` | warn | critical path <= policy |
-| 14 | `concurrency_limit` | fail | per-model and global max concurrency <= limits (§5.7) |
-| 15 | `token_budget` | fail | estimated tokens <= policy |
-| 16 | `cost_budget` | fail | `cost_usd_high` (incl. escalation worst case) <= policy |
-| 17 | `recursion_depth_limit` | fail | simulated depth <= policy |
-| 18 | `dry_run_fresh` | fail | dry run artifact matches plan |
-| 19 | `output_schema_valid` | fail | declared boundary schema is valid |
-| 20 | `py_exec_policy` | fail | py-exec requires policy allow |
-| 21 | `total_language_closed` | fail | program is closed under the §4.0 total language: only allow-listed operators, no `eval`/quote-of-code/dynamic-operator or other arbitrary-code construct; `py-exec` only as the policy-gated effect (check 20) |
-| 22 | `checkpoint_writable` | warn | checkpoints namespace writable if used |
-| 23 | `resource_law_respected` | fail | simulated stats do not exceed declared law |
-| 24 | `wall_clock_limit` | warn | estimated wall clock <= policy (§5.7) |
+| 3 | `slots_resolve` | fail | every `slot-ref` in the program is bound in `slot_values` |
+| 4 | `input_type_compatible` | fail | context value matches the declared program input schema (structural) |
+| 5 | `chain_type_compatible` | fail | adjacent chain output/input schemas compose (structural) |
+| 6 | `effects_allowed` | fail | required effects allowed by policy |
+| 7 | `context_exists` | fail | context-ref bindings resolve |
+| 8 | `model_aliases_resolve` | fail | model aliases exist |
+| 9 | `primitive_allowlist` | fail | body uses only §4.0 grammar forms and §4.1 allow-listed operators; no free variables |
+| 10 | `termination_bound` | fail | recursion satisfies the §4.0 termination discipline (structural descent via `split`/`context-items`); `iterate` nodes have a finite `max_iterations` (§5.2) |
+| 11 | `call_count_limit` | fail | `calls_high` (simulated calls + escalation worst case) <= policy |
+| 12 | `critical_path_limit` | warn | critical path <= policy |
+| 13 | `concurrency_limit` | fail | per-model and global max concurrency <= limits (§5.7) |
+| 14 | `token_budget` | fail | estimated tokens <= policy |
+| 15 | `cost_budget` | fail | `cost_usd_high` (incl. escalation worst case) <= policy |
+| 16 | `recursion_depth_limit` | fail | simulated depth <= policy |
+| 17 | `dry_run_fresh` | fail | dry run artifact matches plan |
+| 18 | `output_schema_valid` | fail | declared boundary schema is valid |
+| 19 | `py_exec_policy` | fail | py-exec requires policy allow |
+| 20 | `total_language_closed` | fail | program is closed under the §4.0 total language: only allow-listed operators, no `eval`/quote-of-code/dynamic-operator or other arbitrary-code construct; `py-exec` only as the policy-gated effect (check 19) |
+| 21 | `checkpoint_writable` | warn | checkpoints namespace writable if used |
+| 22 | `wall_clock_limit` | warn | estimated wall clock <= policy (§5.7) |
 
 Policy defaults:
 
@@ -980,18 +868,16 @@ Python replies to `context_read`, `llm_call`, `py_exec`, `checkpoint`, and `gate
 
 ## 11. MCP Tools
 
-Exactly 10 tools:
+Exactly 8 tools:
 
 | Tool | Purpose |
 |---|---|
 | `load_context` | Store input and metadata. |
-| `plan_strategy` | Accept a model-authored combinator program (or a skeleton name plus edits), type-check it, fill the numeric safety parameters, and return a typed `PlanRecord` or structured errors. |
+| `plan_strategy` | Accept a model-authored combinator program, type-check it, fill the numeric safety parameters, and return a typed `PlanRecord` or structured errors. |
 | `dry_run_strategy` | Simulate plan and estimate resources. |
 | `execute_strategy` | Verify and execute live. |
 | `resume_execution` | Resume a live gate. |
 | `get_execution_trace` | Fetch execution trace. |
-| `list_templates` | List the optional skeleton / standard-library templates. |
-| `describe_template` | Describe one template. |
 | `get_record` | Fetch stored record by ID. |
 | `reset` | Clear state by scope. |
 
@@ -1030,7 +916,7 @@ Store namespaces:
 - `checkpoints`
 - `traces`
 
-The authored program is persisted to `programs` at `plan_strategy` time and referenced by `program_ref`; the content-addressed `ArtifactRecord` (program hash + slot values + boundary schemas + effects) is created at `dry_run_strategy` time (§6.4) and is what verification and execution bind to.
+The authored program is persisted to `programs` at `plan_strategy` time and referenced by `program_ref`; the content-addressed `ArtifactRecord` (program hash + slot values + boundary schemas + effects) is created at `dry_run_strategy` time (§6.2) and is what verification and execution bind to.
 
 Gates are in-memory only and are not resumable after process death: `resume_execution` (§11) succeeds only while the original host process and its suspended execution are still alive. `checkpoints` (persisted) are the durable recovery mechanism across process restarts.
 
@@ -1068,16 +954,6 @@ class ContextRecord(BaseModel):
     metadata: dict[str, Any]
     created_at: float
 
-class TemplateMeta(BaseModel):
-    name: str
-    version: str
-    task_kinds: list[str]
-    input_schema: dict[str, Any] = {}
-    output_schema: dict[str, Any] = {}
-    slots: dict[str, Any]
-    effects: list[str] = []
-    resource_law: dict[str, str] = {}
-
 class PlanRecord(BaseModel):
     plan_id: str
     context_id: str
@@ -1088,7 +964,6 @@ class PlanRecord(BaseModel):
     schema_flow: list[tuple[dict[str, Any], dict[str, Any]]]
     planner_parameters: dict[str, Any]  # host-fixed numeric params (k, tau, per-node model); see §7.0 note on "planner"
     repair_attempt: int = 0             # repair-loop counter for (context_id, task); capped at max_repair_attempts (§9)
-    alternatives: list[dict[str, Any]] = []
     created_at: float
 
 class ArtifactRecord(BaseModel):
@@ -1138,10 +1013,9 @@ Store(root: Path)
 ModelRegistry(config_path: Path)
 ContextStore(store: Store)
 CombinatorRegistry(runtime_dir: Path)
-TemplateRegistry(template_dir: Path, models: ModelRegistry)
-Planner(templates: TemplateRegistry, models: ModelRegistry)
+Planner(models: ModelRegistry)
 CostAnalyzer(models: ModelRegistry)
-VerificationEngine(store: Store, templates: TemplateRegistry)
+VerificationEngine(store: Store)
 RacketRuntime(runtime_dir: Path)
 DryRunner(store: Store, runtime: RacketRuntime, cost: CostAnalyzer)
 Executor(...)
@@ -1168,23 +1042,21 @@ Acceptance:
 - store namespace tests;
 - model registry loads required aliases.
 
-### Batch 1: S-Expressions, Program Grammar, and Template Registry
+### Batch 1: S-Expressions and Program Grammar
 
 Files:
 
 - `rlm_scheme/sexpr.py`
 - `rlm_scheme/grammar.py`
-- `rlm_scheme/template_store.py`
-- `templates/*.rkt`
+- `examples/*.rkt`
 
 Acceptance:
 
 - no regex for S-expression parsing or body analysis;
 - §4.0 grammar acceptance/rejection tests (legal forms parse; `eval`/computed-operator/free-variable programs are rejected);
 - termination-discipline tests: a `fix` descending on a `split`/`context-items` sub-part is accepted; recursion on `x` itself or on a non-derived value is rejected;
-- metadata parse tests;
-- type/effect/resource metadata validation;
-- template body allowlist tests.
+- effect-inference tests from the program body;
+- shipped example programs parse and conform to §4.0.
 
 ### Batch 2: Boundary Schemas and Contexts
 
@@ -1210,12 +1082,10 @@ Files:
 Acceptance:
 
 - accept a model-authored combinator program and type-check its boundaries;
-- `tau` clamped to the leaf model's `K` regardless of any author-supplied value;
-- split-factor bounded search (host-chosen or author-proposed-and-validated);
+- `tau` sized to the leaf model's `K` by the host (the program does not set it);
+- split-factor bounded search (host-chosen);
 - schema-flow construction;
-- host suggests a skeleton from task kind and statistics;
-- a failing program returns structured per-check errors suitable for a repair attempt;
-- alternatives include tradeoffs.
+- a failing program returns structured per-check errors suitable for a repair attempt.
 
 ### Batch 4: Racket Runtime
 
@@ -1266,7 +1136,7 @@ Acceptance:
 - dry-run cost from simulated calls;
 - closed-form bound checks;
 - per-model wall-clock estimate with device-swap penalty (§5.7);
-- all 24 verification checks, including `total_language_closed` (21) rejecting an arbitrary-code escape and `termination_bound` (11) rejecting non-decreasing recursion;
+- all 22 verification checks, including `total_language_closed` (20) rejecting an arbitrary-code escape and `termination_bound` (10) rejecting non-decreasing recursion;
 - bounded repair loop: a failing program returns structured per-check errors and increments `repair_attempt`; exceeding `max_repair_attempts` returns a terminal error;
 - no live call anywhere before pass verification (including during repair).
 
@@ -1296,7 +1166,7 @@ Files:
 
 Acceptance:
 
-- exactly 10 tools;
+- exactly 8 tools;
 - response envelope;
 - happy path through MCP;
 - long-context recursive plan through MCP.
@@ -1332,13 +1202,14 @@ The implementation is done when:
 8. No live LLM call occurs before passing verification.
 9. Racket sandbox escape tests fail.
 10. No S-expression parsing or body analysis uses regex.
-11. MCP exposes exactly 10 tools.
-12. Verification runs exactly 24 checks and never short-circuits.
-13. Symbolic-first composition is the authoring default and the host's suggested skeletons reflect it; symbolic-composed plans collapse LLM calls to the leaf count.
-14. Leaf threshold `tau` is sized to the model's reliable-input budget `K`, not its raw window `W`, and is clamped to `K` by the host regardless of any author-supplied or template value.
+11. MCP exposes exactly 8 tools.
+12. Verification runs exactly 22 checks and never short-circuits.
+13. Symbolic-first composition is the authoring default (reflected in the example programs); symbolic-composed plans collapse LLM calls to the leaf count.
+14. Leaf threshold `tau` is sized to the model's reliable-input budget `K`, not its raw window `W`, by the host; the program does not set it.
 15. Context bytes are never serialized into the run message or held by the Racket runtime; the runtime obtains content only as bounded slices via `CONTEXT_READ` effects.
 16. Per-model concurrency and a single-device-aware `wall_clock_seconds_estimate` are simulated and bounded; a single-GPU leaf model is modeled as serial (`max_concurrency = 1`) with a device-swap penalty across `device_group`.
 17. Heterogeneous routing works: a plan can run grunt-work leaves on a local-backend model (`openai_compatible`/`ollama`/`vllm`/`llamacpp`, §13) while reserving an orchestrator-tier cloud model for authoring and `retry_then_escalate` fallbacks — the core economic goal of §0.3.
-18. Control flow is model-authored but admitted only through verification: a program in the total combinator language passes §9 before any live call, the `total_language_closed` check (21) rejects any escape to arbitrary code, and a failing program drives a bounded `max_repair_attempts` repair loop with zero live calls.
-19. `SPEC-DEVIATIONS.md` is empty or reviewed.
+18. Control flow is model-authored but admitted only through verification: a program in the total combinator language passes §9 before any live call, the `total_language_closed` check (20) rejects any escape to arbitrary code, and a failing program drives a bounded `max_repair_attempts` repair loop with zero live calls.
+19. No template system: programs are authored directly in the §4.0 language; example programs (`examples/`) are non-runnable authoring guidance with no metadata, registry, or verification status.
+20. `SPEC-DEVIATIONS.md` is empty or reviewed.
 
