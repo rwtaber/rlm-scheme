@@ -180,15 +180,39 @@ Supported context shapes:
 - `items`: ordered independent items, each serializable to text.
 - `json`: one JSON value; the implementation may treat it as text unless a primitive explicitly supports JSON access.
 
+`load_context` accepts either inline data or a host-readable loader descriptor. The required loader descriptor for this implementation is `{"kind":"directory", ...}`:
+
+```json
+{
+  "kind": "directory",
+  "root": "/absolute/path",
+  "include": ["**/*.py", "**/*.rkt", "**/*.md"],
+  "exclude": [".git/**", ".venv/**", "__pycache__/**"],
+  "chunk_chars": 16000
+}
+```
+
+Directory loading is deterministic:
+
+- `root` must resolve under one of `policy.allowed_context_roots`; otherwise `load_context` fails;
+- the host expands `include`/`exclude` globs under `root`;
+- paths are sorted lexicographically by relative path;
+- binary files are skipped unless explicitly included with a text encoding;
+- files larger than `chunk_chars` are split into ordered chunk items;
+- every item stores a stable label: `relative/path` for a whole file, or `relative/path#chunk-N` for a chunk;
+- every item stores `size_chars`, `source_path`, and `chunk_index` metadata;
+- stored context bytes are immutable after `context_id` creation.
+
 Context reads:
 
 ```text
 slice(context, start, length) -> Text
 context-items(context) -> List[ItemRef]
 item-text(item_ref) -> Text
+item-label(item_ref) -> Text
 ```
 
-`ItemRef` carries metadata only: context id, item index, and item size in characters. `size-tokens` on an `ItemRef` uses that metadata. `size-tokens` on `List[ItemRef]` is the sum of the item sizes. `item-text` is the only primitive that reads an item's bytes.
+`ItemRef` carries metadata only: context id, item index, label, source path if any, chunk index if any, and item size in characters. `size-tokens` on an `ItemRef` uses that metadata. `size-tokens` on `List[ItemRef]` is the sum of the item sizes. `item-label` reads only metadata. `item-text` is the only primitive that reads an item's bytes.
 
 Host limits:
 
@@ -317,6 +341,7 @@ Core primitives:
 | `slice` | `ContextRef x Integer x Integer -> Text` | `CONTEXT_READ` |
 | `context-items` | `ContextRef -> List[ItemRef]` | `CONTEXT_READ` |
 | `item-text` | `ItemRef -> Text` | `CONTEXT_READ` |
+| `item-label` | `ItemRef -> Text` | none |
 | `leaf-call` | `ModelAlias x InstructionText x InputText x Schema -> Value` | `LLM` |
 | `validate` | `Schema x Value -> Boolean` | none |
 
@@ -545,6 +570,7 @@ allowed_effects = {"LLM", "CONTEXT_READ"}
 default_error_policy = "retry_then_escalate"
 default_leaf_model = "local_fast"
 allowed_models = {"local_fast", "cloud_quality"}
+allowed_context_roots = ["/home/rwt/Code"]
 ```
 
 All checks are hard gates: calls, tokens, cost, effects, language closure, and termination must pass. There is no separate verify tool — `execute_strategy` runs all checks after confirming a fresh dry run and refuses to execute unless `decision == pass`.
@@ -622,7 +648,7 @@ Effect requests:
 {"type":"llm_call","id":"call_0000000000000002","model":"local_fast","instruction":"...","input":"...","output_schema":{"type":"object"},"max_tokens":512,"temperature":0}
 ```
 
-`op` is one of `slice`, `context-items`, `item-text`; `slice` carries a `range`, `item-text` carries an `item_index`, and `context-items` carries neither.
+`op` is one of `slice`, `context-items`, `item-text`; `slice` carries a `range`, `item-text` carries an `item_index`, and `context-items` carries neither. `item-label` is metadata-only and is evaluated inside the runtime from the `ItemRef`; it does not require a context-read effect.
 
 Effect replies:
 
@@ -650,7 +676,7 @@ Exactly seven tools:
 
 | Tool | Signature |
 |---|---|
-| `load_context` | `(data, data_shape, schema?, metadata?) -> context_id` |
+| `load_context` | `(data_or_loader, data_shape, schema?, metadata?) -> context_id` |
 | `plan_strategy` | `(context_id, program_source, task, slot_values, hints?) -> plan_id` |
 | `dry_run_strategy` | `(plan_id) -> dry_run_id, bounds, cost` |
 | `execute_strategy` | `(plan_id, dry_run_id) -> execution_id` |
@@ -733,6 +759,7 @@ Acceptance:
 - Unsupported keywords fail.
 - Schema compatibility tests pass.
 - Text, items, and JSON contexts load and report metadata.
+- Directory loader expands files deterministically, applies include/exclude globs, chunks large files, and assigns stable item labels.
 - Bounded reads enforce `max_context_read_chars`.
 
 ### Batch 3: Parameter Planning and Artifacts
@@ -764,6 +791,7 @@ Acceptance:
 - Handshake works.
 - AST runs without Racket `eval`.
 - Core primitives work.
+- `item-label` returns metadata without a context-read effect.
 - Simulate mode returns `done`, stats, and calls.
 - Runtime stdout is protocol-only.
 
@@ -815,6 +843,7 @@ Acceptance:
 - Exactly seven tools are exposed.
 - Happy path: load context -> plan -> dry run -> execute -> trace.
 - Example programs parse and run with mock provider.
+- Repository plan-review worked example runs with a temporary directory and mock provider.
 - README documents implementation scope and out-of-scope features.
 
 ---
@@ -863,14 +892,137 @@ This is the preferred shape for large text: load the document as an `items` cont
       (leaf-call
         (param leaf_model)
         (slot leaf_instruction)
-        (item-text item)
+        (concat
+          (list
+            "Item: " (item-label item) "\n\n"
+            (item-text item)))
         (slot text_schema)))
     (context-items (slot context))))
 ```
 
 ---
 
-## 18. Out of Scope
+## 18. Worked Example: Repository Plan Review
+
+Problem:
+
+> Given a repository and an implementation plan, identify files that conflict with the plan, missing implementation work, and tests that should be added.
+
+This is realistic because the repository may contain hundreds of files. The model should not receive the whole repository in one prompt, and the runtime should not execute arbitrary generated code while inspecting it.
+
+### 18.1 Load the Repository Directory
+
+The caller loads the repository as an `items` context:
+
+```json
+{
+  "data_or_loader": {
+    "kind": "directory",
+    "root": "/home/rwt/Code/rlm-scheme",
+    "include": ["**/*.py", "**/*.rkt", "**/*.md", "config/**/*.json"],
+    "exclude": [".git/**", ".venv/**", "__pycache__/**", ".pytest_cache/**"],
+    "chunk_chars": 16000
+  },
+  "data_shape": "items",
+  "metadata": {"purpose": "repo-review"}
+}
+```
+
+The host expands the directory into ordered `ItemRef`s. Each item has a label such as `rlm_scheme/runtime.py` or `docs/GREENFIELD-IMPLEMENTATION-PLAN-SIMPLIFIED.md#chunk-2`.
+
+### 18.2 Load the Plan Text
+
+The caller loads the plan as `text` if it fits the reliable-input budget, or as `items` if it is large. For this example, assume a bounded plan summary is supplied as a slot rather than read from context:
+
+```json
+{
+  "plan_summary": "Implement the MCP tools load_context, plan_strategy, dry_run_strategy, execute_strategy, get_execution_trace, get_record, and reset. Use a closed S-expression AST, host parameters, immutable contexts, directory item loading, dry-run high bounds, and verification inside execute_strategy."
+}
+```
+
+### 18.3 Leaf Prompt
+
+The leaf instruction is ordinary slot data:
+
+```text
+You are reviewing one repository item against the implementation plan.
+Return a concise text block with these headings:
+LABEL
+RELEVANT
+FINDINGS
+REQUIRED CHANGES
+TESTS
+
+Use RELEVANT: false when the item does not affect the plan.
+Do not invent files or APIs. Base the answer only on the plan summary and item text.
+```
+
+The leaf input is constructed by the program from bounded data:
+
+```text
+PLAN SUMMARY:
+<plan_summary slot>
+
+ITEM:
+<item-label>
+
+ITEM TEXT:
+<item-text>
+```
+
+### 18.4 Program
+
+```scheme
+(concat
+  (map
+    (lambda (item)
+      (leaf-call
+        (param leaf_model)
+        (slot review_instruction)
+        (concat
+          (list
+            "PLAN SUMMARY:\n"
+            (slot plan_summary)
+            "\n\nITEM:\n"
+            (item-label item)
+            "\n\nITEM TEXT:\n"
+            (item-text item)))
+        (slot text_schema)))
+    (context-items (slot repo_context))))
+```
+
+`text_schema` is:
+
+```json
+{"type": "string"}
+```
+
+The `plan_strategy` call binds these slots:
+
+```json
+{
+  "repo_context": "ctx_repo",
+  "plan_summary": "Implement the MCP tools load_context, plan_strategy, dry_run_strategy, execute_strategy, get_execution_trace, get_record, and reset. Use a closed S-expression AST, host parameters, immutable contexts, directory item loading, dry-run high bounds, and verification inside execute_strategy.",
+  "review_instruction": "You are reviewing one repository item against the implementation plan. Return a concise text block with headings LABEL, RELEVANT, FINDINGS, REQUIRED CHANGES, and TESTS. Use RELEVANT: false when the item does not affect the plan. Do not invent files or APIs. Base the answer only on the plan summary and item text.",
+  "text_schema": {"type": "string"}
+}
+```
+
+### 18.5 What Each Tool Does
+
+1. `load_context` creates `ctx_repo` from the directory loader.
+2. `plan_strategy` parses the program, checks the slot bindings above, infers slot types, chooses host parameters, and creates the artifact.
+3. `dry_run_strategy` simulates one leaf call per repository item and adds retry/escalation worst-case calls to the high bound.
+4. `execute_strategy` verifies artifact integrity, language closure, context existence, slot and parameter resolution, schema validity, effects, model aliases, termination, budget, and dry-run freshness.
+5. During execution, each `item-text` request reads only one bounded item. Each `leaf-call` receives the exact instruction above and the constructed input containing the plan summary, item label, and item text.
+6. Each model output is validated against `text_schema`. Invalid output follows the configured retry/escalation policy.
+7. `get_execution_trace` returns item reads, model call metadata, usage, validation failures, retries, escalations, and final status.
+
+This example intentionally uses symbolic `concat` as the final composition, so every leaf returns `Text`. A structured-object variant would require adding an allow-listed symbolic combiner such as `json-lines` or `collect`, plus its typing and verification rules.
+
+---
+
+## 19. Out of Scope
 
 These features are intentionally out of scope for this plan:
 
@@ -890,7 +1042,7 @@ Add an out-of-scope feature only after the implementation passes the definition 
 
 ---
 
-## 19. Definition of Done
+## 20. Definition of Done
 
 The implementation is done when:
 
