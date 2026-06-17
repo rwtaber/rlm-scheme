@@ -12,13 +12,13 @@ The key move is to separate **strategy shape** from **unsafe execution**. A **St
 
 The system is intentionally not a general agent runtime. It does not run arbitrary generated code, substitute text into templates, import unverified sub-programs, or resume durable human gates. Its job is narrower: bounded decomposition, mapping, filtering, reduction, validation, and synthesis over data too large or too risky to send to one prompt.
 
-The execution lifecycle is:
+The usual authoring lifecycle is:
 
 ```text
-load_context -> get_strategy_guide -> dry_run_strategy -> execute_strategy -> get_execution_trace
+get_strategy_guide -> load_context -> dry_run_strategy -> execute_strategy -> get_execution_trace
 ```
 
-`load_context` stores data in the host. `get_strategy_guide` returns context metadata, available primitives, prompt-spec requirements, policy limits, and examples so the Strategy Author can write a valid strategy package. `dry_run_strategy` accepts that package, admits it, seals it, and simulates it to produce conservative bounds. `execute_strategy` verifies those bounds and executes once only if every hard check passes.
+`get_strategy_guide` returns the strategy-package authoring manual: how to construct the S-expression AST, how slots, prompts, params, and context refs work, which primitives exist, and what examples are valid. It takes no arguments and does not inspect a context. `load_context` stores task data in the host and returns context metadata. `dry_run_strategy` accepts the context id and authored package, admits it, seals it, and simulates it to produce conservative bounds. `execute_strategy` verifies those bounds and executes once only if every hard check passes.
 
 ---
 
@@ -113,11 +113,16 @@ class ProgramRecord(BaseModel):
 
 class StrategyGuideRecord(BaseModel):
     guide_id: str
-    context_id: str
-    task: str
-    context_summary: dict[str, Any]
+    runtime_version: str
+    language_version: str
+    package_schema: dict[str, Any]
+    grammar: str
     allowed_primitives: list[str]
+    primitive_docs: dict[str, Any]
     required_package_fields: list[str]
+    slot_rules: list[str]
+    prompt_spec_rules: list[str]
+    runtime_bound_rules: list[str]
     policy_summary: dict[str, Any]
     examples: list[dict[str, Any]] = []
     created_at: float
@@ -791,14 +796,16 @@ Exactly seven tools:
 | Tool | Signature |
 |---|---|
 | `load_context` | `(data_or_loader, data_shape, schema?, metadata?) -> LoadContextResult` |
-| `get_strategy_guide` | `(context_id, task, hints?) -> StrategyGuideRecord` |
+| `get_strategy_guide` | `() -> StrategyGuideRecord` |
 | `dry_run_strategy` | `(context_id, strategy_package, task, hints?) -> dry_run_id, sealed_strategy_id, bounds, cost` |
 | `execute_strategy` | `(dry_run_id) -> execution_id` |
 | `get_execution_trace` | `(execution_id) -> trace` |
 | `get_record` | `(id) -> record` |
 | `reset` | `(scope) -> ok` |
 
-`get_strategy_guide` does not call an LLM and does not create a strategy. It returns enough context metadata, primitive documentation, prompt-spec requirements, policy limits, and examples for the Strategy Author to write a valid `strategy_package`.
+`get_strategy_guide` does not call an LLM, inspect a context, or create a strategy. It returns the static authoring guide for this runtime version: package schema, grammar, primitive documentation, slot rules, prompt-spec rules, runtime-bound rules, policy summary, and examples. It answers "how do I write a valid strategy package?", not "what strategy should I use for this context?"
+
+Context-specific facts come from `load_context` and `get_record(context_id)`. Task-specific semantics come from the caller or Strategy Author. The server does not infer a task plan, choose leaf prompts, or generate the AST.
 
 `strategy_package` contains `program_source`, `slot_values`, and `prompt_specs`. `dry_run_strategy` parses the package, selects runtime bounds, creates a sealed strategy, simulates it, and returns conservative bounds. `execute_strategy` accepts a fresh `dry_run_id`, verifies the sealed strategy attached to that dry run, and executes only if `decision == pass`.
 
@@ -850,11 +857,7 @@ Response envelope:
 `get_strategy_guide` request:
 
 ```json
-{
-  "context_id": "ctx_0123456789abcdef",
-  "task": "Review repository items against the implementation plan.",
-  "hints": {"preferred_leaf_model": "local_fast"}
-}
+{}
 ```
 
 `get_strategy_guide` response:
@@ -864,10 +867,24 @@ Response envelope:
   "status": "ok",
   "guide": {
     "guide_id": "guide_0123456789abcdef",
-    "context_id": "ctx_0123456789abcdef",
-    "context_summary": {"data_shape": "items", "item_count": 74, "estimated_tokens": 210578},
-    "allowed_primitives": ["context-items", "item-label", "item-text", "concat", "list", "map", "leaf-call"],
+    "runtime_version": "rlm-scheme-racket-1",
+    "language_version": "strategy-package-1",
     "required_package_fields": ["program_source", "slot_values", "prompt_specs"],
+    "package_schema": {
+      "type": "object",
+      "required": ["program_source", "slot_values", "prompt_specs"]
+    },
+    "grammar": "program ::= expr; expr ::= literal | var | slot-ref | param-ref | prompt-ref | if | let | lambda | application | fix",
+    "allowed_primitives": ["context-items", "item-label", "item-text", "concat", "list", "map", "leaf-call"],
+    "primitive_docs": {
+      "context-items": "ContextRef -> List[ItemRef]",
+      "item-label": "ItemRef -> Text",
+      "item-text": "ItemRef -> Text, bounded context read",
+      "leaf-call": "ModelAlias x PromptRef x InputText -> Value"
+    },
+    "slot_rules": ["Bind context ids and short task facts in strategy_package.slot_values."],
+    "prompt_spec_rules": ["Every (prompt name) must have a matching prompt_specs[name] entry with instruction and output_schema."],
+    "runtime_bound_rules": ["Use (param leaf_model), (param leaf_threshold_tokens), and other runtime bounds; do not hard-code server-owned resource values."],
     "policy_summary": {"allowed_models": ["local_fast", "cloud_quality"], "max_llm_calls": 500},
     "examples": [{"name": "item-map-review", "program_source": "(concat (map ...))"}]
   }
@@ -1167,7 +1184,7 @@ The Strategy Author submits this strategy package to `dry_run_strategy`:
 ### 17.5 What Each Tool Does
 
 1. `load_context` creates `ctx_repo` from the directory loader.
-2. `get_strategy_guide` returns context metadata, allowed primitives, policy limits, and examples to help the Strategy Author create the package.
+2. `get_strategy_guide` returns the argument-free authoring guide: package schema, grammar, primitive docs, slot rules, prompt-spec rules, runtime-bound rules, policy limits, and examples.
 3. The Strategy Author creates the program plus `review_item` prompt spec, then `dry_run_strategy` parses the package, checks the slot and prompt bindings above, infers slot types, chooses runtime bounds, creates the sealed strategy, simulates one leaf call per repository item, and adds retry/escalation worst-case calls to the high bound.
 4. `execute_strategy` verifies sealed strategy integrity, language closure, context existence, slot and runtime-bound resolution, schema validity, effects, model aliases, termination, budget, and dry-run freshness.
 5. During execution, each `item-text` request reads only one bounded item. Each `leaf-call` references `(prompt review_item)`, so Python supplies the exact prompt spec above plus the constructed input containing the plan summary, item label, and item text.
