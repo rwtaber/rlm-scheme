@@ -1,19 +1,24 @@
 # RLM-Scheme Greenfield Implementation Plan
 
-**Status:** new v1 implementation plan.  
+**Status:** normative implementation plan.  
 **Audience:** human maintainers and coding agents.  
 **Goal:** implement a small, auditable MCP server for bounded long-context LLM workflows.
 
-This document replaces the older greenfield plan for a first implementation. It keeps the useful core and removes features that can wait:
+## Orientation
 
-- no arbitrary generated code execution;
-- no template substitution system;
-- no durable gate/checkpoint resume;
-- no multi-device scheduling optimizer;
-- no imported sub-program library;
-- no large verification checklist whose items overlap.
+RLM-Scheme is an MCP server for auditable long-context LLM computation. It keeps large inputs outside the model window, lets a caller submit a small typed orchestration program, dry-runs that program to compute resource bounds, verifies it against policy, and only then executes it.
 
-The v1 system accepts a model-authored program in a tiny total S-expression language, binds it to a context, injects host-owned resource parameters, dry-runs it to produce upper bounds, verifies those bounds against policy, then executes it once.
+The key move is to separate **strategy shape** from **unsafe execution**. A model may author the control-flow shape, but it can only use a tiny total S-expression language. The host owns the safety-critical values: leaf size, split factor, model aliases, context-read limits, schemas, policy, and budgets. The program is parsed, typed, parameterized, simulated, and verified before any live model call is allowed.
+
+The system is intentionally not a general agent runtime. It does not run arbitrary generated code, substitute text into templates, import unverified sub-programs, or resume durable human gates. Its job is narrower: bounded decomposition, mapping, filtering, reduction, validation, and synthesis over data too large or too risky to send to one prompt.
+
+The execution lifecycle is:
+
+```text
+load_context -> plan_strategy -> dry_run_strategy -> execute_strategy -> get_execution_trace
+```
+
+`load_context` stores data in the host. `plan_strategy` accepts an authored program and binds host parameters. `dry_run_strategy` simulates the exact artifact and produces conservative bounds. `execute_strategy` verifies those bounds and executes once only if every hard check passes.
 
 ---
 
@@ -22,7 +27,7 @@ The v1 system accepts a model-authored program in a tiny total S-expression lang
 No live model call may occur until all of these are true:
 
 1. The context has been loaded into the host store.
-2. The authored program parses into the v1 AST.
+2. The authored program parses into the implementation AST.
 3. Every referenced slot and host parameter resolves.
 4. The program uses only allowed forms and primitives.
 5. Recursion, if present, is structurally decreasing.
@@ -173,7 +178,7 @@ Supported context shapes:
 
 - `text`: one contiguous text blob.
 - `items`: ordered independent items, each serializable to text.
-- `json`: one JSON value; v1 may treat it as text unless a primitive explicitly supports JSON access.
+- `json`: one JSON value; the implementation may treat it as text unless a primitive explicitly supports JSON access.
 
 Context reads:
 
@@ -219,7 +224,7 @@ Rules:
 - `reliable_input_tokens <= context_window_tokens`.
 - Leaf sizing uses `reliable_input_tokens`, not `context_window_tokens`.
 - `fallback_alias` is used only for `retry_then_escalate`.
-- v1 does not optimize across physical devices. `max_concurrency` is only a provider throttle for execution.
+- This plan does not optimize across physical devices. `max_concurrency` is only a provider throttle for execution.
 
 ---
 
@@ -325,13 +330,13 @@ Deferred primitives:
 - embeddings
 - imported sub-programs
 
-Deferred primitives must not exist in the v1 allow-list.
+Out-of-scope primitives must not exist in the implementation allow-list.
 
 ---
 
 ## 7. Typing and Schemas
 
-v1 uses structural types plus a small JSON Schema subset.
+The implementation uses structural types plus a small JSON Schema subset.
 
 Runtime types:
 
@@ -522,7 +527,7 @@ Checks:
 | `schema_valid` | fail | input/output/leaf schemas use the supported subset |
 | `types_compatible` | fail | primitive arguments and boundary schemas are compatible |
 | `effects_allowed` | fail | inferred effects are allowed by policy |
-| `language_closed` | fail | AST uses only v1 forms and allow-listed primitives |
+| `language_closed` | fail | AST uses only implementation forms and allow-listed primitives |
 | `termination_bound` | fail | every `fix` satisfies structural descent and max depth |
 | `model_aliases_resolve` | fail | every model alias exists and is policy-allowed |
 | `budget_bound` | fail | high calls, tokens, and cost are within policy |
@@ -542,7 +547,7 @@ default_leaf_model = "local_fast"
 allowed_models = {"local_fast", "cloud_quality"}
 ```
 
-All v1 checks are hard gates: calls, tokens, cost, effects, language closure, and termination must pass. There is no separate verify tool — `execute_strategy` runs all checks after confirming a fresh dry run and refuses to execute unless `decision == pass`.
+All checks are hard gates: calls, tokens, cost, effects, language closure, and termination must pass. There is no separate verify tool — `execute_strategy` runs all checks after confirming a fresh dry run and refuses to execute unless `decision == pass`.
 
 ---
 
@@ -572,7 +577,7 @@ Cancellation is best-effort:
 - In-flight provider calls may finish or be abandoned depending on adapter support.
 - Execution state becomes `cancelled`.
 
-No v1 resume exists after failure or process death. A user may execute the same verified artifact again, which creates a new execution record.
+There is no resume after failure or process death. A user may execute the same verified artifact again, which creates a new execution record.
 
 ---
 
@@ -581,7 +586,7 @@ No v1 resume exists after failure or process death. A user may execute the same 
 Startup:
 
 ```json
-{"type":"ready","protocol":"1.0","runtime_version":"rlm-scheme-racket-v1"}
+{"type":"ready","protocol":"1.0","runtime_version":"rlm-scheme-racket-1"}
 ```
 
 Run request:
@@ -641,7 +646,7 @@ The runtime must not print non-protocol text to stdout.
 
 ## 14. MCP Tools
 
-Exactly seven v1 tools:
+Exactly seven tools:
 
 | Tool | Signature |
 |---|---|
@@ -662,7 +667,7 @@ Response envelope:
 {"status":"error","error_code":"...","message":"...","details":{}}
 ```
 
-`plan_strategy`, `dry_run_strategy`, and `execute_strategy` all return structured errors suitable for repair by the caller. The host does not run its own autonomous repair loop in v1.
+`plan_strategy`, `dry_run_strategy`, and `execute_strategy` all return structured errors suitable for repair by the caller. The host does not run its own autonomous repair loop.
 
 ---
 
@@ -710,7 +715,7 @@ Files:
 
 Acceptance:
 
-- Parse valid v1 forms.
+- Parse valid implementation forms.
 - Reject macros, dynamic operators, free variables, `eval`, unknown primitives, and malformed `quote`.
 - Resolve slots and params without textual substitution.
 - No regex-based S-expression parsing.
@@ -810,7 +815,7 @@ Acceptance:
 - Exactly seven tools are exposed.
 - Happy path: load context -> plan -> dry run -> execute -> trace.
 - Example programs parse and run with mock provider.
-- README documents v1 scope and deferred features.
+- README documents implementation scope and out-of-scope features.
 
 ---
 
@@ -847,7 +852,7 @@ Acceptance:
  (context-items (slot context)))
 ```
 
-This is the preferred v1 shape for large text: load the document as an `items` context where each item is a chunk. The program recurses over item handles, and bytes are read only at bounded leaves through `item-text`. In this example, `text_schema` is `{"type":"string"}`, so both recursive branches return `Text`.
+This is the preferred shape for large text: load the document as an `items` context where each item is a chunk. The program recurses over item handles, and bytes are read only at bounded leaves through `item-text`. In this example, `text_schema` is `{"type":"string"}`, so both recursive branches return `Text`.
 
 ### 17.3 Item Map Then Symbolic Concat
 
@@ -865,9 +870,9 @@ This is the preferred v1 shape for large text: load the document as an `items` c
 
 ---
 
-## 18. Deferred Features
+## 18. Out of Scope
 
-These are intentionally out of v1:
+These features are intentionally out of scope for this plan:
 
 - arbitrary Python execution;
 - durable checkpoints and resume;
@@ -881,17 +886,17 @@ These are intentionally out of v1:
 - full prompt/output trace capture by default;
 - multimodal inputs.
 
-Add deferred features only after v1 passes the definition of done and the new feature has its own verification contract.
+Add an out-of-scope feature only after the implementation passes the definition of done and the new feature has its own verification contract.
 
 ---
 
 ## 19. Definition of Done
 
-v1 is done when:
+The implementation is done when:
 
 1. All batch acceptance tests pass.
 2. No live provider call can happen before passing verification.
-3. The parser accepts only the v1 grammar.
+3. The parser accepts only the implementation grammar.
 4. S-expression parsing and AST analysis do not use regex.
 5. Host parameters enter through `(param name)` and are included in artifact identity.
 6. Artifact identity includes AST, slots, schemas, host parameters, model registry hash, policy hash, and runtime version.
@@ -903,4 +908,4 @@ v1 is done when:
 12. Retry and escalation are counted and traced.
 13. Exactly seven MCP tools are exposed.
 14. Example programs run against the mock provider.
-15. Deferred features are absent from the v1 allow-list.
+15. Out-of-scope features are absent from the implementation allow-list.
