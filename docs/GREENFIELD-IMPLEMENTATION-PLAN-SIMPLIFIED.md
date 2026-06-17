@@ -29,7 +29,7 @@ No live model call may occur until all of these are true:
 6. The dry run has produced an upper bound for calls, tokens, cost, and depth.
 7. Verification has passed against the exact program, exact slots, exact host parameters, exact model registry, exact policy, and exact runtime version.
 
-Execution is deterministic except for `leaf-call` results. Re-running the same verified artifact produces the same call structure unless context data or runtime versions change, both of which invalidate verification.
+Execution is deterministic except for `leaf-call` results. Re-running the same verified artifact produces the same call structure. Contexts are immutable, so the only way to change input data is to load it again under a new `context_id`, which yields a new artifact; a runtime-version change likewise invalidates verification.
 
 ---
 
@@ -82,6 +82,8 @@ Store namespaces:
 - `traces`
 - `cache`
 
+`cache` holds an optional provider-response cache keyed by `(model, instruction, input, schema, params)`; it dedupes identical live calls and is never consulted in dry run.
+
 Records:
 
 ```python
@@ -130,9 +132,9 @@ class ArtifactRecord(BaseModel):
 class DryRunRecord(BaseModel):
     dry_run_id: str
     artifact_id: str
-    stats: dict[str, Any]
-    calls: list[dict[str, Any]]
-    cost: dict[str, Any]
+    stats: DryRunStats              # §10
+    calls: list[SimulatedCall]      # §10
+    cost: CostEstimate              # §10
     bounds: dict[str, Any]
     warnings: list[str] = []
 
@@ -160,7 +162,7 @@ class ExecutionRecord(BaseModel):
 
 ## 4. Context Model
 
-`load_context` stores data outside the prompt. Context access uses explicit units:
+`load_context` stores data outside the prompt and returns a `context_id`. **Contexts are immutable:** loading new data yields a new `context_id`; stored bytes never change under an existing id, which is why the artifact identifies context by id rather than by content hash. Context access uses explicit units:
 
 - `size_chars`: Unicode code points in the stored text representation.
 - `estimated_tokens`: `ceil(size_chars / 4)`.
@@ -176,7 +178,6 @@ Supported context shapes:
 Context reads:
 
 ```text
-peek(context, start, length) -> Text
 slice(context, start, length) -> Text
 context-items(context) -> List[ItemRef]
 item-text(item_ref) -> Text
@@ -186,7 +187,7 @@ item-text(item_ref) -> Text
 
 Host limits:
 
-- `max_context_read_chars` defaults to `leaf_threshold_tokens * 4`.
+- `max_context_read_chars` is a host parameter equal to `leaf_threshold_tokens * 4`. It is included in the artifact and carried in the run-message `limits`. There is no separate policy constant for it.
 - A single read that exceeds `max_context_read_chars` fails verification in dry run or fails execution if somehow reached live.
 - `context-items` returns item handles, not item bytes.
 
@@ -218,7 +219,7 @@ Rules:
 - `reliable_input_tokens <= context_window_tokens`.
 - Leaf sizing uses `reliable_input_tokens`, not `context_window_tokens`.
 - `fallback_alias` is used only for `retry_then_escalate`.
-- v1 does not optimize across physical devices. `max_concurrency` is only a provider throttle for execution and a dry-run latency hint.
+- v1 does not optimize across physical devices. `max_concurrency` is only a provider throttle for execution.
 
 ---
 
@@ -253,8 +254,10 @@ lambda        ::= (lambda (identifier ...) expr)
 fix           ::= (fix identifier (lambda (identifier) expr))
 
 application   ::= (operator expr ...)
-operator      ::= primitive-name | identifier
+operator      ::= primitive-name | identifier | lambda | fix
 ```
+
+The `operator` of an application must evaluate to a `Function`; the verifier checks its arity and argument types. This permits applying a `lambda` or `fix` directly (as in §17.2).
 
 `quoted-data` may contain only JSON-like data: strings, numbers, booleans, null, lists, and objects represented as association lists. It may not contain a form that is later evaluated as code.
 
@@ -277,6 +280,7 @@ Required parameters:
 - `leaf_threshold_tokens`
 - `split_factor`
 - `max_depth`
+- `max_context_read_chars`
 - `leaf_model`
 - `fallback_model`
 
@@ -305,8 +309,6 @@ Core primitives:
 | `filter` | `(A -> Boolean) x List[A] -> List[A]` | inherited |
 | `reduce` | `(B x A -> B) x B x List[A] -> B` | inherited |
 | `concat` | `List[Text] -> Text` | none |
-| `format-prompt` | `Text x Any -> Text` | none |
-| `peek` | `ContextRef x Integer x Integer -> Text` | `CONTEXT_READ` |
 | `slice` | `ContextRef x Integer x Integer -> Text` | `CONTEXT_READ` |
 | `context-items` | `ContextRef -> List[ItemRef]` | `CONTEXT_READ` |
 | `item-text` | `ItemRef -> Text` | `CONTEXT_READ` |
@@ -371,6 +373,8 @@ Every `leaf-call` output is validated against its schema before flowing downstre
 
 For static typing, `leaf-call` returns the runtime type implied by its output schema. For example, a schema `{"type":"string"}` gives `Text`, and `{"type":"array","items":{"type":"string"}}` gives `List[Text]`.
 
+**Slot and param types.** Param types are fixed: `leaf_threshold_tokens`, `split_factor`, `max_depth`, `max_output_tokens` are `Integer`; `temperature` is `Number`; `leaf_model`, `fallback_model` are `ModelAlias`; `error_policy` is an enum `Text`. Slot types are inferred from their use sites in the AST — e.g. the first argument of `context-items`/`slice` must be a `ContextRef`, and the schema argument of `leaf-call` must be a `Schema`. The verifier requires all uses of a slot to agree on one type and checks the bound `slot_values` value is consistent with it.
+
 Error policies:
 
 - `fail_fast`: fail execution immediately.
@@ -399,8 +403,7 @@ Accepted recursive arguments:
 
 - an element produced by `(split-text x (param split_factor))`;
 - an element produced by `(split-items x (param split_factor))`;
-- a filtered subset of those elements;
-- a mapped value whose mapper is proven non-growing by primitive rule.
+- a filtered subset of those elements.
 
 Rejected recursive arguments:
 
@@ -444,6 +447,8 @@ max_output_tokens = leaf_model.default_completion_tokens
 error_policy = policy.default_error_policy
 ```
 
+Each `split_factor` candidate `k` is scored with the closed form `depth = ceil(log_k(ceil(estimated_tokens / leaf_threshold_tokens)))` and `leaf_calls = k^depth`. The host takes the first candidate whose `depth <= max_recursion_depth` and whose `leaf_calls` (times the error-policy worst-case factor) and token total are within policy. The dry run later confirms exact counts; if the chosen parameters fail simulation, `dry_run_strategy` returns structured errors. If they fail verification, `execute_strategy` returns structured errors without executing.
+
 Policy may allow overrides, but the host must clamp them:
 
 - `leaf_threshold_tokens <= 0.9 * reliable_input_tokens`;
@@ -464,9 +469,9 @@ Simulation rules:
 - `leaf-call` records a simulated call and returns a synthetic value matching the requested schema.
 - `CONTEXT_READ` returns metadata-sized synthetic text or item handles, not live bytes.
 - `map` simulates every element.
-- `filter` is keep-all unless its predicate is statically evaluable.
+- `filter` is keep-all unless its predicate is statically evaluable — i.e. a closed expression over the simulated value's metadata using `size-tokens`, `<=`, arithmetic, `empty?`, `first`, `rest`, and literals, making no `leaf-call`, reading no context bytes, and not depending on synthetic leaf output.
 - `reduce` simulates every reduction step.
-- `retry_then_escalate` is not simulated inline; dry run adds worst-case retry and fallback calls to the high estimate.
+- retries are not simulated inline; dry run folds their worst case into the high estimate: `retry_then_fail` adds one retry call per leaf, and `retry_then_escalate` adds one retry plus one fallback call per leaf.
 
 Dry run output:
 
@@ -476,8 +481,6 @@ class DryRunStats(BaseModel):
     llm_calls_high: int
     context_reads: int
     recursive_depth: int
-    max_concurrency: int
-    estimated_wall_clock_seconds: float
 
 class SimulatedCall(BaseModel):
     call_id: str
@@ -524,7 +527,6 @@ Checks:
 | `model_aliases_resolve` | fail | every model alias exists and is policy-allowed |
 | `budget_bound` | fail | high calls, tokens, and cost are within policy |
 | `dry_run_fresh` | fail | dry run is for this exact artifact and current runtime version |
-| `latency_estimate` | warn | estimated wall clock exceeds policy target |
 
 Policy defaults:
 
@@ -534,15 +536,13 @@ max_prompt_tokens = 2_000_000
 max_completion_tokens = 500_000
 max_cost_usd = 10.00
 max_recursion_depth = 5
-max_context_read_chars = 32_000
-max_wall_clock_seconds_target = 1800
 allowed_effects = {"LLM", "CONTEXT_READ"}
 default_error_policy = "retry_then_escalate"
 default_leaf_model = "local_fast"
 allowed_models = {"local_fast", "cloud_quality"}
 ```
 
-`latency_estimate` is a warning in v1 because provider throughput is often noisy. Calls, tokens, cost, effects, language closure, and termination are hard gates.
+All v1 checks are hard gates: calls, tokens, cost, effects, language closure, and termination must pass. There is no separate verify tool — `execute_strategy` runs all checks after confirming a fresh dry run and refuses to execute unless `decision == pass`.
 
 ---
 
@@ -603,7 +603,7 @@ Run request:
   },
   "limits": {
     "max_recursion_depth": 5,
-    "max_context_read_chars": 32000
+    "max_context_read_chars": 22400
   }
 }
 ```
@@ -612,13 +612,18 @@ Effect requests:
 
 ```json
 {"type":"context_read","id":"call_0000000000000001","context_id":"ctx_0123456789abcdef","op":"slice","range":{"start":0,"length":4000}}
+{"type":"context_read","id":"call_0000000000000003","context_id":"ctx_0123456789abcdef","op":"context-items"}
+{"type":"context_read","id":"call_0000000000000004","context_id":"ctx_0123456789abcdef","op":"item-text","item_index":7}
 {"type":"llm_call","id":"call_0000000000000002","model":"local_fast","instruction":"...","input":"...","output_schema":{"type":"object"},"max_tokens":512,"temperature":0}
 ```
+
+`op` is one of `slice`, `context-items`, `item-text`; `slice` carries a `range`, `item-text` carries an `item_index`, and `context-items` carries neither.
 
 Effect replies:
 
 ```json
 {"type":"context_read_result","id":"call_0000000000000001","text":"...","size_chars":4000}
+{"type":"context_read_result","id":"call_0000000000000003","items":[{"index":0,"size_chars":1234}]}
 {"type":"llm_call_result","id":"call_0000000000000002","value":{},"usage":{"prompt_tokens":1000,"completion_tokens":120}}
 {"type":"effect_error","id":"call_0000000000000002","error_code":"provider_error","message":"..."}
 ```
@@ -638,15 +643,17 @@ The runtime must not print non-protocol text to stdout.
 
 Exactly seven v1 tools:
 
-| Tool | Purpose |
+| Tool | Signature |
 |---|---|
-| `load_context` | Store context data and return `context_id`. |
-| `plan_strategy` | Accept authored program, bind slots, choose host parameters, and return `plan_id`. |
-| `dry_run_strategy` | Simulate exact artifact and return `dry_run_id`, bounds, and cost. |
-| `execute_strategy` | Verify and execute once. |
-| `get_execution_trace` | Return trace for an execution. |
-| `get_record` | Return any stored record by ID. |
-| `reset` | Clear store scopes for tests/development. |
+| `load_context` | `(data, data_shape, schema?, metadata?) -> context_id` |
+| `plan_strategy` | `(context_id, program_source, task, slot_values, hints?) -> plan_id` |
+| `dry_run_strategy` | `(plan_id) -> dry_run_id, bounds, cost` |
+| `execute_strategy` | `(plan_id, dry_run_id) -> execution_id` |
+| `get_execution_trace` | `(execution_id) -> trace` |
+| `get_record` | `(id) -> record` |
+| `reset` | `(scope) -> ok` |
+
+`plan_strategy` parses the program and materializes the `ProgramRecord`, `PlanRecord`, and the content-addressed `ArtifactRecord` (from AST + slots + host parameters + schemas + registry/policy/runtime hashes). `dry_run_strategy` simulates that artifact. `execute_strategy` runs verification internally — after confirming a fresh dry run — and executes only if `decision == pass`.
 
 Response envelope:
 
