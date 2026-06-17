@@ -94,10 +94,13 @@ Records:
 ```python
 class ContextRecord(BaseModel):
     context_id: str
-    data_ref: str                 # store path or inline store key
+    storage: Literal["memory", "file"]
+    data_ref: str                 # memory store key, source path, or chunk store path
     data_shape: Literal["text", "items", "json"]
     size_chars: int
     item_count: int | None = None
+    loader: dict[str, Any]
+    warnings: list[str] = []
     schema: dict[str, Any] = {}
     metadata: dict[str, Any] = {}
     created_at: float
@@ -167,7 +170,25 @@ class ExecutionRecord(BaseModel):
 
 ## 4. Context Model
 
-`load_context` stores data outside the prompt and returns a `context_id`. **Contexts are immutable:** loading new data yields a new `context_id`; stored bytes never change under an existing id, which is why the artifact identifies context by id rather than by content hash. Context access uses explicit units:
+`load_context` stores data outside the prompt and returns a structured load result. **Contexts are immutable:** loading new data yields a new `context_id`; stored bytes never change under an existing id, which is why the artifact identifies context by id rather than by content hash.
+
+Contexts are fully addressable by the host, but they are not required to be memory-backed. Small inline contexts may live in memory. Large files and directories should be file-backed: the host stores item metadata and offsets, then reads bounded slices lazily when `slice` or `item-text` is evaluated. Racket receives only handles, metadata, and bounded read replies.
+
+`load_context` response:
+
+```python
+class LoadContextResult(BaseModel):
+    context_id: str
+    data_shape: Literal["text", "items", "json"]
+    storage: Literal["memory", "file"]
+    size_chars: int
+    estimated_tokens: int
+    item_count: int | None = None
+    skipped: list[dict[str, Any]] = []
+    warnings: list[str] = []
+```
+
+Context access uses explicit units:
 
 - `size_chars`: Unicode code points in the stored text representation.
 - `estimated_tokens`: `ceil(size_chars / 4)`.
@@ -180,7 +201,35 @@ Supported context shapes:
 - `items`: ordered independent items, each serializable to text.
 - `json`: one JSON value; the implementation may treat it as text unless a primitive explicitly supports JSON access.
 
-`load_context` accepts either inline data or a host-readable loader descriptor. The required loader descriptor for this implementation is `{"kind":"directory", ...}`:
+`load_context` accepts inline data or a host-readable loader descriptor. Loader kinds:
+
+- `inline`: caller supplies the data directly.
+- `file`: host loads one file, optionally chunked into an `items` context.
+- `directory`: host loads matching files under a directory, optionally chunked into an `items` context.
+
+Inline loader:
+
+```json
+{
+  "kind": "inline",
+  "data": "text, JSON, or an array of item strings"
+}
+```
+
+File loader:
+
+```json
+{
+  "kind": "file",
+  "path": "/absolute/path/server.log",
+  "encoding": "utf-8",
+  "encoding_errors": "replace",
+  "chunk_chars": 16000,
+  "chunk_overlap_chars": 0
+}
+```
+
+Directory loader:
 
 ```json
 {
@@ -188,19 +237,30 @@ Supported context shapes:
   "root": "/absolute/path",
   "include": ["**/*.py", "**/*.rkt", "**/*.md"],
   "exclude": [".git/**", ".venv/**", "__pycache__/**"],
+  "encoding": "utf-8",
+  "encoding_errors": "replace",
   "chunk_chars": 16000
 }
 ```
 
-Directory loading is deterministic:
+Loader rules:
 
-- `root` must resolve under one of `policy.allowed_context_roots`; otherwise `load_context` fails;
+- `path` / `root` must resolve under one of `policy.allowed_context_roots`; otherwise `load_context` fails;
+- `encoding` defaults to `utf-8`;
+- `encoding_errors` is either `strict` or `replace`, default `replace`;
+- `chunk_chars` and `chunk_overlap_chars` are measured in decoded Unicode code points;
+- `chunk_overlap_chars` must be smaller than `chunk_chars`;
+- chunking preserves order and may split lines or paragraphs unless a future loader option says otherwise;
+- `size_chars` is the total decoded character count, excluding overlap duplication;
+- for file-backed contexts, chunk metadata records source path, chunk index, char start, char end, and size;
+- binary files are rejected by the `file` loader and skipped by the `directory` loader unless an explicit text encoding succeeds.
+
+Directory loading adds these deterministic rules:
+
 - the host expands `include`/`exclude` globs under `root`;
 - paths are sorted lexicographically by relative path;
-- binary files are skipped unless explicitly included with a text encoding;
 - files larger than `chunk_chars` are split into ordered chunk items;
 - every item stores a stable label: `relative/path` for a whole file, or `relative/path#chunk-N` for a chunk;
-- every item stores `size_chars`, `source_path`, and `chunk_index` metadata;
 - stored context bytes are immutable after `context_id` creation.
 
 Context reads:
@@ -566,6 +626,9 @@ max_prompt_tokens = 2_000_000
 max_completion_tokens = 500_000
 max_cost_usd = 10.00
 max_recursion_depth = 5
+max_context_bytes = 10_000_000_000
+max_context_items = 1_000_000
+max_item_chars = 64_000
 allowed_effects = {"LLM", "CONTEXT_READ"}
 default_error_policy = "retry_then_escalate"
 default_leaf_model = "local_fast"
@@ -676,7 +739,7 @@ Exactly seven tools:
 
 | Tool | Signature |
 |---|---|
-| `load_context` | `(data_or_loader, data_shape, schema?, metadata?) -> context_id` |
+| `load_context` | `(data_or_loader, data_shape, schema?, metadata?) -> LoadContextResult` |
 | `plan_strategy` | `(context_id, program_source, task, slot_values, hints?) -> plan_id` |
 | `dry_run_strategy` | `(plan_id) -> dry_run_id, bounds, cost` |
 | `execute_strategy` | `(plan_id, dry_run_id) -> execution_id` |
@@ -758,8 +821,11 @@ Acceptance:
 - Supported JSON Schema subset validates.
 - Unsupported keywords fail.
 - Schema compatibility tests pass.
-- Text, items, and JSON contexts load and report metadata.
+- Inline text, items, and JSON contexts load and report metadata.
+- File loader streams large files, chunks by decoded character offsets, supports overlap, and does not require reading the whole file into memory.
 - Directory loader expands files deterministically, applies include/exclude globs, chunks large files, and assigns stable item labels.
+- Loader policy rejects roots outside `allowed_context_roots`, excessive total bytes, excessive item counts, and chunks larger than `max_item_chars`.
+- Binary file behavior is deterministic: file loader rejects binary input; directory loader records skipped binary files.
 - Bounded reads enforce `max_context_read_chars`.
 
 ### Batch 3: Parameter Planning and Artifacts
@@ -1022,7 +1088,55 @@ This example intentionally uses symbolic `concat` as the final composition, so e
 
 ---
 
-## 19. Out of Scope
+## 19. Worked Example: Large Text File Review
+
+Problem:
+
+> Given a 3 GB server log, find recurring error patterns and produce per-chunk observations without loading the whole file into an LLM context or process memory.
+
+### 19.1 Load the File
+
+```json
+{
+  "data_or_loader": {
+    "kind": "file",
+    "path": "/storage/logs/server.log",
+    "encoding": "utf-8",
+    "encoding_errors": "replace",
+    "chunk_chars": 16000,
+    "chunk_overlap_chars": 1000
+  },
+  "data_shape": "items",
+  "metadata": {"purpose": "log-review"}
+}
+```
+
+The host validates that `/storage/logs/server.log` is under `allowed_context_roots`, streams the file, creates ordered chunk items such as `server.log#chunk-000001`, and records decoded char offsets. The context may be file-backed; only metadata and offsets need to stay resident.
+
+### 19.2 Program Shape
+
+```scheme
+(concat
+  (map
+    (lambda (chunk)
+      (leaf-call
+        (param leaf_model)
+        (slot analyze_instruction)
+        (concat
+          (list
+            "CHUNK:\n"
+            (item-label chunk)
+            "\n\nLOG TEXT:\n"
+            (item-text chunk)))
+        (slot text_schema)))
+    (context-items (slot log_context))))
+```
+
+The leaf model sees one bounded chunk at a time. Dry run counts one low-bound call per chunk and high-bound retry/escalation calls according to policy.
+
+---
+
+## 20. Out of Scope
 
 These features are intentionally out of scope for this plan:
 
@@ -1042,7 +1156,7 @@ Add an out-of-scope feature only after the implementation passes the definition 
 
 ---
 
-## 20. Definition of Done
+## 21. Definition of Done
 
 The implementation is done when:
 
