@@ -28,7 +28,7 @@ No live model call may occur until all of these are true:
 
 1. The context has been loaded into the host store.
 2. The authored program parses into the implementation AST.
-3. Every referenced slot and host parameter resolves.
+3. Every referenced slot and runtime-bound parameter resolves.
 4. The program uses only allowed forms and primitives.
 5. Recursion, if present, is structurally decreasing.
 6. The dry run has produced an upper bound for calls, tokens, cost, and depth.
@@ -87,7 +87,7 @@ Store namespaces:
 - `traces`
 - `cache`
 
-`cache` holds an optional provider-response cache keyed by `(model, instruction, input, schema, params)`; it dedupes identical live calls and is never consulted in dry run.
+`cache` holds an optional provider-response cache keyed by `(model, prompt_name, prompt_spec_hash, input_hash, output_schema_hash, decoding_bounds)`; it dedupes identical live calls and is never consulted in dry run.
 
 Records:
 
@@ -302,7 +302,7 @@ item-label(item_ref) -> Text
 
 Host limits:
 
-- `max_context_read_chars` is a host parameter equal to `leaf_threshold_tokens * 4`. It is included in the sealed strategy and carried in the run-message `limits`. There is no separate policy constant for it.
+- `max_context_read_chars` is a runtime-bound parameter equal to `leaf_threshold_tokens * 4`. It is included in the sealed strategy and carried in the run-message `limits`. There is no separate policy constant for it.
 - A single read that exceeds `max_context_read_chars` fails verification in dry run or fails execution if somehow reached live.
 - `context-items` returns item handles, not item bytes.
 
@@ -380,7 +380,7 @@ application   ::= (operator expr ...)
 operator      ::= primitive-name | identifier | lambda | fix
 ```
 
-The `operator` of an application must evaluate to a `Function`; the verifier checks its arity and argument types. This permits applying a `lambda` or `fix` directly (as in §17.2).
+The `operator` of an application must evaluate to a `Function`; the verifier checks its arity and argument types. This permits applying a `lambda` or `fix` directly (as in §16.2).
 
 `quoted-data` may contain only JSON-like data: strings, numbers, booleans, null, lists, and objects represented as association lists. It may not contain a form that is later evaluated as code.
 
@@ -407,7 +407,7 @@ An identifier is valid only if it is:
 
 There are no macros, dynamic operator lookup, arbitrary module imports, `eval`, `read`, file I/O, network I/O, subprocesses, or host callbacks other than declared effects.
 
-### 6.4 Admission Parameters
+### 6.4 Runtime Bounds
 
 The Strategy Author must refer to server-owned resource values with `(param name)`.
 
@@ -586,7 +586,7 @@ error_policy = policy.default_error_policy
 
 Each `split_factor` candidate `k` is scored with the closed form `depth = ceil(log_k(ceil(estimated_tokens / leaf_threshold_tokens)))` and `leaf_calls = k^depth`. The Admission Controller takes the first candidate whose `depth <= max_recursion_depth` and whose `leaf_calls` (times the error-policy worst-case factor) and token total are within policy. The dry run later confirms exact counts; if the chosen bounds fail simulation, `dry_run_strategy` returns structured errors. If they fail verification, `execute_strategy` returns structured errors without executing.
 
-Policy may allow overrides, but the host must clamp them:
+Policy may allow overrides, but the Admission Controller must clamp them:
 
 - `leaf_threshold_tokens <= 0.9 * reliable_input_tokens`;
 - `max_output_tokens <= model.max_output_tokens`;
@@ -998,147 +998,9 @@ Trace records must omit full prompt and full model output by default. They may i
 
 ---
 
-## 16. Build Batches
+## 16. Example Programs
 
-### Batch 0: Foundations
-
-Files:
-
-- `rlm_scheme/ids.py`
-- `rlm_scheme/store.py`
-- `rlm_scheme/models.py`
-- `config/models.json`
-
-Acceptance:
-
-- ID grammar tests.
-- Store namespace tests.
-- Model registry validation tests.
-- Stable hash/canonical JSON tests.
-
-### Batch 1: Parser and AST
-
-Files:
-
-- `rlm_scheme/sexpr.py`
-- `rlm_scheme/ast.py`
-- `rlm_scheme/program_validation.py`
-
-Acceptance:
-
-- Parse valid implementation forms.
-- Reject macros, dynamic operators, free variables, `eval`, unknown primitives, and malformed `quote`.
-- Resolve slots and params without textual substitution.
-- No regex-based S-expression parsing.
-
-### Batch 2: Schemas and Context Store
-
-Files:
-
-- `rlm_scheme/schema.py`
-- `rlm_scheme/context_store.py`
-
-Acceptance:
-
-- Supported JSON Schema subset validates.
-- Unsupported keywords fail.
-- Schema compatibility tests pass.
-- Inline text and item contexts load and report metadata.
-- File loader streams large files, chunks by decoded character offsets, supports overlap, and does not require reading the whole file into memory.
-- Directory loader expands files deterministically, applies include/exclude globs, chunks large files, and assigns stable item labels.
-- Loader policy rejects roots outside `allowed_context_roots`, excessive total bytes, excessive item counts, and chunks larger than `max_item_chars`.
-- Binary file behavior is deterministic: file loader rejects binary input; directory loader records skipped binary files.
-- Bounded reads enforce `max_context_read_chars`.
-
-### Batch 3: Admission and Sealed Strategies
-
-Files:
-
-- `rlm_scheme/admission.py`
-- `rlm_scheme/sealed_strategy.py`
-
-Acceptance:
-
-- Admission Controller selects `leaf_threshold_tokens`, `split_factor`, model aliases, and error policy.
-- Admission Controller clamps overrides.
-- Sealed strategy hash changes when AST, slots, prompt specs, runtime bounds, schemas, model registry, policy, or runtime version changes.
-- Structured admission errors are returned.
-
-### Batch 4: Racket Runtime
-
-Files:
-
-- `runtime/main.rkt`
-- `runtime/interpreter.rkt`
-- `runtime/combinators.rkt`
-- `runtime/wire.rkt`
-- `rlm_scheme/runtime.py`
-
-Acceptance:
-
-- Handshake works.
-- AST runs without Racket `eval`.
-- Core primitives work.
-- `item-label` returns metadata without a context-read effect.
-- Simulate mode returns `done`, stats, and calls.
-- Runtime stdout is protocol-only.
-
-### Batch 5: Dry Run and Verification
-
-Files:
-
-- `rlm_scheme/dry_run.py`
-- `rlm_scheme/verification.py`
-- `rlm_scheme/cost.py`
-
-Acceptance:
-
-- Dry run computes low/high calls and cost.
-- Unknown filters are keep-all.
-- Recursive descent proofs accept valid split recursion and reject non-decreasing recursion.
-- All verification checks run and report all failures.
-- No live provider call occurs during admission, dry run, or failed verification.
-
-### Batch 6: Providers and Execution
-
-Files:
-
-- `rlm_scheme/providers.py`
-- `rlm_scheme/executor.py`
-- `rlm_scheme/trace.py`
-- `rlm_scheme/cache.py`
-
-Acceptance:
-
-- Mock provider is deterministic.
-- Remote/OpenAI-compatible/Ollama adapters share one provider interface.
-- Leaf outputs are schema-validated.
-- Retry and escalation policies work.
-- Live calls never exceed dry-run high call bound in tests.
-- Trace records effects and usage.
-
-### Batch 7: MCP Server and Docs
-
-Files:
-
-- `rlm_scheme/mcp_server.py`
-- `rlm_scheme/app.py`
-- `README.md`
-- `examples/*.rkt`
-
-Acceptance:
-
-- Exactly seven tools are exposed.
-- Happy path: load context -> get guide -> dry run -> execute -> trace.
-- Example programs parse and run with mock provider.
-- Repository plan-review worked example runs with a temporary directory and mock provider.
-- README documents implementation scope and out-of-scope features.
-
----
-
-## 17. Example Programs
-
-### 17.1 Direct Call
+### 16.1 Direct Call
 
 ```scheme
 (leaf-call
@@ -1147,7 +1009,7 @@ Acceptance:
   (slice (slot context) 0 (* 4 (param leaf_threshold_tokens))))
 ```
 
-### 17.2 Recursive Chunk Summarize
+### 16.2 Recursive Chunk Summarize
 
 ```scheme
 ((fix solve
@@ -1163,12 +1025,12 @@ Acceptance:
            (concat
              (map solve
                (split-items x (param split_factor)))))))
- (context-items (slot context)))
+ (context-items (slot context))))
 ```
 
 This is the preferred shape for large text: load the document as an `items` context where each item is a chunk. The program recurses over item handles, and bytes are read only at bounded leaves through `item-text`. In this example, both `summarize_leaf` and `summarize_compose` prompt specs use `{"type":"string"}` output schemas, so both recursive branches return `Text`.
 
-### 17.3 Item Map Then Symbolic Concat
+### 16.3 Item Map Then Symbolic Concat
 
 ```scheme
 (concat
@@ -1180,13 +1042,13 @@ This is the preferred shape for large text: load the document as an `items` cont
         (concat
           (list
             "Item: " (item-label item) "\n\n"
-            (item-text item))))
+            (item-text item)))))
     (context-items (slot context))))
 ```
 
 ---
 
-## 18. Worked Example: Repository Plan Review
+## 17. Worked Example: Repository Plan Review
 
 Problem:
 
@@ -1194,7 +1056,7 @@ Problem:
 
 This is realistic because the repository may contain hundreds of files. The model should not receive the whole repository in one prompt, and the runtime should not execute arbitrary generated code while inspecting it.
 
-### 18.1 Load the Repository Directory
+### 17.1 Load the Repository Directory
 
 The caller loads the repository as an `items` context:
 
@@ -1214,7 +1076,7 @@ The caller loads the repository as an `items` context:
 
 The host expands the directory into ordered `ItemRef`s. Each item has a label such as `rlm_scheme/runtime.py` or `docs/GREENFIELD-IMPLEMENTATION-PLAN-SIMPLIFIED.md#chunk-2`.
 
-### 18.2 Load the Plan Text
+### 17.2 Load the Plan Text
 
 The caller loads the plan as `text` if it fits the reliable-input budget, or as `items` if it is large. For this example, assume a bounded plan summary is supplied as a slot rather than read from context:
 
@@ -1224,7 +1086,7 @@ The caller loads the plan as `text` if it fits the reliable-input budget, or as 
 }
 ```
 
-### 18.3 Leaf Prompt
+### 17.3 Leaf Prompt
 
 The leaf instruction is ordinary prompt-spec data:
 
@@ -1254,7 +1116,7 @@ ITEM TEXT:
 <item-text>
 ```
 
-### 18.4 Program
+### 17.4 Program
 
 ```scheme
 (concat
@@ -1270,7 +1132,7 @@ ITEM TEXT:
             "\n\nITEM:\n"
             (item-label item)
             "\n\nITEM TEXT:\n"
-            (item-text item))))
+            (item-text item)))))
     (context-items (slot repo_context))))
 ```
 
@@ -1302,7 +1164,7 @@ The Strategy Author submits this strategy package to `dry_run_strategy`:
 }
 ```
 
-### 18.5 What Each Tool Does
+### 17.5 What Each Tool Does
 
 1. `load_context` creates `ctx_repo` from the directory loader.
 2. `get_strategy_guide` returns context metadata, allowed primitives, policy limits, and examples to help the Strategy Author create the package.
@@ -1316,13 +1178,13 @@ This example intentionally uses symbolic `concat` as the final composition, so e
 
 ---
 
-## 19. Worked Example: Large Text File Review
+## 18. Worked Example: Large Text File Review
 
 Problem:
 
 > Given a 3 GB server log, find recurring error patterns and produce per-chunk observations without loading the whole file into an LLM context or process memory.
 
-### 19.1 Load the File
+### 18.1 Load the File
 
 ```json
 {
@@ -1341,7 +1203,7 @@ Problem:
 
 The host validates that `/storage/logs/server.log` is under `allowed_context_roots`, streams the file, creates ordered chunk items such as `server.log#chunk-000001`, and records decoded char offsets. The context may be file-backed; only metadata and offsets need to stay resident.
 
-### 19.2 Program Shape
+### 18.2 Program Shape
 
 ```scheme
 (concat
@@ -1355,7 +1217,7 @@ The host validates that `/storage/logs/server.log` is under `allowed_context_roo
             "CHUNK:\n"
             (item-label chunk)
             "\n\nLOG TEXT:\n"
-            (item-text chunk))))
+            (item-text chunk)))))
     (context-items (slot log_context))))
 ```
 
@@ -1363,7 +1225,7 @@ The leaf model sees one bounded chunk at a time. Dry run counts one low-bound ca
 
 ---
 
-## 20. Out of Scope
+## 19. Out of Scope
 
 These features are intentionally out of scope for this plan:
 
@@ -1383,11 +1245,11 @@ Add an out-of-scope feature only after the implementation passes the definition 
 
 ---
 
-## 21. Definition of Done
+## 20. Definition of Done
 
 The implementation is done when:
 
-1. All batch acceptance tests pass.
+1. All required parser, context, dry-run, verification, execution, provider, MCP, and example-program tests pass.
 2. No live provider call can happen before passing verification.
 3. The parser accepts only the implementation grammar.
 4. S-expression parsing and AST analysis do not use regex.
