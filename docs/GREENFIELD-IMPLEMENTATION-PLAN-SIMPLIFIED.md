@@ -8,17 +8,17 @@
 
 RLM-Scheme is an MCP server for auditable long-context LLM computation. It keeps large inputs outside the model window, lets a caller submit a small typed orchestration program, dry-runs that program to compute resource bounds, verifies it against policy, and only then executes it.
 
-The key move is to separate **strategy shape** from **unsafe execution**. A model may author the control-flow shape, but it can only use a tiny total S-expression language. The host owns the safety-critical values: leaf size, split factor, model aliases, context-read limits, schemas, policy, and budgets. The program is parsed, typed, parameterized, simulated, and verified before any live model call is allowed.
+The key move is to separate **strategy shape** from **unsafe execution**. A **Strategy Author** (for example Codex/GPT using the MCP tools, or a human developer) may author the control-flow shape and leaf prompts, but only in a tiny total S-expression language. The server-side **Admission Controller** owns the safety-critical values: leaf size, split factor, model aliases, context-read limits, schemas, policy, and budgets. The program is parsed, typed, parameterized, simulated, and verified before any live model call is allowed.
 
 The system is intentionally not a general agent runtime. It does not run arbitrary generated code, substitute text into templates, import unverified sub-programs, or resume durable human gates. Its job is narrower: bounded decomposition, mapping, filtering, reduction, validation, and synthesis over data too large or too risky to send to one prompt.
 
 The execution lifecycle is:
 
 ```text
-load_context -> plan_strategy -> dry_run_strategy -> execute_strategy -> get_execution_trace
+load_context -> get_strategy_guide -> dry_run_strategy -> execute_strategy -> get_execution_trace
 ```
 
-`load_context` stores data in the host. `plan_strategy` accepts an authored program and binds host parameters. `dry_run_strategy` simulates the exact artifact and produces conservative bounds. `execute_strategy` verifies those bounds and executes once only if every hard check passes.
+`load_context` stores data in the host. `get_strategy_guide` returns context metadata, available primitives, prompt-spec requirements, policy limits, and examples so the Strategy Author can write a valid strategy package. `dry_run_strategy` accepts that package, admits it, seals it, and simulates it to produce conservative bounds. `execute_strategy` verifies those bounds and executes once only if every hard check passes.
 
 ---
 
@@ -32,9 +32,9 @@ No live model call may occur until all of these are true:
 4. The program uses only allowed forms and primitives.
 5. Recursion, if present, is structurally decreasing.
 6. The dry run has produced an upper bound for calls, tokens, cost, and depth.
-7. Verification has passed against the exact program, exact slots, exact host parameters, exact model registry, exact policy, and exact runtime version.
+7. Verification has passed against the exact program, exact slots, exact runtime bounds, exact model registry, exact policy, and exact runtime version.
 
-Execution is deterministic except for `leaf-call` results. Re-running the same verified artifact produces the same call structure. Contexts are immutable, so the only way to change input data is to load it again under a new `context_id`, which yields a new artifact; a runtime-version change likewise invalidates verification.
+Execution is deterministic except for `leaf-call` results. Re-running the same verified sealed strategy produces the same call structure. Contexts are immutable, so the only way to change input data is to load it again under a new `context_id`, which yields a new sealed strategy; a runtime-version change likewise invalidates verification.
 
 ---
 
@@ -48,7 +48,7 @@ Python host
   - MCP tools
   - Store and ContextStore
   - Program parser and validator
-  - Parameter planner
+  - Admission Controller
   - Dry runner
   - Verifier
   - Executor
@@ -72,15 +72,15 @@ Python owns state, policy, provider calls, cost accounting, persistence, and MCP
 ID format:
 
 ```text
-^(ctx|prog|plan|dry|art|ver|exec|call)_[0-9a-f]{16}$
+^(ctx|prog|guide|strat|dry|ver|exec|call)_[0-9a-f]{16}$
 ```
 
 Store namespaces:
 
 - `contexts`
 - `programs`
-- `plans`
-- `artifacts`
+- `strategy_guides`
+- `sealed_strategies`
 - `dry_runs`
 - `verifications`
 - `executions`
@@ -111,35 +111,45 @@ class ProgramRecord(BaseModel):
     ast_hash: str
     created_at: float
 
-class PlanRecord(BaseModel):
-    plan_id: str
+class StrategyGuideRecord(BaseModel):
+    guide_id: str
     context_id: str
-    program_id: str
     task: str
-    slot_values: dict[str, Any]
-    input_schema: dict[str, Any] = {}
-    output_schema: dict[str, Any] = {}
-    planner_parameters: dict[str, Any]
-    model_registry_hash: str
-    policy_hash: str
-    runtime_version: str
+    context_summary: dict[str, Any]
+    allowed_primitives: list[str]
+    required_package_fields: list[str]
+    policy_summary: dict[str, Any]
+    examples: list[dict[str, Any]] = []
     created_at: float
 
-class ArtifactRecord(BaseModel):
-    artifact_id: str
-    plan_id: str
-    artifact_hash: str
+class SealedStrategyRecord(BaseModel):
+    sealed_strategy_id: str
+    context_id: str
+    program_id: str
+    strategy_hash: str
     program_ast_hash: str
     slot_values_hash: str
-    planner_parameters_hash: str
+    prompt_specs_hash: str
+    runtime_bounds_hash: str
     schemas_hash: str
     model_registry_hash: str
     policy_hash: str
     runtime_version: str
+    slot_values: dict[str, Any]
+    prompt_specs: dict[str, PromptSpec]
+    runtime_bounds: dict[str, Any]
+    created_at: float
+
+class PromptSpec(BaseModel):
+    name: str
+    instruction: str
+    output_schema: dict[str, Any]
+    max_output_tokens: int | None = None
+    temperature: float | None = None
 
 class DryRunRecord(BaseModel):
     dry_run_id: str
-    artifact_id: str
+    sealed_strategy_id: str
     stats: DryRunStats              # §10
     calls: list[SimulatedCall]      # §10
     cost: CostEstimate              # §10
@@ -148,14 +158,14 @@ class DryRunRecord(BaseModel):
 
 class VerificationRecord(BaseModel):
     verification_id: str
-    artifact_id: str
+    sealed_strategy_id: str
     dry_run_id: str
     decision: Literal["pass", "fail"]
     checks: list[dict[str, Any]]
 
 class ExecutionRecord(BaseModel):
     execution_id: str
-    artifact_id: str
+    sealed_strategy_id: str
     verification_id: str
     state: Literal["running", "succeeded", "failed", "cancelled"]
     result: Any | None = None
@@ -164,13 +174,13 @@ class ExecutionRecord(BaseModel):
     completed_at: float | None = None
 ```
 
-`artifact_hash` is computed from the exact AST, slot values, host parameters, input/output schemas, model registry hash, policy hash, and runtime version. Verification is invalid if any of these change.
+`strategy_hash` is computed from the exact AST, slot values, prompt specs, runtime bounds, input/output schemas, model registry hash, policy hash, and runtime version. Verification is invalid if any of these change.
 
 ---
 
 ## 4. Context Model
 
-`load_context` stores data outside the prompt and returns a structured load result. **Contexts are immutable:** loading new data yields a new `context_id`; stored bytes never change under an existing id, which is why the artifact identifies context by id rather than by content hash.
+`load_context` stores data outside the prompt and returns a structured load result. **Contexts are immutable:** loading new data yields a new `context_id`; stored bytes never change under an existing id, which is why the sealed strategy identifies context by id rather than by content hash.
 
 Contexts are fully addressable by the host, but they are not required to be memory-backed. Small inline contexts may live in memory. Large files and directories should be file-backed: the host stores item metadata and offsets, then reads bounded slices lazily when `slice` or `item-text` is evaluated. Racket receives only handles, metadata, and bounded read replies.
 
@@ -292,7 +302,7 @@ item-label(item_ref) -> Text
 
 Host limits:
 
-- `max_context_read_chars` is a host parameter equal to `leaf_threshold_tokens * 4`. It is included in the artifact and carried in the run-message `limits`. There is no separate policy constant for it.
+- `max_context_read_chars` is a host parameter equal to `leaf_threshold_tokens * 4`. It is included in the sealed strategy and carried in the run-message `limits`. There is no separate policy constant for it.
 - A single read that exceeds `max_context_read_chars` fails verification in dry run or fails execution if somehow reached live.
 - `context-items` returns item handles, not item bytes.
 
@@ -328,9 +338,15 @@ Rules:
 
 ---
 
-## 6. Program Language
+## 6. Strategy Package Language
 
-The model authors a single S-expression program. The host parses it into an AST. There is no textual substitution and no host `eval`.
+The Strategy Author produces a **strategy package**:
+
+- one S-expression program;
+- named prompt specs referenced by that program;
+- slot bindings for task data such as context handles and short task facts.
+
+The Strategy Author may be a model using this MCP server (for example Codex/GPT), a human, or another tool. It owns semantic choices: what leaf prompts ask, what output schema each leaf should satisfy, and where leaf calls appear in the program. The Admission Controller inside the MCP server does not call an LLM and does not invent semantic prompts; it parses, type-checks, injects runtime bounds, hashes, dry-runs, and verifies the submitted package. There is no textual substitution and no host `eval`.
 
 ### 6.1 Grammar
 
@@ -341,6 +357,7 @@ expr          ::= literal
                 | var
                 | slot-ref
                 | param-ref
+                | prompt-ref
                 | if
                 | let
                 | lambda
@@ -352,6 +369,7 @@ quoted-data   ::= (quote datum)
 
 slot-ref      ::= (slot symbol)
 param-ref     ::= (param symbol)
+prompt-ref    ::= (prompt symbol)
 
 if            ::= (if expr expr expr)
 let           ::= (let ((identifier expr) ...) expr)
@@ -366,21 +384,34 @@ The `operator` of an application must evaluate to a `Function`; the verifier che
 
 `quoted-data` may contain only JSON-like data: strings, numbers, booleans, null, lists, and objects represented as association lists. It may not contain a form that is later evaluated as code.
 
-### 6.2 Names
+`prompt-ref` resolves to a named `PromptSpec` stored on the sealed strategy. Prompt specs are data, not code. They are included in the strategy hash and cannot be changed between dry run and execution without invalidating verification.
+
+### 6.2 Prompt Specs
+
+Prompts used by `leaf-call` are part of the strategy package. They are supplied to `dry_run_strategy` as named `PromptSpec` records, not as ordinary slots. The parsed AST contains `(prompt name)` references, and the sealed strategy contains the corresponding prompt specs. At execution time, Racket sends the prompt name and bounded input to Python; Python resolves the prompt spec and calls the provider.
+
+This keeps the control flow and prompt contract together in one sealed strategy:
+
+- the AST decides where a leaf call happens;
+- the prompt spec, authored with the AST, defines the instruction, output schema, temperature, and output cap for that leaf call;
+- the program still constructs the bounded input text from slots, item labels, and item text;
+- changing either the AST or any prompt spec changes the strategy hash and requires a new dry run.
+
+### 6.3 Names
 
 An identifier is valid only if it is:
 
 - bound by `let`, `lambda`, or `fix`;
 - a primitive name in the allow-list;
-- used inside `(slot name)` or `(param name)`.
+- used inside `(slot name)`, `(param name)`, or `(prompt name)`.
 
 There are no macros, dynamic operator lookup, arbitrary module imports, `eval`, `read`, file I/O, network I/O, subprocesses, or host callbacks other than declared effects.
 
-### 6.3 Host Parameters
+### 6.4 Admission Parameters
 
-The model must refer to host-owned resource values with `(param name)`.
+The Strategy Author must refer to server-owned resource values with `(param name)`.
 
-Required parameters:
+Required runtime bounds:
 
 - `leaf_threshold_tokens`
 - `split_factor`
@@ -389,15 +420,15 @@ Required parameters:
 - `leaf_model`
 - `fallback_model`
 
-Optional parameters:
+Optional runtime bounds:
 
 - `temperature`
 - `max_output_tokens`
 - `error_policy`
 
-The host injects parameters into an immutable environment before dry run and live execution. The program cannot assign to them. The artifact hash includes the exact parameter map.
+The Admission Controller injects runtime bounds into an immutable environment before dry run and live execution. The program cannot assign to them. The strategy hash includes the exact runtime-bound map.
 
-### 6.4 Primitive Allow-List
+### 6.5 Primitive Allow-List
 
 Core primitives:
 
@@ -418,7 +449,7 @@ Core primitives:
 | `context-items` | `ContextRef -> List[ItemRef]` | `CONTEXT_READ` |
 | `item-text` | `ItemRef -> Text` | `CONTEXT_READ` |
 | `item-label` | `ItemRef -> Text` | none |
-| `leaf-call` | `ModelAlias x InstructionText x InputText x Schema -> Value` | `LLM` |
+| `leaf-call` | `ModelAlias x PromptRef x InputText -> Value` | `LLM` |
 | `validate` | `Schema x Value -> Boolean` | none |
 
 Deferred primitives:
@@ -477,9 +508,9 @@ Compatibility:
 
 Every `leaf-call` output is validated against its schema before flowing downstream. If validation fails, the active error policy applies.
 
-For static typing, `leaf-call` returns the runtime type implied by its output schema. For example, a schema `{"type":"string"}` gives `Text`, and `{"type":"array","items":{"type":"string"}}` gives `List[Text]`.
+For static typing, `leaf-call` returns the runtime type implied by its referenced prompt spec's `output_schema`. For example, a schema `{"type":"string"}` gives `Text`, and `{"type":"array","items":{"type":"string"}}` gives `List[Text]`.
 
-**Slot and param types.** Param types are fixed: `leaf_threshold_tokens`, `split_factor`, `max_depth`, `max_output_tokens` are `Integer`; `temperature` is `Number`; `leaf_model`, `fallback_model` are `ModelAlias`; `error_policy` is an enum `Text`. Slot types are inferred from their use sites in the AST — e.g. the first argument of `context-items`/`slice` must be a `ContextRef`, and the schema argument of `leaf-call` must be a `Schema`. The verifier requires all uses of a slot to agree on one type and checks the bound `slot_values` value is consistent with it.
+**Slot, prompt, and param types.** Param types are fixed: `leaf_threshold_tokens`, `split_factor`, `max_depth`, `max_output_tokens` are `Integer`; `temperature` is `Number`; `leaf_model`, `fallback_model` are `ModelAlias`; `error_policy` is an enum `Text`. Slot types are inferred from their use sites in the AST — e.g. the first argument of `context-items`/`slice` must be a `ContextRef`. Prompt refs must resolve to `PromptSpec` entries. The verifier requires all uses of a slot to agree on one type and checks the bound `slot_values` value is consistent with it.
 
 Error policies:
 
@@ -528,9 +559,9 @@ If the verifier cannot prove descent, the program is rejected. It is not repaire
 
 ---
 
-## 9. Host Parameter Planning
+## 9. Runtime Bound Selection
 
-The model owns control-flow shape. The host owns resource parameters.
+The Strategy Author owns control-flow shape and semantic prompts. The Admission Controller owns runtime bounds.
 
 Inputs:
 
@@ -540,7 +571,7 @@ Inputs:
 - policy;
 - optional hints.
 
-Host chooses:
+The Admission Controller selects:
 
 ```python
 leaf_threshold_tokens = floor(0.7 * leaf_model.reliable_input_tokens)
@@ -553,7 +584,7 @@ max_output_tokens = leaf_model.default_completion_tokens
 error_policy = policy.default_error_policy
 ```
 
-Each `split_factor` candidate `k` is scored with the closed form `depth = ceil(log_k(ceil(estimated_tokens / leaf_threshold_tokens)))` and `leaf_calls = k^depth`. The host takes the first candidate whose `depth <= max_recursion_depth` and whose `leaf_calls` (times the error-policy worst-case factor) and token total are within policy. The dry run later confirms exact counts; if the chosen parameters fail simulation, `dry_run_strategy` returns structured errors. If they fail verification, `execute_strategy` returns structured errors without executing.
+Each `split_factor` candidate `k` is scored with the closed form `depth = ceil(log_k(ceil(estimated_tokens / leaf_threshold_tokens)))` and `leaf_calls = k^depth`. The Admission Controller takes the first candidate whose `depth <= max_recursion_depth` and whose `leaf_calls` (times the error-policy worst-case factor) and token total are within policy. The dry run later confirms exact counts; if the chosen bounds fail simulation, `dry_run_strategy` returns structured errors. If they fail verification, `execute_strategy` returns structured errors without executing.
 
 Policy may allow overrides, but the host must clamp them:
 
@@ -562,17 +593,17 @@ Policy may allow overrides, but the host must clamp them:
 - `split_factor` must be one of the allowed candidates;
 - model alias must exist and be allowed by policy.
 
-The host never rewrites the algorithm. If no parameter set satisfies policy, `plan_strategy` returns structured errors.
+The Admission Controller never rewrites the algorithm. If no runtime-bound set satisfies policy, `dry_run_strategy` returns structured errors and does not create a sealed strategy.
 
 ---
 
 ## 10. Dry Run
 
-Dry run interprets the exact AST with the exact slots and parameters in simulate mode.
+Dry run interprets the exact AST with the exact slots, prompt specs, and runtime bounds in simulate mode.
 
 Simulation rules:
 
-- `leaf-call` records a simulated call and returns a synthetic value matching the requested schema.
+- `leaf-call` records a simulated call and returns a synthetic value matching the referenced prompt spec's `output_schema`.
 - `CONTEXT_READ` returns metadata-sized synthetic text or item handles, not live bytes.
 - `map` simulates every element.
 - `filter` is keep-all unless its predicate is statically evaluable — i.e. a closed expression over the simulated value's metadata using `size-tokens`, `<=`, arithmetic, `empty?`, `first`, `rest`, and literals, making no `leaf-call`, reading no context bytes, and not depending on synthetic leaf output.
@@ -591,6 +622,7 @@ class DryRunStats(BaseModel):
 class SimulatedCall(BaseModel):
     call_id: str
     model: str
+    prompt_name: str
     prompt_tokens: int
     completion_tokens_low: int
     completion_tokens_high: int
@@ -621,10 +653,11 @@ Checks:
 
 | Name | Severity | Rule |
 |---|---|---|
-| `artifact_integrity` | fail | artifact hash matches AST, slots, parameters, schemas, model registry hash, policy hash, and runtime version |
+| `sealed_strategy_integrity` | fail | strategy hash matches AST, slots, prompt specs, runtime bounds, schemas, model registry hash, policy hash, and runtime version |
 | `context_exists` | fail | bound context IDs exist |
 | `slots_resolve` | fail | every `(slot name)` has a value |
-| `params_resolve` | fail | every `(param name)` has a host value |
+| `prompts_resolve` | fail | every `(prompt name)` resolves to a prompt spec with a valid output schema |
+| `params_resolve` | fail | every `(param name)` has a runtime-bound value |
 | `schema_valid` | fail | input/output/leaf schemas use the supported subset |
 | `types_compatible` | fail | primitive arguments and boundary schemas are compatible |
 | `effects_allowed` | fail | inferred effects are allowed by policy |
@@ -632,7 +665,7 @@ Checks:
 | `termination_bound` | fail | every `fix` satisfies structural descent and max depth |
 | `model_aliases_resolve` | fail | every model alias exists and is policy-allowed |
 | `budget_bound` | fail | high calls, tokens, and cost are within policy |
-| `dry_run_fresh` | fail | dry run is for this exact artifact and current runtime version |
+| `dry_run_fresh` | fail | dry run is for this exact sealed strategy and current runtime version |
 
 Policy defaults:
 
@@ -660,16 +693,15 @@ All checks are hard gates: calls, tokens, cost, effects, language closure, and t
 
 `execute_strategy` requires:
 
-- a `plan_id`;
 - a matching fresh `dry_run_id`;
 - no failed verification checks.
 
 Execution steps:
 
-1. Recompute artifact hash.
+1. Recompute strategy hash.
 2. Verify dry run freshness.
 3. Create an `ExecutionRecord`.
-4. Start the Racket runtime with exact AST, slots, parameters, context metadata, and limits.
+4. Start the Racket runtime with exact AST, slots, prompt specs, runtime bounds, context metadata, and limits.
 5. Service effect requests from Python.
 6. Validate every `leaf-call` output schema.
 7. Apply error policy on validation or provider failure.
@@ -682,7 +714,7 @@ Cancellation is best-effort:
 - In-flight provider calls may finish or be abandoned depending on adapter support.
 - Execution state becomes `cancelled`.
 
-There is no resume after failure or process death. A user may execute the same verified artifact again, which creates a new execution record.
+There is no resume after failure or process death. A user may execute the same verified sealed strategy again, which creates a new execution record.
 
 ---
 
@@ -700,10 +732,11 @@ Run request:
 {
   "type": "run",
   "mode": "simulate",
-  "artifact_id": "art_0123456789abcdef",
+  "sealed_strategy_id": "strat_0123456789abcdef",
   "ast": ["..."],
   "slot_values": {},
-  "parameters": {},
+  "prompt_specs": {},
+  "runtime_bounds": {},
   "contexts": {
     "ctx_0123456789abcdef": {
       "data_shape": "text",
@@ -724,10 +757,12 @@ Effect requests:
 {"type":"context_read","id":"call_0000000000000001","context_id":"ctx_0123456789abcdef","op":"slice","range":{"start":0,"length":4000}}
 {"type":"context_read","id":"call_0000000000000003","context_id":"ctx_0123456789abcdef","op":"context-items"}
 {"type":"context_read","id":"call_0000000000000004","context_id":"ctx_0123456789abcdef","op":"item-text","item_index":7}
-{"type":"llm_call","id":"call_0000000000000002","model":"local_fast","instruction":"...","input":"...","output_schema":{"type":"object"},"max_tokens":512,"temperature":0}
+{"type":"llm_call","id":"call_0000000000000002","model":"local_fast","prompt_name":"review_item","input":"..."}
 ```
 
 `op` is one of `slice`, `context-items`, `item-text`; `slice` carries a `range`, `item-text` carries an `item_index`, and `context-items` carries neither. `item-label` is metadata-only and is evaluated inside the runtime from the `ItemRef`; it does not require a context-read effect.
+
+For `llm_call`, Racket sends the `prompt_name` and bounded input. Python resolves `prompt_name` against the run message's `prompt_specs`, obtains the instruction, output schema, temperature, and max output tokens, then calls the provider. The trace records the prompt name plus hashes/previews, not the full prompt by default.
 
 Effect replies:
 
@@ -756,14 +791,16 @@ Exactly seven tools:
 | Tool | Signature |
 |---|---|
 | `load_context` | `(data_or_loader, data_shape, schema?, metadata?) -> LoadContextResult` |
-| `plan_strategy` | `(context_id, program_source, task, slot_values, hints?) -> plan_id` |
-| `dry_run_strategy` | `(plan_id) -> dry_run_id, bounds, cost` |
-| `execute_strategy` | `(plan_id, dry_run_id) -> execution_id` |
+| `get_strategy_guide` | `(context_id, task, hints?) -> StrategyGuideRecord` |
+| `dry_run_strategy` | `(context_id, strategy_package, task, hints?) -> dry_run_id, sealed_strategy_id, bounds, cost` |
+| `execute_strategy` | `(dry_run_id) -> execution_id` |
 | `get_execution_trace` | `(execution_id) -> trace` |
 | `get_record` | `(id) -> record` |
 | `reset` | `(scope) -> ok` |
 
-`plan_strategy` parses the program and materializes the `ProgramRecord`, `PlanRecord`, and the content-addressed `ArtifactRecord` (from AST + slots + host parameters + schemas + registry/policy/runtime hashes). `dry_run_strategy` simulates that artifact. `execute_strategy` runs verification internally — after confirming a fresh dry run — and executes only if `decision == pass`.
+`get_strategy_guide` does not call an LLM and does not create a strategy. It returns enough context metadata, primitive documentation, prompt-spec requirements, policy limits, and examples for the Strategy Author to write a valid `strategy_package`.
+
+`strategy_package` contains `program_source`, `slot_values`, and `prompt_specs`. `dry_run_strategy` parses the package, selects runtime bounds, creates a sealed strategy, simulates it, and returns conservative bounds. `execute_strategy` accepts a fresh `dry_run_id`, verifies the sealed strategy attached to that dry run, and executes only if `decision == pass`.
 
 Response envelope:
 
@@ -772,7 +809,176 @@ Response envelope:
 {"status":"error","error_code":"...","message":"...","details":{}}
 ```
 
-`plan_strategy`, `dry_run_strategy`, and `execute_strategy` all return structured errors suitable for repair by the caller. The host does not run its own autonomous repair loop.
+`get_strategy_guide`, `dry_run_strategy`, and `execute_strategy` all return structured errors suitable for repair by the Strategy Author. The host does not run its own autonomous repair loop.
+
+### 14.1 Tool Examples
+
+`load_context` request:
+
+```json
+{
+  "data_or_loader": {
+    "kind": "directory",
+    "root": "/home/rwt/Code/rlm-scheme",
+    "include": ["**/*.py", "**/*.rkt", "**/*.md"],
+    "exclude": [".git/**", ".venv/**", "__pycache__/**"],
+    "chunk_chars": 16000
+  },
+  "data_shape": "items",
+  "metadata": {"purpose": "repo-review"}
+}
+```
+
+`load_context` response:
+
+```json
+{
+  "status": "ok",
+  "context": {
+    "context_id": "ctx_0123456789abcdef",
+    "data_shape": "items",
+    "storage": "file",
+    "size_chars": 842311,
+    "estimated_tokens": 210578,
+    "item_count": 74,
+    "skipped": [],
+    "warnings": []
+  }
+}
+```
+
+`get_strategy_guide` request:
+
+```json
+{
+  "context_id": "ctx_0123456789abcdef",
+  "task": "Review repository items against the implementation plan.",
+  "hints": {"preferred_leaf_model": "local_fast"}
+}
+```
+
+`get_strategy_guide` response:
+
+```json
+{
+  "status": "ok",
+  "guide": {
+    "guide_id": "guide_0123456789abcdef",
+    "context_id": "ctx_0123456789abcdef",
+    "context_summary": {"data_shape": "items", "item_count": 74, "estimated_tokens": 210578},
+    "allowed_primitives": ["context-items", "item-label", "item-text", "concat", "list", "map", "leaf-call"],
+    "required_package_fields": ["program_source", "slot_values", "prompt_specs"],
+    "policy_summary": {"allowed_models": ["local_fast", "cloud_quality"], "max_llm_calls": 500},
+    "examples": [{"name": "item-map-review", "program_source": "(concat (map ...))"}]
+  }
+}
+```
+
+`dry_run_strategy` request:
+
+```json
+{
+  "context_id": "ctx_0123456789abcdef",
+  "task": "Review repository items against the implementation plan.",
+  "strategy_package": {
+    "program_source": "(concat (map (lambda (item) (leaf-call (param leaf_model) (prompt review_item) (concat (list \"ITEM:\\n\" (item-label item) \"\\n\\nTEXT:\\n\" (item-text item))))) (context-items (slot repo_context))))",
+    "slot_values": {"repo_context": "ctx_0123456789abcdef"},
+    "prompt_specs": {
+      "review_item": {
+        "instruction": "Review one repository item. Return concise findings and required tests.",
+        "output_schema": {"type": "string"}
+      }
+    }
+  },
+  "hints": {"preferred_leaf_model": "local_fast"}
+}
+```
+
+`dry_run_strategy` response:
+
+```json
+{
+  "status": "ok",
+  "sealed_strategy_id": "strat_0123456789abcdef",
+  "dry_run_id": "dry_0123456789abcdef",
+  "runtime_bounds": {
+    "leaf_threshold_tokens": 5600,
+    "split_factor": 4,
+    "max_depth": 5,
+    "max_context_read_chars": 22400,
+    "leaf_model": "local_fast",
+    "fallback_model": "cloud_quality",
+    "error_policy": "retry_then_escalate"
+  },
+  "bounds": {"llm_calls_low": 74, "llm_calls_high": 222, "context_reads": 74, "recursive_depth": 1},
+  "cost": {"prompt_tokens": 414400, "completion_tokens_low": 29600, "completion_tokens_high": 88800, "cost_usd_low": 0.0, "cost_usd_high": 1.35}
+}
+```
+
+`execute_strategy` request:
+
+```json
+{"dry_run_id": "dry_0123456789abcdef"}
+```
+
+`execute_strategy` response:
+
+```json
+{
+  "status": "ok",
+  "execution_id": "exec_0123456789abcdef",
+  "verification_id": "ver_0123456789abcdef",
+  "sealed_strategy_id": "strat_0123456789abcdef",
+  "state": "succeeded",
+  "result": "ITEM: rlm_scheme/runtime.py\nRELEVANT: true\n..."
+}
+```
+
+`get_execution_trace` request:
+
+```json
+{"execution_id": "exec_0123456789abcdef"}
+```
+
+`get_execution_trace` response:
+
+```json
+{
+  "status": "ok",
+  "trace": [
+    {"type": "context_read", "op": "item-text", "item_index": 0, "size_chars": 11842},
+    {"type": "llm_call", "call_id": "call_0123456789abcdef", "model": "local_fast", "prompt_name": "review_item", "prompt_tokens": 3100, "completion_tokens": 180}
+  ]
+}
+```
+
+`get_record` request:
+
+```json
+{"id": "strat_0123456789abcdef"}
+```
+
+`get_record` response:
+
+```json
+{
+  "status": "ok",
+  "record_type": "sealed_strategy",
+  "record": {"sealed_strategy_id": "strat_0123456789abcdef", "context_id": "ctx_0123456789abcdef", "program_id": "prog_0123456789abcdef"}
+}
+```
+
+`reset` request:
+
+```json
+{"scope": "cache"}
+```
+
+`reset` response:
+
+```json
+{"status": "ok", "cleared": ["cache"]}
+```
 
 ---
 
@@ -844,19 +1050,19 @@ Acceptance:
 - Binary file behavior is deterministic: file loader rejects binary input; directory loader records skipped binary files.
 - Bounded reads enforce `max_context_read_chars`.
 
-### Batch 3: Parameter Planning and Artifacts
+### Batch 3: Admission and Sealed Strategies
 
 Files:
 
-- `rlm_scheme/planner.py`
-- `rlm_scheme/artifacts.py`
+- `rlm_scheme/admission.py`
+- `rlm_scheme/sealed_strategy.py`
 
 Acceptance:
 
-- Host chooses `leaf_threshold_tokens`, `split_factor`, model aliases, and error policy.
-- Host clamps overrides.
-- Artifact hash changes when AST, slots, parameters, schemas, model registry, policy, or runtime version changes.
-- Structured planning errors are returned.
+- Admission Controller selects `leaf_threshold_tokens`, `split_factor`, model aliases, and error policy.
+- Admission Controller clamps overrides.
+- Sealed strategy hash changes when AST, slots, prompt specs, runtime bounds, schemas, model registry, policy, or runtime version changes.
+- Structured admission errors are returned.
 
 ### Batch 4: Racket Runtime
 
@@ -891,7 +1097,7 @@ Acceptance:
 - Unknown filters are keep-all.
 - Recursive descent proofs accept valid split recursion and reject non-decreasing recursion.
 - All verification checks run and report all failures.
-- No live provider call occurs during planning, dry run, or failed verification.
+- No live provider call occurs during admission, dry run, or failed verification.
 
 ### Batch 6: Providers and Execution
 
@@ -923,7 +1129,7 @@ Files:
 Acceptance:
 
 - Exactly seven tools are exposed.
-- Happy path: load context -> plan -> dry run -> execute -> trace.
+- Happy path: load context -> get guide -> dry run -> execute -> trace.
 - Example programs parse and run with mock provider.
 - Repository plan-review worked example runs with a temporary directory and mock provider.
 - README documents implementation scope and out-of-scope features.
@@ -937,9 +1143,8 @@ Acceptance:
 ```scheme
 (leaf-call
   (param leaf_model)
-  (slot instruction)
-  (slice (slot context) 0 (* 4 (param leaf_threshold_tokens)))
-  (slot output_schema))
+  (prompt direct)
+  (slice (slot context) 0 (* 4 (param leaf_threshold_tokens))))
 ```
 
 ### 17.2 Recursive Chunk Summarize
@@ -950,20 +1155,18 @@ Acceptance:
      (if (<= (size-tokens x) (param leaf_threshold_tokens))
          (leaf-call
            (param leaf_model)
-           (slot leaf_instruction)
-           (concat (map item-text x))
-           (slot text_schema))
+           (prompt summarize_leaf)
+           (concat (map item-text x)))
          (leaf-call
            (param leaf_model)
-           (slot compose_instruction)
+           (prompt summarize_compose)
            (concat
              (map solve
-               (split-items x (param split_factor))))
-           (slot text_schema)))))
+               (split-items x (param split_factor)))))))
  (context-items (slot context)))
 ```
 
-This is the preferred shape for large text: load the document as an `items` context where each item is a chunk. The program recurses over item handles, and bytes are read only at bounded leaves through `item-text`. In this example, `text_schema` is `{"type":"string"}`, so both recursive branches return `Text`.
+This is the preferred shape for large text: load the document as an `items` context where each item is a chunk. The program recurses over item handles, and bytes are read only at bounded leaves through `item-text`. In this example, both `summarize_leaf` and `summarize_compose` prompt specs use `{"type":"string"}` output schemas, so both recursive branches return `Text`.
 
 ### 17.3 Item Map Then Symbolic Concat
 
@@ -973,12 +1176,11 @@ This is the preferred shape for large text: load the document as an `items` cont
     (lambda (item)
       (leaf-call
         (param leaf_model)
-        (slot leaf_instruction)
+        (prompt review_item)
         (concat
           (list
             "Item: " (item-label item) "\n\n"
-            (item-text item)))
-        (slot text_schema)))
+            (item-text item))))
     (context-items (slot context))))
 ```
 
@@ -1018,13 +1220,13 @@ The caller loads the plan as `text` if it fits the reliable-input budget, or as 
 
 ```json
 {
-  "plan_summary": "Implement the MCP tools load_context, plan_strategy, dry_run_strategy, execute_strategy, get_execution_trace, get_record, and reset. Use a closed S-expression AST, host parameters, immutable contexts, directory item loading, dry-run high bounds, and verification inside execute_strategy."
+  "plan_summary": "Implement the MCP tools load_context, get_strategy_guide, dry_run_strategy, execute_strategy, get_execution_trace, get_record, and reset. Use a closed S-expression AST, runtime bounds, immutable contexts, directory item loading, dry-run high bounds, and verification inside execute_strategy."
 }
 ```
 
 ### 18.3 Leaf Prompt
 
-The leaf instruction is ordinary slot data:
+The leaf instruction is ordinary prompt-spec data:
 
 ```text
 You are reviewing one repository item against the implementation plan.
@@ -1060,7 +1262,7 @@ ITEM TEXT:
     (lambda (item)
       (leaf-call
         (param leaf_model)
-        (slot review_instruction)
+        (prompt review_item)
         (concat
           (list
             "PLAN SUMMARY:\n"
@@ -1068,36 +1270,46 @@ ITEM TEXT:
             "\n\nITEM:\n"
             (item-label item)
             "\n\nITEM TEXT:\n"
-            (item-text item)))
-        (slot text_schema)))
+            (item-text item))))
     (context-items (slot repo_context))))
 ```
 
-`text_schema` is:
-
-```json
-{"type": "string"}
-```
-
-The `plan_strategy` call binds these slots:
+The `review_item` prompt spec is:
 
 ```json
 {
-  "repo_context": "ctx_repo",
-  "plan_summary": "Implement the MCP tools load_context, plan_strategy, dry_run_strategy, execute_strategy, get_execution_trace, get_record, and reset. Use a closed S-expression AST, host parameters, immutable contexts, directory item loading, dry-run high bounds, and verification inside execute_strategy.",
-  "review_instruction": "You are reviewing one repository item against the implementation plan. Return a concise text block with headings LABEL, RELEVANT, FINDINGS, REQUIRED CHANGES, and TESTS. Use RELEVANT: false when the item does not affect the plan. Do not invent files or APIs. Base the answer only on the plan summary and item text.",
-  "text_schema": {"type": "string"}
+  "name": "review_item",
+  "instruction": "You are reviewing one repository item against the implementation plan. Return a concise text block with headings LABEL, RELEVANT, FINDINGS, REQUIRED CHANGES, and TESTS. Use RELEVANT: false when the item does not affect the plan. Do not invent files or APIs. Base the answer only on the plan summary and item text.",
+  "output_schema": {"type": "string"}
+}
+```
+
+The Strategy Author submits this strategy package to `dry_run_strategy`:
+
+```json
+{
+  "program_source": "(concat (map ...))",
+  "slot_values": {
+    "repo_context": "ctx_repo",
+    "plan_summary": "Implement the MCP tools load_context, get_strategy_guide, dry_run_strategy, execute_strategy, get_execution_trace, get_record, and reset. Use a closed S-expression AST, runtime bounds, immutable contexts, directory item loading, dry-run high bounds, and verification inside execute_strategy."
+  },
+  "prompt_specs": {
+    "review_item": {
+      "instruction": "You are reviewing one repository item against the implementation plan. Return a concise text block with headings LABEL, RELEVANT, FINDINGS, REQUIRED CHANGES, and TESTS. Use RELEVANT: false when the item does not affect the plan. Do not invent files or APIs. Base the answer only on the plan summary and item text.",
+      "output_schema": {"type": "string"}
+    }
+  }
 }
 ```
 
 ### 18.5 What Each Tool Does
 
 1. `load_context` creates `ctx_repo` from the directory loader.
-2. `plan_strategy` parses the program, checks the slot bindings above, infers slot types, chooses host parameters, and creates the artifact.
-3. `dry_run_strategy` simulates one leaf call per repository item and adds retry/escalation worst-case calls to the high bound.
-4. `execute_strategy` verifies artifact integrity, language closure, context existence, slot and parameter resolution, schema validity, effects, model aliases, termination, budget, and dry-run freshness.
-5. During execution, each `item-text` request reads only one bounded item. Each `leaf-call` receives the exact instruction above and the constructed input containing the plan summary, item label, and item text.
-6. Each model output is validated against `text_schema`. Invalid output follows the configured retry/escalation policy.
+2. `get_strategy_guide` returns context metadata, allowed primitives, policy limits, and examples to help the Strategy Author create the package.
+3. The Strategy Author creates the program plus `review_item` prompt spec, then `dry_run_strategy` parses the package, checks the slot and prompt bindings above, infers slot types, chooses runtime bounds, creates the sealed strategy, simulates one leaf call per repository item, and adds retry/escalation worst-case calls to the high bound.
+4. `execute_strategy` verifies sealed strategy integrity, language closure, context existence, slot and runtime-bound resolution, schema validity, effects, model aliases, termination, budget, and dry-run freshness.
+5. During execution, each `item-text` request reads only one bounded item. Each `leaf-call` references `(prompt review_item)`, so Python supplies the exact prompt spec above plus the constructed input containing the plan summary, item label, and item text.
+6. Each model output is validated against the prompt spec's `output_schema`. Invalid output follows the configured retry/escalation policy.
 7. `get_execution_trace` returns item reads, model call metadata, usage, validation failures, retries, escalations, and final status.
 
 This example intentionally uses symbolic `concat` as the final composition, so every leaf returns `Text`. A structured-object variant would require adding an allow-listed symbolic combiner such as `json-lines` or `collect`, plus its typing and verification rules.
@@ -1137,14 +1349,13 @@ The host validates that `/storage/logs/server.log` is under `allowed_context_roo
     (lambda (chunk)
       (leaf-call
         (param leaf_model)
-        (slot analyze_instruction)
+        (prompt analyze_chunk)
         (concat
           (list
             "CHUNK:\n"
             (item-label chunk)
             "\n\nLOG TEXT:\n"
-            (item-text chunk)))
-        (slot text_schema)))
+            (item-text chunk))))
     (context-items (slot log_context))))
 ```
 
@@ -1180,8 +1391,8 @@ The implementation is done when:
 2. No live provider call can happen before passing verification.
 3. The parser accepts only the implementation grammar.
 4. S-expression parsing and AST analysis do not use regex.
-5. Host parameters enter through `(param name)` and are included in artifact identity.
-6. Artifact identity includes AST, slots, schemas, host parameters, model registry hash, policy hash, and runtime version.
+5. Runtime bounds enter through `(param name)` and are included in sealed strategy identity.
+6. Sealed strategy identity includes AST, slots, prompt specs, schemas, runtime bounds, model registry hash, policy hash, and runtime version.
 7. Context bytes cross to Racket only through bounded `CONTEXT_READ`.
 8. Recursive programs must prove structural descent or fail verification.
 9. Dry-run high calls/cost are enforced as hard bounds.
