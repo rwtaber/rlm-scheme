@@ -96,7 +96,7 @@ class ContextRecord(BaseModel):
     context_id: str
     storage: Literal["memory", "file"]
     data_ref: str                 # memory store key, source path, or chunk store path
-    data_shape: Literal["text", "items", "json"]
+    data_shape: Literal["text", "items"]
     size_chars: int
     item_count: int | None = None
     loader: dict[str, Any]
@@ -179,7 +179,7 @@ Contexts are fully addressable by the host, but they are not required to be memo
 ```python
 class LoadContextResult(BaseModel):
     context_id: str
-    data_shape: Literal["text", "items", "json"]
+    data_shape: Literal["text", "items"]
     storage: Literal["memory", "file"]
     size_chars: int
     estimated_tokens: int
@@ -199,7 +199,23 @@ Supported context shapes:
 
 - `text`: one contiguous text blob.
 - `items`: ordered independent items, each serializable to text.
-- `json`: one JSON value; the implementation may treat it as text unless a primitive explicitly supports JSON access.
+
+`loader.kind` and `data_shape` are related but not the same:
+
+- `loader.kind` says where bytes come from.
+- `data_shape` says how programs access the loaded context.
+
+Valid combinations:
+
+| Loader kind | Valid `data_shape` | Meaning |
+|---|---|---|
+| `inline` | `text` | one caller-supplied string |
+| `inline` | `items` | caller-supplied ordered list of strings |
+| `file` | `text` | one file exposed as one sliceable text context |
+| `file` | `items` | one file split into ordered text chunks |
+| `directory` | `items` | matching files split into ordered file/chunk items |
+
+Invalid combinations fail `load_context`; notably, `directory + text` is not supported because directory ordering and labels matter.
 
 `load_context` accepts inline data or a host-readable loader descriptor. Loader kinds:
 
@@ -212,7 +228,7 @@ Inline loader:
 ```json
 {
   "kind": "inline",
-  "data": "text, JSON, or an array of item strings"
+  "data": "text or an array of item strings"
 }
 ```
 
@@ -821,7 +837,7 @@ Acceptance:
 - Supported JSON Schema subset validates.
 - Unsupported keywords fail.
 - Schema compatibility tests pass.
-- Inline text, items, and JSON contexts load and report metadata.
+- Inline text and item contexts load and report metadata.
 - File loader streams large files, chunks by decoded character offsets, supports overlap, and does not require reading the whole file into memory.
 - Directory loader expands files deterministically, applies include/exclude globs, chunks large files, and assigns stable item labels.
 - Loader policy rejects roots outside `allowed_context_roots`, excessive total bytes, excessive item counts, and chunks larger than `max_item_chars`.
