@@ -18,7 +18,7 @@ The usual authoring lifecycle is:
 get_strategy_guide -> load_context -> dry_run_strategy -> execute_strategy -> get_execution_trace
 ```
 
-`get_strategy_guide` returns the strategy-package authoring manual: how to construct the S-expression AST, how slots, prompts, params, and context refs work, which primitives exist, and what examples are valid. It takes no arguments and does not inspect a context. `load_context` stores task data in the host and returns context metadata. `dry_run_strategy` accepts the context id and authored package, admits it, seals it, and simulates it to produce conservative bounds. `execute_strategy` verifies those bounds and executes once only if every hard check passes.
+`get_strategy_guide` returns the strategy-package authoring manual: how to construct the S-expression AST, how slots, prompts, params, and context refs work, which primitives exist, and what examples are valid. It takes no arguments and does not inspect a context. `load_context` stores task data in the host and returns context metadata. `dry_run_strategy` accepts the authored package, resolves any context ids bound in slots, admits the package, seals it, and simulates it to produce conservative bounds. `execute_strategy` verifies those bounds and executes once only if every hard check passes.
 
 ---
 
@@ -32,9 +32,9 @@ No live model call may occur until all of these are true:
 4. The program uses only allowed forms and primitives.
 5. Recursion, if present, is structurally decreasing.
 6. The dry run has produced an upper bound for calls, tokens, cost, and depth.
-7. Verification has passed against the exact program, exact slots, exact runtime bounds, exact model registry, exact policy, and exact runtime version.
+7. Verification has passed against the exact program, exact slots, exact prompt specs, exact runtime bounds, exact context schemas, exact model registry, exact policy, and exact runtime version.
 
-Execution is deterministic except for `leaf-call` results. Re-running the same verified sealed strategy produces the same call structure. Contexts are immutable, so the only way to change input data is to load it again under a new `context_id`, which yields a new sealed strategy; a runtime-version change likewise invalidates verification.
+Execution is deterministic except for `leaf-call` results. Re-running the same verified sealed strategy produces the same call structure. Contexts are immutable, so the only way to change input data is to load it again under a new `context_id` and bind that id in a new sealed strategy; a runtime-version change likewise invalidates verification.
 
 ---
 
@@ -104,7 +104,7 @@ class ContextRecord(BaseModel):
 
 class SealedStrategyRecord(BaseModel):
     sealed_strategy_id: str
-    context_id: str
+    context_ids: list[str]
     program_source: str
     program_ast: Any
     strategy_hash: str
@@ -112,7 +112,7 @@ class SealedStrategyRecord(BaseModel):
     slot_values_hash: str
     prompt_specs_hash: str
     runtime_bounds_hash: str
-    schemas_hash: str
+    context_schema_hash: str
     model_registry_hash: str
     policy_hash: str
     runtime_version: str
@@ -155,13 +155,13 @@ class ExecutionRecord(BaseModel):
 
 `get_strategy_guide` returns a generated `StrategyGuide` value, not a stored object. Verification decisions are embedded in `ExecutionRecord` because there is no separate `verify` tool and no user-facing verification lifecycle.
 
-`strategy_hash` is computed from the exact AST, slot values, prompt specs, runtime bounds, input/output schemas, model registry hash, policy hash, and runtime version. Verification is invalid if any of these change.
+`strategy_hash` is computed from the exact AST, slot values, prompt specs, runtime bounds, context schema hash, model registry hash, policy hash, and runtime version. Prompt output schemas are included through `prompt_specs_hash`. Verification is invalid if any of these change.
 
 ---
 
 ## 4. Context Model
 
-`load_context` stores data outside the prompt and returns a structured load result. **Contexts are immutable:** loading new data yields a new `context_id`; stored bytes never change under an existing id, which is why the sealed strategy identifies context by id rather than by content hash.
+`load_context` stores data outside the prompt and returns a structured load result. **Contexts are immutable:** loading new data yields a new `context_id`; stored bytes never change under an existing id, which is why sealed strategies identify bound contexts by id rather than by content hash.
 
 Contexts are fully addressable by the host, but they are not required to be memory-backed. Small inline contexts may live in memory. Large files and directories should be file-backed: the host stores item metadata and offsets, then reads bounded slices lazily when `slice` or `item-text` is evaluated. Racket receives only handles, metadata, and bounded read replies.
 
@@ -546,7 +546,7 @@ The Strategy Author owns control-flow shape and semantic prompts. The Admission 
 
 Inputs:
 
-- context metadata;
+- metadata for contexts referenced by `slot_values`;
 - program AST;
 - model registry;
 - policy;
@@ -634,13 +634,13 @@ Checks:
 
 | Name | Severity | Rule |
 |---|---|---|
-| `sealed_strategy_integrity` | fail | strategy hash matches AST, slots, prompt specs, runtime bounds, schemas, model registry hash, policy hash, and runtime version |
+| `sealed_strategy_integrity` | fail | strategy hash matches AST, slots, prompt specs, runtime bounds, context schema hash, model registry hash, policy hash, and runtime version |
 | `context_exists` | fail | bound context IDs exist |
 | `slots_resolve` | fail | every `(slot name)` has a value |
 | `prompts_resolve` | fail | every `(prompt name)` resolves to a prompt spec with a valid output schema |
 | `params_resolve` | fail | every `(param name)` has a runtime-bound value |
-| `schema_valid` | fail | input/output/leaf schemas use the supported subset |
-| `types_compatible` | fail | primitive arguments and boundary schemas are compatible |
+| `schema_valid` | fail | context schemas and prompt output schemas use the supported subset |
+| `types_compatible` | fail | primitive arguments and prompt output schemas are compatible |
 | `effects_allowed` | fail | inferred effects are allowed by policy |
 | `language_closed` | fail | AST uses only implementation forms and allow-listed primitives |
 | `termination_bound` | fail | every `fix` satisfies structural descent and max depth |
@@ -773,7 +773,7 @@ Exactly seven tools:
 |---|---|
 | `load_context` | `(data_or_loader, data_shape, schema?, metadata?) -> LoadContextResult` |
 | `get_strategy_guide` | `() -> StrategyGuide` |
-| `dry_run_strategy` | `(context_id, strategy_package, task, hints?) -> dry_run_id, sealed_strategy_id, bounds, cost` |
+| `dry_run_strategy` | `(strategy_package, hints?) -> dry_run_id, sealed_strategy_id, bounds, cost` |
 | `execute_strategy` | `(dry_run_id) -> execution_id` |
 | `get_execution_trace` | `(execution_id) -> trace` |
 | `get_record` | `(id) -> record` |
@@ -781,9 +781,27 @@ Exactly seven tools:
 
 `get_strategy_guide` does not call an LLM, inspect a context, or create a strategy. It returns the static authoring guide for this runtime version: package schema, grammar, primitive documentation, slot rules, prompt-spec rules, runtime-bound rules, policy summary, and examples. It answers "how do I write a valid strategy package?", not "what strategy should I use for this context?"
 
-Context-specific facts come from `load_context` and `get_record(context_id)`. Task-specific semantics come from the caller or Strategy Author. The server does not infer a task plan, choose leaf prompts, or generate the AST.
+Context-specific facts come from `load_context` and `get_record(context_id)`. Context ids used by the program are bound in `strategy_package.slot_values`; `dry_run_strategy` resolves those ids and fails if any are missing or incompatible with their use sites. Task-specific semantics belong in slot values, prompt specs, or caller metadata. The server does not infer a task plan, choose leaf prompts, or generate the AST.
 
-`strategy_package` contains `program_source`, `slot_values`, and `prompt_specs`. `dry_run_strategy` parses the package, selects runtime bounds, creates a sealed strategy, simulates it, and returns conservative bounds. `execute_strategy` accepts a fresh `dry_run_id`, verifies the sealed strategy attached to that dry run, and executes only if `decision == pass`.
+`strategy_package` contains `program_source`, `slot_values`, and `prompt_specs`. `dry_run_strategy` parses the package, resolves context ids from slots, selects runtime bounds, creates a sealed strategy, simulates it, and returns conservative bounds. `execute_strategy` accepts a fresh `dry_run_id`, verifies the sealed strategy attached to that dry run, and executes only if `decision == pass`.
+
+`get_strategy_guide` returns this generated, non-stored value:
+
+```python
+class StrategyGuide(BaseModel):
+    runtime_version: str
+    language_version: str
+    package_schema: dict[str, Any]
+    grammar: str
+    allowed_primitives: list[str]
+    primitive_docs: dict[str, Any]
+    required_package_fields: list[str]
+    slot_rules: list[str]
+    prompt_spec_rules: list[str]
+    runtime_bound_rules: list[str]
+    policy_summary: dict[str, Any]
+    examples: list[dict[str, Any]]
+```
 
 Response envelope:
 
@@ -870,11 +888,12 @@ Response envelope:
 
 ```json
 {
-  "context_id": "ctx_0123456789abcdef",
-  "task": "Review repository items against the implementation plan.",
   "strategy_package": {
-    "program_source": "(concat (map (lambda (item) (leaf-call (param leaf_model) (prompt review_item) (concat (list \"ITEM:\\n\" (item-label item) \"\\n\\nTEXT:\\n\" (item-text item))))) (context-items (slot repo_context))))",
-    "slot_values": {"repo_context": "ctx_0123456789abcdef"},
+    "program_source": "(concat (map (lambda (item) (leaf-call (param leaf_model) (prompt review_item) (concat (list \"PLAN SUMMARY:\\n\" (slot plan_summary) \"\\n\\nITEM:\\n\" (item-label item) \"\\n\\nTEXT:\\n\" (item-text item))))) (context-items (slot repo_context))))",
+    "slot_values": {
+      "repo_context": "ctx_0123456789abcdef",
+      "plan_summary": "Review repository items against the implementation plan."
+    },
     "prompt_specs": {
       "review_item": {
         "instruction": "Review one repository item. Return concise findings and required tests.",
@@ -956,7 +975,7 @@ Response envelope:
 {
   "status": "ok",
   "record_type": "sealed_strategy",
-  "record": {"sealed_strategy_id": "strat_0123456789abcdef", "context_id": "ctx_0123456789abcdef", "program_ast_hash": "abc123"}
+  "record": {"sealed_strategy_id": "strat_0123456789abcdef", "context_ids": ["ctx_0123456789abcdef"], "program_ast_hash": "abc123"}
 }
 ```
 
@@ -1158,9 +1177,9 @@ The Strategy Author submits this strategy package to `dry_run_strategy`:
 
 ### 17.5 What Each Tool Does
 
-1. `load_context` creates `ctx_repo` from the directory loader.
-2. `get_strategy_guide` returns the argument-free authoring guide: package schema, grammar, primitive docs, slot rules, prompt-spec rules, runtime-bound rules, policy limits, and examples.
-3. The Strategy Author creates the program plus `review_item` prompt spec, then `dry_run_strategy` parses the package, checks the slot and prompt bindings above, infers slot types, chooses runtime bounds, creates the sealed strategy, simulates one leaf call per repository item, and adds retry/escalation worst-case calls to the high bound.
+1. `get_strategy_guide` returns the argument-free authoring guide: package schema, grammar, primitive docs, slot rules, prompt-spec rules, runtime-bound rules, policy limits, and examples.
+2. `load_context` creates `ctx_repo` from the directory loader.
+3. The Strategy Author creates the program plus `review_item` prompt spec, binds `ctx_repo` in `slot_values`, then `dry_run_strategy` parses the package, resolves that context id, checks the slot and prompt bindings above, infers slot types, chooses runtime bounds, creates the sealed strategy, simulates one leaf call per repository item, and adds retry/escalation worst-case calls to the high bound.
 4. `execute_strategy` verifies sealed strategy integrity, language closure, context existence, slot and runtime-bound resolution, schema validity, effects, model aliases, termination, budget, and dry-run freshness.
 5. During execution, each `item-text` request reads only one bounded item. Each `leaf-call` references `(prompt review_item)`, so Python supplies the exact prompt spec above plus the constructed input containing the plan summary, item label, and item text.
 6. Each model output is validated against the prompt spec's `output_schema`. Invalid output follows the configured retry/escalation policy.
@@ -1246,7 +1265,7 @@ The implementation is done when:
 3. The parser accepts only the implementation grammar.
 4. S-expression parsing and AST analysis do not use regex.
 5. Runtime bounds enter through `(param name)` and are included in sealed strategy identity.
-6. Sealed strategy identity includes AST, slots, prompt specs, schemas, runtime bounds, model registry hash, policy hash, and runtime version.
+6. Sealed strategy identity includes AST, slots, prompt specs, context schema hash, runtime bounds, model registry hash, policy hash, and runtime version.
 7. Context bytes cross to Racket only through bounded `CONTEXT_READ`.
 8. Recursive programs must prove structural descent or fail verification.
 9. Dry-run high calls/cost are enforced as hard bounds.
